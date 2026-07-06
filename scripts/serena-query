@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/serena-query <tool_name> '<json_params>'
+
+Environment:
+  SERENA_PROJECT  Project name passed to Serena. Default: narou-viewer
+  SERENA_HOST     Project server host. Default: 127.0.0.1
+  SERENA_PORT     Project server port. Default: 24283
+  SERENA_AUTO_START     Start a local project server if unreachable. Default: 1
+  SERENA_AUTO_REGISTER  Register this repo in Serena config if missing. Default: 1
+
+Example:
+  scripts/serena-query get_symbols_overview '{"relative_path":"apps/viewer-web/src/App.tsx"}'
+
+If the project server is not running:
+  serena start-project-server --host 127.0.0.1 --port 24283 --log-level ERROR
+EOF
+}
+
+if [[ $# -ne 2 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 64
+fi
+
+tool_name=$1
+tool_params_json=$2
+project_name=${SERENA_PROJECT:-narou-viewer}
+host=${SERENA_HOST:-127.0.0.1}
+port=${SERENA_PORT:-24283}
+auto_start=${SERENA_AUTO_START:-1}
+auto_register=${SERENA_AUTO_REGISTER:-1}
+lock_host=${host//[^A-Za-z0-9_.-]/_}
+lock_path="${TMPDIR:-/tmp}/serena-query-${lock_host}-${port}.lock"
+log_path="${SERENA_LOG_PATH:-${TMPDIR:-/tmp}/serena-project-server-${lock_host}-${port}.log}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+
+payload=$(python3 - "$project_name" "$tool_name" "$tool_params_json" <<'PY'
+import json
+import sys
+
+project_name, tool_name, tool_params_json = sys.argv[1:]
+try:
+    json.loads(tool_params_json)
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"invalid json_params: {exc}") from exc
+
+print(json.dumps({
+    "project_name": project_name,
+    "tool_name": tool_name,
+    "tool_params_json": tool_params_json,
+}, separators=(",", ":")))
+PY
+)
+
+exec 9>"$lock_path"
+flock 9
+
+curl_output=$(mktemp)
+query_error=$(mktemp)
+heartbeat_error=$(mktemp)
+cleanup() {
+  rm -f "$curl_output" "$query_error" "$heartbeat_error"
+}
+trap cleanup EXIT
+
+serena_project_file_exists() {
+  [[ -f "${repo_root}/.serena/project.yml" ]]
+}
+
+serena_python() {
+  local serena_bin shebang python_bin
+  local -a python_cmd
+
+  serena_bin=$(command -v serena) || return 1
+  IFS= read -r shebang <"${serena_bin}" || return 1
+  if [[ "${shebang}" == "#!/usr/bin/env "* ]]; then
+    read -r -a python_cmd <<<"${shebang#\#!}"
+    "${python_cmd[@]}" "$@"
+    return
+  elif [[ "${shebang}" == "#!"*python* ]]; then
+    python_bin="${shebang#\#!}"
+  else
+    python_bin=python3
+  fi
+
+  "${python_bin}" "$@"
+}
+
+ensure_project_local_languages() {
+  serena_python - "${repo_root}" <<'PY'
+from pathlib import Path
+import sys
+
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+
+repo_root = Path(sys.argv[1])
+project_config = repo_root / ".serena" / "project.yml"
+local_config = repo_root / ".serena" / "project.local.yml"
+
+yaml = YAML()
+yaml.preserve_quotes = True
+
+def load_yaml(path):
+    if not path.exists():
+        return CommentedMap()
+    with path.open(encoding="utf-8") as handle:
+        return yaml.load(handle) or CommentedMap()
+
+project_data = load_yaml(project_config)
+local_data = load_yaml(local_config)
+
+source_languages = local_data.get("languages", project_data.get("languages", []))
+if not isinstance(source_languages, list):
+    source_languages = []
+
+merged_languages = CommentedSeq()
+seen_languages = set()
+for language in list(source_languages) + ["typescript", "go"]:
+    language_name = str(language)
+    if language_name in seen_languages:
+        continue
+    merged_languages.append(language)
+    seen_languages.add(language_name)
+
+languages = local_data.get("languages")
+if not isinstance(languages, list):
+    local_data["languages"] = merged_languages
+    local_config.parent.mkdir(parents=True, exist_ok=True)
+    with local_config.open("w", encoding="utf-8") as handle:
+        yaml.dump(local_data, handle)
+    raise SystemExit(0)
+
+changed = False
+existing = {str(language) for language in languages}
+for language in merged_languages:
+    language_name = str(language)
+    if language_name not in existing:
+        languages.append(language)
+        existing.add(language_name)
+        changed = True
+
+if changed:
+    local_config.parent.mkdir(parents=True, exist_ok=True)
+    with local_config.open("w", encoding="utf-8") as handle:
+        yaml.dump(local_data, handle)
+PY
+}
+
+ensure_project_registered() {
+  local register_error
+
+  if [[ "${auto_register}" != "1" || "${project_name}" != "narou-viewer" ]]; then
+    return 0
+  fi
+
+  if ! command -v serena >/dev/null 2>&1; then
+    return 0
+  fi
+
+  register_error=$(mktemp)
+  if ! serena_project_file_exists; then
+    if ! serena project create "${repo_root}" --name narou-viewer --language typescript --language go --log-level ERROR \
+      >/dev/null 2>"${register_error}"; then
+      cat "${register_error}" >&2
+      rm -f "${register_error}"
+      return 1
+    fi
+  fi
+  if ! ensure_project_local_languages 2>"${register_error}"; then
+    cat "${register_error}" >&2
+    rm -f "${register_error}"
+    return 1
+  fi
+
+  if ! serena_python - "${repo_root}" 2>"${register_error}" <<'PY'
+from pathlib import Path
+import sys
+
+from serena.config.serena_config import SerenaConfig
+
+repo_root = Path(sys.argv[1]).resolve()
+config = SerenaConfig.from_config_file(generate_if_missing=True)
+registered = config.get_registered_project(str(repo_root), autoregister=True)
+if registered is None:
+    raise SystemExit(f"Serena project registration did not add {repo_root}.")
+
+languages = {language.value for language in registered.project_config.languages}
+missing = {"typescript", "go"} - languages
+if missing:
+    raise SystemExit(f"Serena project registration is missing languages: {', '.join(sorted(missing))}.")
+PY
+  then
+    cat "${register_error}" >&2
+    rm -f "${register_error}"
+    return 1
+  fi
+  rm -f "${register_error}"
+}
+
+is_local_host() {
+  case "${host}" in
+    127.0.0.1 | localhost | ::1)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+server_base_url() {
+  if [[ "${host}" == *:* && "${host}" != \[* ]]; then
+    printf 'http://[%s]:%s' "${host}" "${port}"
+  else
+    printf 'http://%s:%s' "${host}" "${port}"
+  fi
+}
+
+run_query() {
+  http_code=$(curl -sS \
+    -o "$curl_output" \
+    -w "%{http_code}" \
+    -X POST "$(server_base_url)/query_project" \
+    -H "Content-Type: application/json" \
+    --data "$payload" 2>"$query_error")
+}
+
+run_heartbeat() {
+  local heartbeat_code
+
+  if ! heartbeat_code=$(curl -sS \
+    -o /dev/null \
+    -w "%{http_code}" \
+    "$(server_base_url)/heartbeat" 2>"$heartbeat_error"); then
+    return 1
+  fi
+
+  [[ "${heartbeat_code}" -ge 200 && "${heartbeat_code}" -lt 300 ]]
+}
+
+start_local_server() {
+  if [[ "${auto_start}" != "1" ]] || ! is_local_host || ! command -v serena >/dev/null 2>&1; then
+    return 1
+  fi
+
+  mkdir -p "$(dirname "${log_path}")"
+  setsid bash -c 'exec 9>&-; exec serena start-project-server --host "$1" --port "$2" --log-level ERROR' _ "${host}" "${port}" \
+    >"${log_path}" 2>&1 </dev/null &
+  disown "$!" 2>/dev/null || true
+}
+
+wait_for_server() {
+  local attempt
+
+  for attempt in {1..60}; do
+    if run_heartbeat; then
+      return 0
+    fi
+    sleep 0.5
+  done
+
+  return 1
+}
+
+if ! ensure_project_registered; then
+  cat >&2 <<EOF
+Serena project auto-registration failed.
+Fix Serena config/project files, or retry with SERENA_AUTO_REGISTER=0 if the project is already registered.
+EOF
+  exit 1
+fi
+
+if ! run_query; then
+  if start_local_server && wait_for_server; then
+    if ! run_query; then
+      cat "$query_error" >&2
+      exit 1
+    fi
+  else
+    if [[ -s "${heartbeat_error}" ]]; then
+      cat "$heartbeat_error" >&2
+    else
+      cat "$query_error" >&2
+    fi
+    if [[ -s "${log_path}" ]]; then
+      cat >&2 <<EOF
+
+Serena project server log (${log_path}):
+EOF
+      tail -40 "${log_path}" >&2
+    fi
+    cat >&2 <<EOF
+
+Serena project server is not reachable at $(server_base_url).
+Start it with:
+  serena start-project-server --host ${host} --port ${port} --log-level ERROR
+EOF
+    exit 1
+  fi
+fi
+
+response=$(cat "$curl_output")
+
+printf '%s\n' "$response"
+if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]]; then
+  if [[ "$response" == *"Internal Server Error"* ]]; then
+    cat >&2 <<EOF
+
+Serena returned an internal error. If this server was started before the project
+was registered, stop it and run this command again so scripts/serena-query can
+start a fresh server with the current Serena config.
+EOF
+  fi
+  exit 1
+fi
+
+case "$response" in
+  Error:*|"Error executing tool:"*)
+    exit 1
+    ;;
+esac

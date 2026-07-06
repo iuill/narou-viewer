@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+exec "${BUN_INSTALL:-$HOME/.bun}/bin/codex" \
+  -c 'sandbox_mode="danger-full-access"' \
+  -c 'approval_policy="never"' \
+  "$@"

@@ -1,0 +1,183 @@
+services:
+  go-cache-init:
+    image: busybox:1.37
+    init: true
+    command:
+      - sh
+      - -c
+      - |
+        service_user="$${E2E_SERVICE_USER:-1000:1000}"
+        cache_uid="$${service_user%%:*}"
+        cache_gid="$${service_user#*:}"
+        mkdir -p /go/.cache/go-build-shared /go/pkg/mod-shared
+        chown -R "$${cache_uid}:$${cache_gid}" /go
+        chmod -R ug+rwX /go
+    environment:
+      E2E_SERVICE_USER: ${E2E_SERVICE_USER:-1000:1000}
+    volumes:
+      - go-cache:/go
+
+  viewer-dev:
+    build:
+      context: ./viewer-dev
+      dockerfile: Dockerfile
+    init: true
+    working_dir: /workspace
+    command: sleep infinity
+    environment:
+      VIEWER_DATA_DIR: /workspace/data
+      NOVEL_FETCHER_API_BASE_URL: http://novel-fetcher:33006
+      GOCACHE: /go/.cache/go-build-shared
+      GOMODCACHE: /go/pkg/mod-shared
+    depends_on:
+      go-cache-init:
+        condition: service_completed_successfully
+      novel-fetcher:
+        condition: service_started
+      viewer-api-e2e:
+        condition: service_started
+      viewer-web-e2e:
+        condition: service_started
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+      - ${HOST_WORKSPACE_PARENT_DIR:-../..}:/workspaces:cached
+      - go-cache:/go
+      - bun-install-cache:/home/node/.bun/install/cache
+    ports:
+      - "${VIEWER_WEB_HOST_PORT:-5173}:5173"
+      - "${VIEWER_API_HOST_PORT:-8080}:8080"
+
+  novel-fetcher:
+    image: golang:1.25.11-bookworm
+    init: true
+    user: "1000:1000"
+    working_dir: /workspace/services/novel-fetcher
+    command: bash /workspace/.devcontainer/scripts/run-novel-fetcher-dev.sh
+    environment:
+      NOVEL_FETCHER_HOST: 0.0.0.0
+      NOVEL_FETCHER_PORT: 33006
+      NOVEL_FETCHER_DATA_DIR: /data/novel-fetcher
+      NOVEL_FETCHER_PAGE_INTERVAL_MILLIS: ${NOVEL_FETCHER_PAGE_INTERVAL_MILLIS:-700}
+      NOVEL_FETCHER_SYOSETU_WAIT_STEPS: ${NOVEL_FETCHER_SYOSETU_WAIT_STEPS:-10}
+      NOVEL_FETCHER_STEPS_WAIT_MILLIS: ${NOVEL_FETCHER_STEPS_WAIT_MILLIS:-5000}
+      NOVEL_FETCHER_WORK_INTERVAL_MILLIS: ${NOVEL_FETCHER_WORK_INTERVAL_MILLIS:-2500}
+      GOCACHE: /go/.cache/go-build-shared
+      GOMODCACHE: /go/pkg/mod-shared
+    depends_on:
+      go-cache-init:
+        condition: service_completed_successfully
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+      - ${HOST_DATA_DIR:-../data}:/data
+      - go-cache:/go
+    expose:
+      - "33006"
+
+  novel-fetcher-e2e:
+    image: ${NOVEL_FETCHER_E2E_IMAGE:-golang:1.25.11-bookworm}
+    init: true
+    user: "${E2E_SERVICE_USER:-1000:1000}"
+    working_dir: /workspace/services/novel-fetcher
+    command: sh /workspace/.devcontainer/scripts/run-novel-fetcher-e2e.sh
+    environment:
+      NOVEL_FETCHER_HOST: 0.0.0.0
+      NOVEL_FETCHER_PORT: 33006
+      NOVEL_FETCHER_DATA_DIR: /data/novel-fetcher
+      NOVEL_FETCHER_E2E_BINARY_PATH: ${NOVEL_FETCHER_E2E_BINARY_PATH:-}
+      NOVEL_FETCHER_PAGE_INTERVAL_MILLIS: ${NOVEL_FETCHER_PAGE_INTERVAL_MILLIS:-700}
+      NOVEL_FETCHER_SYOSETU_WAIT_STEPS: ${NOVEL_FETCHER_SYOSETU_WAIT_STEPS:-10}
+      NOVEL_FETCHER_STEPS_WAIT_MILLIS: ${NOVEL_FETCHER_STEPS_WAIT_MILLIS:-5000}
+      NOVEL_FETCHER_WORK_INTERVAL_MILLIS: ${NOVEL_FETCHER_WORK_INTERVAL_MILLIS:-2500}
+      GOCACHE: /go/.cache/go-build-shared
+      GOMODCACHE: /go/pkg/mod-shared
+    depends_on:
+      go-cache-init:
+        condition: service_completed_successfully
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+      - ${HOST_E2E_DATA_DIR:-../data_e2e}:/data
+      - go-cache:/go
+    expose:
+      - "33006"
+
+  viewer-api-e2e:
+    image: ${VIEWER_API_GO_E2E_IMAGE:-golang:1.25.11-bookworm}
+    init: true
+    user: "${E2E_SERVICE_USER:-1000:1000}"
+    working_dir: /workspace/apps/viewer-api-go
+    command: sh /workspace/.devcontainer/scripts/run-viewer-api-go-e2e.sh
+    environment:
+      VIEWER_API_GO_ADDR: :18080
+      VIEWER_API_DATA_DIR: /workspace/data_e2e
+      VIEWER_API_ALLOWED_ORIGINS: http://viewer-web-e2e:15173
+      NOVEL_FETCHER_API_BASE_URL: http://novel-fetcher-e2e:33006
+      VIEWER_API_GO_E2E_BINARY_PATH: ${VIEWER_API_GO_E2E_BINARY_PATH:-}
+      GOCACHE: /go/.cache/go-build-shared
+      GOMODCACHE: /go/pkg/mod-shared
+    depends_on:
+      go-cache-init:
+        condition: service_completed_successfully
+      novel-fetcher-e2e:
+        condition: service_started
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+      - go-cache:/go
+    ports:
+      - "${VIEWER_API_E2E_HOST_PORT:-18080}:18080"
+
+  viewer-web-e2e:
+    image: oven/bun:1.3.11
+    init: true
+    user: "${E2E_SERVICE_USER:-1000:1000}"
+    working_dir: /workspace
+    command: >-
+      bash -lc 'if [[ "$${E2E_PRODUCTION_SERVICES:-0}" == "1" ]]; then
+      bash ./scripts/wait-for-path-and-run.sh /workspace/apps/viewer-web/dist/index.html bun run --filter @narou-viewer/viewer-web preview:e2e;
+      else
+      bash ./scripts/wait-for-path-and-run.sh /workspace/node_modules/.bin/vite bun run --filter @narou-viewer/viewer-web dev -- --host 0.0.0.0 --port 15173;
+      fi'
+    environment:
+      E2E_PRODUCTION_SERVICES: ${E2E_PRODUCTION_SERVICES:-0}
+      VITE_API_PROXY_TARGET: http://viewer-api-e2e:18080
+    depends_on:
+      - viewer-api-e2e
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+    ports:
+      - "${VIEWER_WEB_E2E_HOST_PORT:-15173}:15173"
+
+  playwright-e2e:
+    profiles:
+      - e2e
+    build:
+      context: ./playwright-e2e
+      args:
+        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
+        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+    init: true
+    working_dir: /workspace
+    command: bash ./scripts/run-playwright-e2e.sh
+    ipc: host
+    shm_size: 1gb
+    environment:
+      PLAYWRIGHT_BASE_URL: http://viewer-web-e2e:15173
+      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
+      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+      PLAYWRIGHT_STAGE_DIR: /playwright-runtime
+      PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.58.2}
+    depends_on:
+      - viewer-web-e2e
+    volumes:
+      - ${HOST_WORKSPACE_DIR:-..}:/workspace:cached
+      - playwright-runtime:/playwright-runtime
+      - playwright-bun-cache:/root/.bun/install/cache
+
+volumes:
+  playwright-runtime:
+  playwright-bun-cache:
+  # name 固定でグローバル volume にし、worktree ごとの compose プロジェクト間でも共有する
+  # (Go の build/mod キャッシュ・bun キャッシュはどちらも並行アクセス安全)
+  go-cache:
+    name: narou-viewer-go-cache
+  bun-install-cache:
+    name: narou-viewer-bun-install-cache

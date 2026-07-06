@@ -1,0 +1,15 @@
+schema_version: 3
+revision: 1
+bookmarks:
+  - id: bm_phase1_first
+    novel_id: novel-normal
+    episode_index: 12
+    position: 345
+    label: 重要な場面
+    created_at: 2026-01-02T03:05:00.000Z
+  - id: bm_phase1_second
+    novel_id: novel-normal
+    episode_index: "9"
+    position: 10
+    label: null
+    created_at: 2026-01-01T00:00:00.000Z

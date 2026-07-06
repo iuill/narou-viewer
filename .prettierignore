@@ -1,0 +1,11 @@
+.tmp/
+coverage/
+data/ai-experiments/runs/
+data/tmp/
+data/小説データ/
+data_e2e/小説データ/
+dist/
+node_modules/
+playwright-report/
+stats/
+test-results/

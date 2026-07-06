@@ -1,0 +1,76 @@
+.download-panel {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.download-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 16px;
+  align-items: end;
+}
+
+.download-form-field {
+  display: grid;
+  gap: 8px;
+}
+
+.download-form-field span {
+  color: var(--text-soft);
+  font-size: 0.92rem;
+}
+
+.download-form-field input,
+.download-form-field select {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid rgba(84, 58, 22, 0.14);
+  border-radius: 16px;
+  background: #fffaf2;
+  color: var(--text);
+}
+
+.download-form-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  grid-column: 1 / 2;
+}
+
+.download-form-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-soft);
+}
+
+.download-form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.download-form-actions button {
+  min-height: 48px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fffaf2;
+  transition: background-color 160ms ease, transform 160ms ease, opacity 160ms ease;
+}
+
+.download-form-actions button:hover {
+  background: var(--accent-strong);
+}
+
+.download-form-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.empty-state h2 {
+  margin: 0;
+  font-family: var(--font-serif-ja);
+}

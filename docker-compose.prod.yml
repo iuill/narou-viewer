@@ -1,0 +1,95 @@
+services:
+  shared-data-init:
+    image: alpine:3.22
+    command:
+      - sh
+      - -c
+      - |
+        if [ -f /data/.shared-data-init-ok ]; then
+          exit 0
+        fi
+        mkdir -p /data/novel-fetcher /data/state
+        chown -R 1000:1000 /data
+        touch /data/.shared-data-init-ok
+    restart: "no"
+    volumes:
+      - shared-data:/data
+
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - viewer-web
+      - viewer-api
+    ports:
+      - "${NAROU_VIEWER_HTTP_BIND:-127.0.0.1}:${NAROU_VIEWER_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx/self-host.conf:/etc/nginx/conf.d/default.conf:ro
+
+  viewer-web:
+    build:
+      context: .
+      dockerfile: ./deploy/viewer-web/Dockerfile
+      args:
+        VITE_APP_GIT_SHA: ${VITE_APP_GIT_SHA:-self-host}
+        VITE_APP_GIT_COMMIT_DATE: ${VITE_APP_GIT_COMMIT_DATE:-1970-01-01T00:00:00Z}
+        VITE_PUBLIC_ASSET_BASE_URL: ${VITE_PUBLIC_ASSET_BASE_URL:-}
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  viewer-api:
+    build:
+      context: .
+      dockerfile: ./deploy/viewer-api-go/Dockerfile
+    restart: unless-stopped
+    environment:
+      VIEWER_API_GO_ADDR: :8080
+      VIEWER_API_DATA_DIR: /data
+      NOVEL_FETCHER_API_BASE_URL: http://novel-fetcher:33006
+      AI_GENERATION_SETTINGS_MASTER_PASSPHRASE: ${AI_GENERATION_SETTINGS_MASTER_PASSPHRASE:-}
+      AI_GENERATION_SERVICE_API_BASE_URL: ${AI_GENERATION_SERVICE_API_BASE_URL:-}
+      OPENROUTER_API_BASE_URL: ${OPENROUTER_API_BASE_URL:-}
+      OPENROUTER_REQUEST_TIMEOUT_SECONDS: ${OPENROUTER_REQUEST_TIMEOUT_SECONDS:-}
+      OPENROUTER_HTTP_REFERER: ${OPENROUTER_HTTP_REFERER:-}
+      OPENROUTER_APP_TITLE: ${OPENROUTER_APP_TITLE:-}
+      LLM_DATA_COLLECTION: ${LLM_DATA_COLLECTION:-deny}
+      PUBLICATION_PROVIDER_NDL_ENABLED: ${PUBLICATION_PROVIDER_NDL_ENABLED:-}
+      NDL_SEARCH_API_BASE_URL: ${NDL_SEARCH_API_BASE_URL:-}
+      PUBLICATION_PROVIDER_GOOGLE_BOOKS_ENABLED: ${PUBLICATION_PROVIDER_GOOGLE_BOOKS_ENABLED:-}
+      GOOGLE_BOOKS_API_KEY: ${GOOGLE_BOOKS_API_KEY:-}
+    depends_on:
+      shared-data-init:
+        condition: service_completed_successfully
+      novel-fetcher:
+        condition: service_started
+    volumes:
+      - shared-data:/data
+    expose:
+      - "8080"
+
+  novel-fetcher:
+    build:
+      context: .
+      dockerfile: ./deploy/novel-fetcher/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      shared-data-init:
+        condition: service_completed_successfully
+    environment:
+      NOVEL_FETCHER_HOST: 0.0.0.0
+      NOVEL_FETCHER_PORT: 33006
+      NOVEL_FETCHER_DATA_DIR: /data/novel-fetcher
+      NOVEL_FETCHER_PAGE_INTERVAL_MILLIS: ${NOVEL_FETCHER_PAGE_INTERVAL_MILLIS:-700}
+      NOVEL_FETCHER_SYOSETU_WAIT_STEPS: ${NOVEL_FETCHER_SYOSETU_WAIT_STEPS:-10}
+      NOVEL_FETCHER_STEPS_WAIT_MILLIS: ${NOVEL_FETCHER_STEPS_WAIT_MILLIS:-5000}
+      NOVEL_FETCHER_WORK_INTERVAL_MILLIS: ${NOVEL_FETCHER_WORK_INTERVAL_MILLIS:-2500}
+      NOVEL_FETCHER_USER_AGENT: ${NOVEL_FETCHER_USER_AGENT:-}
+    volumes:
+      - shared-data:/data
+    expose:
+      - "33006"
+
+volumes:
+  shared-data:

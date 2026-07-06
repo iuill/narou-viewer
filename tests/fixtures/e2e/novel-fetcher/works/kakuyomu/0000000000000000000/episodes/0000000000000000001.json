@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "episode_id": "0000000000000000001",
+  "site_episode_id": "0000000000000000001",
+  "source_url": "https://kakuyomu.example/works/0000000000000000000/episodes/0000000000000000001",
+  "sort_order": 0,
+  "display_index": "0000000000000000001",
+  "title": "第1話",
+  "chapter": "章",
+  "published_at": "2026/05/09 12:00",
+  "updated_at": "2026/05/09 12:00",
+  "blocks": [
+    {
+      "type": "meta",
+      "section": "chapter",
+      "text": "章"
+    },
+    {
+      "type": "title",
+      "text": "第1話"
+    },
+    {
+      "type": "html",
+      "section": "introduction",
+      "html": "<p>合成前書きです。</p>"
+    },
+    {
+      "type": "html",
+      "section": "body",
+      "html": "<p>合成本文 case-g-01。カクヨム形式の ID 表示確認用です。</p>"
+    },
+    {
+      "type": "html",
+      "section": "postscript",
+      "html": "<p>合成後書きです。</p>"
+    }
+  ],
+  "fetched_at": "2026-05-09T13:01:00Z"
+}

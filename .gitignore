@@ -1,0 +1,38 @@
+node_modules/
+dist/
+*.log
+npm-debug.log*
+.env
+.env.local
+.env.*.local
+
+.tmp/
+/tmp-reference-repos/
+**/.vite/
+data/
+!data/.gitkeep
+playwright-report/
+test-results/
+ui-review-results/
+coverage/
+data_e2e/state/
+data_e2e/tmp/
+data_e2e/novel-fetcher/*
+deploy/runtime/
+/.github/skills
+!.env.sample
+/todo.md
+/.playwright-cli/
+.serena/
+CLAUDE.md
+.claude/
+
+# local/private project skills under the shared discovery root
+.agents/skills/local-*/
+
+# local agent state
+.codex/
+.copilot/
+
+# local editor/worktree personalization
+.vscode/settings.json

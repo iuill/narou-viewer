@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "episode_id": "1",
+  "site_episode_id": "1",
+  "source_url": "https://ncode.syosetu.com/n1234ab/1/",
+  "sort_order": 0,
+  "display_index": "1",
+  "title": "第一話",
+  "chapter": "第一章",
+  "subchapter": "開幕",
+  "published_at": "2026/05/09 12:00",
+  "updated_at": "2026/05/09 12:00",
+  "blocks": [
+    {
+      "type": "meta",
+      "section": "chapter",
+      "text": "第一章"
+    },
+    {
+      "type": "meta",
+      "section": "subchapter",
+      "text": "開幕"
+    },
+    {
+      "type": "title",
+      "text": "第一話"
+    },
+    {
+      "type": "html",
+      "section": "introduction",
+      "html": "<p>合成前書きです。</p>"
+    },
+    {
+      "type": "html",
+      "section": "body",
+      "html": "<p>合成本文 case-a-01。挿絵表示確認用の短い本文です。</p><p><img src=\"../assets/episodes/1/synthetic.png\" alt=\"合成挿絵\" width=\"400\" height=\"300\"></p>"
+    },
+    {
+      "type": "html",
+      "section": "postscript",
+      "html": "<p>合成後書きです。</p>"
+    }
+  ],
+  "fetched_at": "2026-05-09T12:01:00Z"
+}

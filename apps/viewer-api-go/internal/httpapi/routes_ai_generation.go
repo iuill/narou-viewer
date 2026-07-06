@@ -1,0 +1,1737 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"narou-viewer/apps/viewer-api-go/internal/ai"
+	appcharactersummary "narou-viewer/apps/viewer-api-go/internal/application/charactersummary"
+	"narou-viewer/apps/viewer-api-go/internal/characters"
+	"narou-viewer/apps/viewer-api-go/internal/charactersummary"
+	"narou-viewer/apps/viewer-api-go/internal/charactersummary/checkpointstore"
+	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
+	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/store"
+)
+
+type characterSummaryCheckpoint = checkpointstore.Checkpoint
+
+type characterSummaryRequestOptions = appcharactersummary.RequestOptions
+
+type characterSummaryBatchProgress = appcharactersummary.BatchProgress
+
+type characterSummaryEpisodeInput = charactersummary.EpisodeInput
+type characterSummaryChunk = charactersummary.Chunk
+type characterSummaryBatch = charactersummary.Batch
+type characterSummaryBatchBudget = charactersummary.BatchBudget
+type characterSummaryDelta = charactersummary.Delta
+type characterSummaryUnresolvedMention = charactersummary.UnresolvedMention
+type characterSummaryGenerationState = charactersummary.GenerationState
+
+type characterSummaryBatchResult struct {
+	Delta characterSummaryDelta
+	Usage ai.UsageRequest
+}
+
+const characterSummaryDefaultMaxTokens = 12000
+
+type characterSummaryInputs = appcharactersummary.Inputs
+
+const characterSummaryMinimumCompletionTokens = 512
+const (
+	maxProviderOrderItems      = 16
+	maxProviderOrderItemLength = 80
+)
+
+func characterSummaryTimingLogEnabled() bool {
+	return strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG")) == "1"
+}
+
+func logCharacterSummaryTiming(stage string, startedAt time.Time, fields ...any) {
+	if !characterSummaryTimingLogEnabled() {
+		return
+	}
+	values := []any{
+		"stage", stage,
+		"elapsedMs", time.Since(startedAt).Milliseconds(),
+	}
+	values = append(values, fields...)
+	log.Printf("viewer-api-go: character-summary timing %s", formatTimingFields(values...))
+}
+
+func LogCharacterSummaryTiming(stage string, startedAt time.Time, fields ...any) {
+	logCharacterSummaryTiming(stage, startedAt, fields...)
+}
+
+func formatTimingFields(fields ...any) string {
+	parts := make([]string, 0, len(fields)/2)
+	for index := 0; index+1 < len(fields); index += 2 {
+		parts = append(parts, fmt.Sprintf("%v=%v", fields[index], fields[index+1]))
+	}
+	return strings.Join(parts, " ")
+}
+
+func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		settings, err := s.stateStore.GetAIGenerationSettings()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
+			return
+		}
+		s.enrichAIGenerationSettingsModelInfo(r.Context(), &settings)
+		writeJSON(w, http.StatusOK, settings)
+	case http.MethodPut:
+		body, ok := decodeObjectOrBadRequest(w, r)
+		if !ok {
+			return
+		}
+		if preferredValue, exists := body["preferredMode"]; exists {
+			preferred, ok := preferredValue.(string)
+			if !ok || (preferred != "llm" && preferred != "heuristic") {
+				writeError(w, http.StatusBadRequest, "preferredMode must be 'llm' or 'heuristic'.")
+				return
+			}
+		}
+		if selectedProfileID, ok := body["selectedProfileId"]; ok && selectedProfileID != nil {
+			if _, ok := selectedProfileID.(string); !ok {
+				writeError(w, http.StatusBadRequest, "selectedProfileId must be a string or null.")
+				return
+			}
+		}
+		update, errMessage := parseAIGenerationSettingsUpdate(body)
+		if errMessage != "" {
+			writeError(w, http.StatusBadRequest, errMessage)
+			return
+		}
+		if update.SelectedProfileID != nil && *update.SelectedProfileID != "" {
+			if update.ProfilesSet {
+				if !profileInputExists(update.Profiles, *update.SelectedProfileID) {
+					writeError(w, http.StatusBadRequest, "selectedProfileId must match one of the profiles.")
+					return
+				}
+			} else {
+				current, err := s.stateStore.GetAIGenerationSettings()
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
+					return
+				}
+				if !profileMetadataExists(current.Settings.Profiles, *update.SelectedProfileID) {
+					writeError(w, http.StatusBadRequest, "selectedProfileId must match one of the profiles.")
+					return
+				}
+			}
+		}
+		if update.SelectedProfileID == nil && update.ProfilesSet {
+			current, err := s.stateStore.GetAIGenerationSettings()
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
+				return
+			}
+			if current.Settings.SelectedProfileID != nil && *current.Settings.SelectedProfileID != "" && !profileInputExists(update.Profiles, *current.Settings.SelectedProfileID) {
+				writeError(w, http.StatusBadRequest, "selectedProfileId must match one of the profiles.")
+				return
+			}
+		}
+		settings, err := s.stateStore.PutAIGenerationSettings(update)
+		if err != nil {
+			if store.IsAIGenerationSettingsCryptoError(err) {
+				writeError(w, http.StatusServiceUnavailable, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
+			return
+		}
+		s.enrichAIGenerationSettingsModelInfo(r.Context(), &settings)
+		writeJSON(w, http.StatusOK, settings)
+	default:
+		methodOnly(w, r, http.MethodGet, http.MethodPut)
+	}
+}
+
+func (s *Server) enrichAIGenerationSettingsModelInfo(ctx context.Context, settings *ai.SettingsResponse) {
+	if s == nil || s.stateStore == nil || settings == nil {
+		return
+	}
+	lookupRoot, cancelRoot := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelRoot()
+	for index := range settings.Settings.Profiles {
+		if lookupRoot.Err() != nil {
+			return
+		}
+		profile := &settings.Settings.Profiles[index]
+		if profile.ModelID == nil || strings.TrimSpace(*profile.ModelID) == "" {
+			continue
+		}
+		profileID := profile.ID
+		config, err := s.stateStore.ResolveAIGenerationConfigOverride(&profileID, nil)
+		if err != nil || config == nil {
+			continue
+		}
+		lookupCtx, cancel := context.WithTimeout(lookupRoot, 2*time.Second)
+		info, ok := ai.LookupOpenRouterModelInfo(lookupCtx, config.APIKey, config.ModelID, config.ProviderOrder)
+		cancel()
+		if !ok {
+			continue
+		}
+		profile.ModelInfo = &ai.ModelInfoMetadata{
+			ContextLength:       info.ContextLength,
+			MaxCompletionTokens: info.MaxCompletionTokens,
+			Source:              "openrouter",
+		}
+	}
+}
+
+func (s *Server) handlePreferredMode(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodPut) {
+		return
+	}
+	body, ok := decodeObjectOrBadRequest(w, r)
+	if !ok {
+		return
+	}
+	preferred, ok := body["preferredMode"].(string)
+	if !ok || (preferred != "llm" && preferred != "heuristic") {
+		writeError(w, http.StatusBadRequest, "preferredMode must be 'llm' or 'heuristic'.")
+		return
+	}
+
+	response, err := s.stateStore.PutAIGenerationPreferredMode(preferred)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"preferredMode":           response.PreferredMode,
+		"effectiveGenerationMode": response.EffectiveGenerationMode,
+	})
+}
+
+func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSettingsUpdate, string) {
+	update := store.AIGenerationSettingsUpdate{}
+	if preferred, ok := body["preferredMode"].(string); ok {
+		update.PreferredMode = &preferred
+	}
+	if selected, ok := body["selectedProfileId"]; ok {
+		if selected == nil {
+			empty := ""
+			update.SelectedProfileID = &empty
+		} else if value, ok := selected.(string); ok {
+			trimmed := strings.TrimSpace(value)
+			update.SelectedProfileID = &trimmed
+		}
+	}
+	if rawShared, ok := body["sharedProviders"]; ok {
+		shared, ok := parseAISharedProviders(rawShared)
+		if !ok {
+			return update, "sharedProviders is invalid."
+		}
+		update.SharedProviders = &shared
+	}
+	if rawStrategyModels, ok := body["characterSummaryStrategyModels"]; ok {
+		strategyModels, ok := parseAICharacterSummaryStrategyModels(rawStrategyModels)
+		if !ok {
+			return update, "characterSummaryStrategyModels is invalid."
+		}
+		update.CharacterSummaryStrategyModels = &strategyModels
+	}
+	if rawProfiles, ok := body["profiles"]; ok {
+		profiles, ok := rawProfiles.([]any)
+		if !ok {
+			return update, "profiles must be an array."
+		}
+		if len(profiles) == 0 {
+			return update, "profiles must contain at least one profile."
+		}
+		update.ProfilesSet = true
+		update.Profiles = make([]store.AIProfileInput, 0, len(profiles))
+		for index, rawProfile := range profiles {
+			profile, ok := parseAIProfile(rawProfile, index)
+			if !ok {
+				return update, "profiles contains an invalid entry."
+			}
+			update.Profiles = append(update.Profiles, profile)
+		}
+	}
+	return update, ""
+}
+
+func parseAICharacterSummaryStrategyModels(value any) (store.AICharacterSummaryStrategyModelsInput, bool) {
+	if value == nil {
+		return store.AICharacterSummaryStrategyModelsInput{}, true
+	}
+	record, ok := value.(map[string]any)
+	if !ok {
+		return store.AICharacterSummaryStrategyModelsInput{}, false
+	}
+	nameDiscoveryModelID, ok := nullableStringField(record, "nameDiscoveryModelId")
+	if !ok {
+		return store.AICharacterSummaryStrategyModelsInput{}, false
+	}
+	return store.AICharacterSummaryStrategyModelsInput{NameDiscoveryModelID: nameDiscoveryModelID}, true
+}
+
+func parseAISharedProviders(value any) (store.AISharedProvidersInput, bool) {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return store.AISharedProvidersInput{}, false
+	}
+	openrouter, ok := record["openrouter"].(map[string]any)
+	if !ok {
+		if _, exists := record["openrouter"]; exists {
+			return store.AISharedProvidersInput{}, false
+		}
+	}
+	googleBooks, googleBooksOK := record["googleBooks"].(map[string]any)
+	if !googleBooksOK {
+		if _, exists := record["googleBooks"]; exists {
+			return store.AISharedProvidersInput{}, false
+		}
+	}
+	openRouterCredential, ok := parseAIProviderCredential(openrouter)
+	if !ok {
+		return store.AISharedProvidersInput{}, false
+	}
+	googleBooksCredential, ok := parseAIProviderCredential(googleBooks)
+	if !ok {
+		return store.AISharedProvidersInput{}, false
+	}
+	return store.AISharedProvidersInput{OpenRouter: openRouterCredential, GoogleBooks: googleBooksCredential}, true
+}
+
+func parseAIProviderCredential(record map[string]any) (store.AIProviderCredentialInput, bool) {
+	credential := store.AIProviderCredentialInput{}
+	if record == nil {
+		return credential, true
+	}
+	if apiKey, ok := record["apiKey"]; ok {
+		credential.APIKeySet = true
+		if apiKey == nil {
+			credential.APIKey = nil
+		} else if value, ok := apiKey.(string); ok {
+			credential.APIKey = &value
+		} else {
+			return store.AIProviderCredentialInput{}, false
+		}
+	}
+	return credential, true
+}
+
+func parseAIProfile(value any, index int) (store.AIProfileInput, bool) {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	id := stringField(record, "id")
+	if id == "" {
+		if index == 0 {
+			id = "default"
+		} else {
+			id = "profile-" + strconv.Itoa(index+1)
+		}
+	}
+	label := stringField(record, "label")
+	if label == "" {
+		return store.AIProfileInput{}, false
+	}
+	provider, ok := optionalStringField(record, "provider")
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	if provider != "" && provider != "openrouter" {
+		return store.AIProfileInput{}, false
+	}
+	credentials, ok := parseAIProfileCredentials(record["credentials"])
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	if apiKey, ok := record["apiKey"]; ok {
+		if credentials.Source == "" {
+			credentials.Source = "custom"
+		}
+		credentials.APIKeySet = true
+		if apiKey == nil {
+			credentials.APIKey = nil
+		} else if value, ok := apiKey.(string); ok {
+			credentials.APIKey = &value
+		} else {
+			return store.AIProfileInput{}, false
+		}
+	}
+	providerOrder, ok := parseStringArray(record["providerOrder"])
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	modelID, ok := nullableStringField(record, "modelId")
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	allowFallbacks, ok := boolField(record, "allowFallbacks", false)
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	requireParameters, ok := boolField(record, "requireParameters", true)
+	if !ok {
+		return store.AIProfileInput{}, false
+	}
+	return store.AIProfileInput{
+		ID:                id,
+		Label:             label,
+		Provider:          provider,
+		Credentials:       credentials,
+		ModelID:           modelID,
+		ProviderOrder:     providerOrder,
+		AllowFallbacks:    allowFallbacks,
+		RequireParameters: requireParameters,
+	}, true
+}
+
+func parseAIProfileCredentials(value any) (store.AIProfileCredentialsInput, bool) {
+	if value == nil {
+		return store.AIProfileCredentialsInput{}, true
+	}
+	record, ok := value.(map[string]any)
+	if !ok {
+		return store.AIProfileCredentialsInput{}, false
+	}
+	source, ok := optionalStringField(record, "source")
+	if !ok {
+		return store.AIProfileCredentialsInput{}, false
+	}
+	if source != "shared" && source != "custom" {
+		if source != "" {
+			return store.AIProfileCredentialsInput{}, false
+		}
+	}
+	credentials := store.AIProfileCredentialsInput{Source: source}
+	if apiKey, ok := record["apiKey"]; ok {
+		credentials.APIKeySet = true
+		if apiKey == nil {
+			credentials.APIKey = nil
+		} else if value, ok := apiKey.(string); ok {
+			credentials.APIKey = &value
+		} else {
+			return store.AIProfileCredentialsInput{}, false
+		}
+	}
+	return credentials, true
+}
+
+func profileInputExists(profiles []store.AIProfileInput, id string) bool {
+	for _, profile := range profiles {
+		if profile.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func profileMetadataExists(profiles []ai.Profile, id string) bool {
+	for _, profile := range profiles {
+		if profile.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func stringField(record map[string]any, key string) string {
+	value, ok := record[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func optionalStringField(record map[string]any, key string) (string, bool) {
+	value, ok := record[key]
+	if !ok || value == nil {
+		return "", true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(text), true
+}
+
+func nullableStringField(record map[string]any, key string) (*string, bool) {
+	value, ok := record[key]
+	if !ok || value == nil {
+		return nil, true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return nil, false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, true
+	}
+	return &trimmed, true
+}
+
+func boolField(record map[string]any, key string, fallback bool) (bool, bool) {
+	value, exists := record[key]
+	if !exists {
+		return fallback, true
+	}
+	typed, ok := value.(bool)
+	if !ok {
+		return false, false
+	}
+	return typed, true
+}
+
+func parseStringArray(value any) ([]string, bool) {
+	if value == nil {
+		return []string{}, true
+	}
+	if text, ok := value.(string); ok {
+		result := []string{}
+		for _, item := range strings.Split(text, ",") {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) == 0 {
+			return []string{}, true
+		}
+		return validateProviderOrder(result)
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, false
+	}
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		text, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		trimmed := strings.TrimSpace(text)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return validateProviderOrder(result)
+}
+
+func validateProviderOrder(values []string) ([]string, bool) {
+	if len(values) > maxProviderOrderItems {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	for _, value := range values {
+		if !isValidProviderOrderItem(value) {
+			return nil, false
+		}
+		normalized := strings.ToLower(value)
+		if seen[normalized] {
+			return nil, false
+		}
+		seen[normalized] = true
+	}
+	return values, true
+}
+
+func isValidProviderOrderItem(value string) bool {
+	if value == "" || len(value) > maxProviderOrderItemLength {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.' || r == '/' || r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	records, err := characters.LoadAllJobs(s.stateDir())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Character jobs could not be read.")
+		return
+	}
+	novelsByID := map[string]library.NovelSummary{}
+	if s.library != nil {
+		if result, err := s.library.ListNovels(r.Context()); err == nil {
+			for _, novel := range result.Novels {
+				novelsByID[novel.NovelID] = novel
+			}
+		}
+	}
+	jobs := make([]ai.Job, 0, len(records))
+	for _, record := range records {
+		var novelTitle *string
+		var novelAuthor *string
+		if novel, ok := novelsByID[record.NovelID]; ok {
+			novelTitle = stringPointer(novel.Title)
+			novelAuthor = stringPointer(novel.Author)
+		}
+		jobs = append(jobs, ai.Job{
+			JobID:                     record.Job.JobID,
+			NovelID:                   record.NovelID,
+			NovelTitle:                novelTitle,
+			NovelAuthor:               novelAuthor,
+			RequestedUpToEpisodeIndex: record.Job.RequestedUpToEpisodeIndex,
+			ProfileID:                 record.Job.ProfileID,
+			ProfileLabel:              record.Job.ProfileLabel,
+			GenerationMode:            record.Job.GenerationMode,
+			GenerationStrategy:        record.Job.GenerationStrategy,
+			ModelID:                   record.Job.ModelID,
+			Status:                    record.Job.Status,
+			Progress:                  record.Job.Progress,
+			ProgressStage:             record.Job.ProgressStage,
+			CurrentBatchIndex:         record.Job.CurrentBatchIndex,
+			BatchCount:                record.Job.BatchCount,
+			GeneratedCharacterCount:   record.Job.GeneratedCharacterCount,
+			CreatedAt:                 record.Job.CreatedAt,
+			StartedAt:                 record.Job.StartedAt,
+			FinishedAt:                record.Job.FinishedAt,
+			ErrorMessage:              record.Job.ErrorMessage,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	if usage, ok, err := ai.LoadUsage(s.aiUsageDBPath()); err != nil {
+		writeError(w, http.StatusInternalServerError, "AI usage store could not be read.")
+		return
+	} else if ok {
+		writeJSON(w, http.StatusOK, usage)
+		return
+	}
+	writeJSON(w, http.StatusOK, ai.EmptyUsage())
+}
+
+func (s *Server) handleUsageDetail(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	runID := strings.TrimPrefix(r.URL.Path, "/api/ai-generation/usage/")
+	if run, ok, err := ai.LoadUsageRun(s.aiUsageDBPath(), runID); err != nil {
+		writeError(w, http.StatusInternalServerError, "AI usage store could not be read.")
+		return
+	} else if ok {
+		writeJSON(w, http.StatusOK, run)
+		return
+	}
+	writeError(w, http.StatusNotFound, "AI usage run not found.")
+}
+
+func (s *Server) aiUsageDBPath() string {
+	return filepath.Join(s.dataDir, "state", "ai_usage.sqlite")
+}
+
+func (s *Server) parseCharacterSummaryRequestOptions(body map[string]any) (characterSummaryRequestOptions, string) {
+	options := characterSummaryRequestOptions{}
+	if rawStrategy, exists := body["generationStrategy"]; exists {
+		strategy, ok := rawStrategy.(string)
+		if !ok {
+			return options, "キャラクター一覧生成方式が不正です。"
+		}
+		normalized := appcharactersummary.NormalizeGenerationStrategy(strategy)
+		if strings.TrimSpace(strategy) != "" && normalized != strings.TrimSpace(strategy) {
+			return options, "キャラクター一覧生成方式が不正です。"
+		}
+		options.GenerationStrategy = normalized
+	}
+	if rawProfileID, exists := body["profileId"]; exists {
+		if rawProfileID == nil {
+			options.ProfileResolution = true
+		} else if profileID, ok := rawProfileID.(string); ok {
+			trimmed := strings.TrimSpace(profileID)
+			if trimmed != "" {
+				options.ProfileID = &trimmed
+			}
+			options.ProfileResolution = true
+		} else {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+	}
+
+	transient := store.AIGenerationTransientConfig{}
+	hasTransient := false
+	if raw, exists := body["modelId"]; exists {
+		modelID, ok := nullableBodyString(raw)
+		if !ok {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		transient.ModelID = modelID
+		hasTransient = true
+	}
+	if raw, exists := body["providerOrder"]; exists {
+		providerOrder, ok := parseStringArray(raw)
+		if !ok {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		transient.ProviderOrder = providerOrder
+		transient.ProviderOrderSet = true
+		hasTransient = true
+	}
+	if raw, exists := body["allowFallbacks"]; exists {
+		value, ok := raw.(bool)
+		if !ok {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		transient.AllowFallbacks = &value
+		hasTransient = true
+	}
+	if raw, exists := body["requireParameters"]; exists {
+		value, ok := raw.(bool)
+		if !ok {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		transient.RequireParameters = &value
+		hasTransient = true
+	}
+	if raw, exists := body["systemPromptOverride"]; exists {
+		if raw == nil {
+			hasTransient = true
+		} else if text, ok := raw.(string); ok {
+			trimmed := strings.TrimSpace(text)
+			if trimmed == "" {
+				return options, "一時 AI 生成設定が不正です。"
+			}
+			transient.SystemPromptOverride = &trimmed
+			hasTransient = true
+		} else {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+	}
+	if hasTransient {
+		options.Transient = &transient
+		options.ProfileResolution = true
+	}
+	return options, ""
+}
+
+func nullableBodyString(value any) (*string, bool) {
+	if value == nil {
+		return nil, true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return nil, false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil, true
+	}
+	return &trimmed, true
+}
+
+func (s *Server) resolveCharacterSummaryRequestOptions(options *characterSummaryRequestOptions) (string, int) {
+	if options == nil || !options.ProfileResolution {
+		return "", http.StatusOK
+	}
+	if s.stateStore == nil {
+		return "AI generation profile was not found.", http.StatusBadRequest
+	}
+	config, err := s.stateStore.ResolveAIGenerationConfigOverride(options.ProfileID, options.Transient)
+	if err != nil {
+		if store.IsAIGenerationSettingsCryptoError(err) {
+			return "AI generation settings could not be decrypted.", http.StatusServiceUnavailable
+		}
+		return "AI generation profile was not found.", http.StatusBadRequest
+	}
+	if config == nil {
+		return "AI generation profile was not found.", http.StatusBadRequest
+	}
+	options.ResolvedConfig = config
+	options.GenerationMode = "openrouter"
+	return "", http.StatusOK
+}
+
+func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodPost) {
+		return
+	}
+	body, ok := decodeObjectOrBadRequest(w, r)
+	if !ok {
+		return
+	}
+	novelID, ok := body["novelId"].(string)
+	if !ok || strings.TrimSpace(novelID) == "" {
+		writeError(w, http.StatusBadRequest, "novelId is required.")
+		return
+	}
+	if _, ok := isNonNegativeIntegerString(body["upToEpisodeIndex"]); !ok {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
+		return
+	}
+	upToEpisodeIndex, _ := isNonNegativeIntegerString(body["upToEpisodeIndex"])
+	novelFound, episodeFound, lookupErr := s.validateNovelEpisode(r.Context(), novelID, upToEpisodeIndex)
+	if lookupErr != nil {
+		writeLibraryLookupError(w, r, novelID, upToEpisodeIndex, lookupErr)
+		return
+	}
+	if !novelFound {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	if !episodeFound {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
+		return
+	}
+	options, errMessage := s.parseCharacterSummaryRequestOptions(body)
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	if errMessage, status := s.resolveCharacterSummaryRequestOptions(&options); errMessage != "" {
+		writeError(w, status, errMessage)
+		return
+	}
+	options.PreviewOnly = true
+	ctx, cancel := nonStreamingLLMContext(r.Context())
+	defer cancel()
+	result, err := s.characterSummaryResult(ctx, novelID, upToEpisodeIndex, options)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, characterSummaryPlaygroundErrorMessage(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) {
+	if !methodOnly(w, r, http.MethodPost) {
+		return
+	}
+	body, ok := decodeObjectOrBadRequest(w, r)
+	if !ok {
+		return
+	}
+	upToEpisodeIndex, ok := isNonNegativeIntegerString(body["upToEpisodeIndex"])
+	if !ok {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
+		return
+	}
+	novelID, ok := body["novelId"].(string)
+	if !ok || strings.TrimSpace(novelID) == "" {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	novelFound, episodeFound, lookupErr := s.validateNovelEpisode(r.Context(), novelID, upToEpisodeIndex)
+	if lookupErr != nil {
+		writeLibraryLookupError(w, r, novelID, upToEpisodeIndex, lookupErr)
+		return
+	}
+	if !novelFound {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	if !episodeFound {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
+		return
+	}
+	options, errMessage := s.parseCharacterSummaryRequestOptions(body)
+	if errMessage != "" {
+		writeError(w, http.StatusBadRequest, errMessage)
+		return
+	}
+	if errMessage, status := s.resolveCharacterSummaryRequestOptions(&options); errMessage != "" {
+		writeError(w, status, errMessage)
+		return
+	}
+	options.PreviewOnly = true
+
+	w.Header().Set("content-type", "application/x-ndjson; charset=utf-8")
+	w.Header().Set("cache-control", "no-cache, no-transform")
+	w.Header().Set("x-content-type-options", "nosniff")
+	w.Header().Set("x-accel-buffering", "no")
+	extendStreamingWriteDeadline(w)
+	w.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(w)
+	flusher, _ := w.(http.Flusher)
+	writeStreamEvent := func(event map[string]any) bool {
+		if r.Context().Err() != nil {
+			return false
+		}
+		extendStreamingWriteDeadline(w)
+		if err := encoder.Encode(event); err != nil {
+			return false
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return r.Context().Err() == nil
+	}
+	_ = writeStreamEvent(playgroundStatusEvent("preparing", "入力を確認しました。", 10, 1))
+	_ = writeStreamEvent(playgroundStatusEvent("loadingEpisodes", "本文データを読み込んでいます。", 35, 2))
+	var preview appcharactersummary.PromptPreview
+	preparedPreview, err := s.characterSummaryRuntime().PreparePreview(r.Context(), novelID, upToEpisodeIndex, options.ResolvedConfig)
+	if err == nil {
+		options.SummaryInputs = &preparedPreview.Inputs
+		preview = preparedPreview.Preview
+		_ = writeStreamEvent(map[string]any{
+			"type":    "promptPreview",
+			"preview": preview,
+		})
+	}
+	_ = writeStreamEvent(playgroundStatusEvent("generating", "キャラクター一覧を生成しています。", 70, 3))
+	startedAt := time.Now()
+	emittedBatchTiming := false
+	options.BatchProgressSink = func(progress characterSummaryBatchProgress) {
+		switch progress.Phase {
+		case "start":
+			_ = writeStreamEvent(playgroundBatchStatusEvent(progress.Batch))
+		case "complete":
+			emittedBatchTiming = true
+			_ = writeStreamEvent(characterSummaryBatchTimingEvent(progress))
+		}
+	}
+	result, err := s.characterSummaryResult(r.Context(), novelID, upToEpisodeIndex, options)
+	if err != nil {
+		_ = writeStreamEvent(map[string]any{"type": "error", "error": characterSummaryPlaygroundErrorMessage(err)})
+		return
+	}
+	generatedCount := 0
+	if charactersValue, ok := result["characters"].([]characters.Character); ok {
+		generatedCount = len(charactersValue)
+	}
+	if !emittedBatchTiming {
+		_ = writeStreamEvent(map[string]any{
+			"type":                    "batchTiming",
+			"batchIndex":              1,
+			"batchCount":              1,
+			"episodeIndexes":          promptPreviewEpisodeIndexes(preview),
+			"chunkCount":              promptPreviewChunkCount(preview),
+			"elapsedMs":               time.Since(startedAt).Milliseconds(),
+			"generatedCharacterCount": generatedCount,
+			"mergedCharacterCount":    generatedCount,
+			"message":                 "キャラクター一覧生成を完了しました。",
+		})
+	}
+	_ = writeStreamEvent(playgroundStatusEvent("buildingResponse", "レスポンスを組み立てています。", 90, 4))
+	_ = writeStreamEvent(map[string]any{
+		"type":   "result",
+		"result": result,
+	})
+}
+
+func (s *Server) characterSummaryResult(ctx context.Context, novelID string, upToEpisodeIndex string, options characterSummaryRequestOptions) (map[string]any, error) {
+	result, err := s.characterSummaryRuntime().Result(ctx, novelID, upToEpisodeIndex, options)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"novelId":                   result.NovelID,
+		"novelTitle":                result.NovelTitle,
+		"upToEpisodeIndex":          result.UpToEpisodeIndex,
+		"processedUpToEpisodeIndex": result.ProcessedUpToEpisodeIndex,
+		"profileId":                 result.ProfileID,
+		"profileLabel":              result.ProfileLabel,
+		"generationMode":            result.GenerationMode,
+		"generationStrategy":        result.GenerationStrategy,
+		"modelId":                   result.ModelID,
+		"characters":                result.Characters,
+	}, nil
+}
+
+func (s *Server) characterSummaryWorkflow() *appcharactersummary.Workflow {
+	return s.characterSummaryRuntime().Workflow()
+}
+
+func (s *Server) generateAndSaveCharacterSummary(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(characterSummaryBatchProgress)) error {
+	return s.characterSummaryRuntime().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink)
+}
+
+func (s *Server) generateCharacterSummaryPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(characterSummaryBatchProgress), episodeIndexes []string, preloaded *characterSummaryInputs) (summary characters.SummaryResponse, err error) {
+	return s.characterSummaryRuntime().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink, episodeIndexes, preloaded)
+}
+
+func characterSummaryPlaygroundErrorMessage(err error) string {
+	if err == nil {
+		return "Character profiles could not be read."
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "Character profiles could not be read."
+	}
+	return "Character profiles could not be read: " + message
+}
+
+func rebatchCharacterSummaryInputs(ctx context.Context, inputs characterSummaryInputs, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) characterSummaryInputs {
+	if config == nil || len(inputs.Batches) == 0 {
+		return inputs
+	}
+	chunks := make([]characterSummaryChunk, 0)
+	for _, batch := range inputs.Batches {
+		chunks = append(chunks, batch.Chunks...)
+	}
+	inputs.Batches = charactersummary.CreateBatchesWithBudget(chunks, resolveCharacterSummaryBatchBudget(ctx, config, fallbackMaxBatchChars))
+	return inputs
+}
+
+func buildGeneratedCharacterSummaryPreview(stateDir string, novelID string, upToEpisodeIndex string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, episodeIndexes []string, options characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
+	return buildCharacterSummaryPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
+		if err := copyCharacterSummaryPreviewEvents(stateDir, tempDir, novelID); err != nil {
+			return err
+		}
+		return characters.SaveGeneratedSummaryWithOptions(tempDir, novelID, upToEpisodeIndex, generated, episodes, options)
+	})
+}
+
+func buildHeuristicCharacterSummaryPreview(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode, episodeIndexes []string) (characters.SummaryResponse, error) {
+	return buildCharacterSummaryPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
+		return characters.SaveHeuristicSummary(tempDir, novelID, upToEpisodeIndex, episodes)
+	})
+}
+
+func buildCharacterSummaryPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
+	tempDir, err := os.MkdirTemp("", "narou-viewer-character-summary-preview-*")
+	if err != nil {
+		return characters.SummaryResponse{}, err
+	}
+	defer os.RemoveAll(tempDir)
+	if err := writeSummary(tempDir); err != nil {
+		return characters.SummaryResponse{}, err
+	}
+	return loadRequiredCharacterSummaryPreview(tempDir, novelID, upToEpisodeIndex, episodeIndexes)
+}
+
+func (s *Server) loadCharacterSummaryPendingUnresolved(novelID string, reprocessFromEpisodeIndex string) ([]characters.GeneratedUnresolvedMention, error) {
+	pending, err := characters.LoadGeneratedUnresolvedMentions(s.stateDir(), novelID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(reprocessFromEpisodeIndex) == "" {
+		return pending, nil
+	}
+	return filterGeneratedUnresolvedMentionsBeforeEpisode(pending, reprocessFromEpisodeIndex), nil
+}
+
+func filterGeneratedUnresolvedMentionsBeforeEpisode(values []characters.GeneratedUnresolvedMention, fromEpisodeIndex string) []characters.GeneratedUnresolvedMention {
+	fromEpisodeIndex = strings.TrimSpace(fromEpisodeIndex)
+	if fromEpisodeIndex == "" {
+		return append([]characters.GeneratedUnresolvedMention{}, values...)
+	}
+	result := make([]characters.GeneratedUnresolvedMention, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.EpisodeIndex) != "" && compareEpisodeString(value.EpisodeIndex, fromEpisodeIndex) < 0 {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func copyCharacterSummaryPreviewEvents(sourceStateDir string, targetStateDir string, novelID string) error {
+	if strings.TrimSpace(sourceStateDir) == "" || strings.TrimSpace(targetStateDir) == "" || strings.TrimSpace(novelID) == "" {
+		return nil
+	}
+	sourcePath := filepath.Join(sourceStateDir, "character_events", novelID+".yaml")
+	raw, err := os.ReadFile(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	targetPath := filepath.Join(targetStateDir, "character_events", novelID+".yaml")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	return fsatomic.WriteFile(targetPath, raw, 0o600)
+}
+
+func loadRequiredCharacterSummaryPreview(stateDir string, novelID string, upToEpisodeIndex string, episodeIndexes []string) (characters.SummaryResponse, error) {
+	summary, ok, err := characters.LoadSummaryForEpisodes(stateDir, novelID, upToEpisodeIndex, episodeIndexes)
+	if err != nil {
+		return characters.SummaryResponse{}, err
+	}
+	if !ok {
+		return characters.SummaryResponse{}, errors.New("character summary preview could not be built")
+	}
+	return summary, nil
+}
+
+func (s *Server) generateOpenRouterCharacterSummaryWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []characterSummaryBatch, progressSink func(characterSummaryBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, characterSummaryGenerationState, []ai.UsageRequest, error) {
+	pendingUnresolved, err := s.characterSummaryInitialUnresolved(novelID, initialUnresolved...)
+	if err != nil {
+		return nil, characterSummaryGenerationState{}, nil, err
+	}
+	return s.characterSummaryRuntime().Workflow().RunOpenRouterWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+}
+
+func (s *Server) generateOpenRouterCharacterSummary(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []characterSummaryBatch, progressSink func(characterSummaryBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, characterSummaryGenerationState, []ai.UsageRequest, error) {
+	pendingUnresolved, err := s.characterSummaryInitialUnresolved(novelID, initialUnresolved...)
+	if err != nil {
+		return nil, characterSummaryGenerationState{}, nil, err
+	}
+	return s.characterSummaryRuntime().Workflow().RunOpenRouterPreview(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+}
+
+func (s *Server) characterSummaryInitialUnresolved(novelID string, initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedUnresolvedMention, error) {
+	if len(initialUnresolved) > 0 {
+		return append([]characters.GeneratedUnresolvedMention{}, initialUnresolved[0]...), nil
+	}
+	return characters.LoadGeneratedUnresolvedMentions(s.stateDir(), novelID)
+}
+
+func characterSummaryCheckpointHasSnapshot(checkpoint characterSummaryCheckpoint) bool {
+	return appcharactersummary.CheckpointHasSnapshot(checkpoint)
+}
+
+func characterSummaryStateFromAllocator(unresolved []characters.GeneratedUnresolvedMention, allocator *characters.GeneratedCharacterIDAllocator) characterSummaryGenerationState {
+	state := characterSummaryGenerationState{
+		UnresolvedMentions: append([]characters.GeneratedUnresolvedMention{}, unresolved...),
+	}
+	if allocator != nil {
+		state.IssuedCharacterIDs = allocator.IssuedCharacterIDs()
+		state.RetiredCharacterIDs = allocator.RetiredCharacterIDs()
+		state.NextOrdinal = allocator.NextCharacterOrdinal()
+	}
+	return state
+}
+
+func allEpisodeIndexesProcessed(episodeIndexes []string, processed []string) bool {
+	if len(episodeIndexes) == 0 || len(processed) == 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, value := range processed {
+		seen[value] = true
+	}
+	for _, value := range episodeIndexes {
+		if !seen[value] {
+			return false
+		}
+	}
+	return true
+}
+
+func mergeStringSets(existing []string, incoming []string) []string {
+	result := append([]string{}, existing...)
+	seen := map[string]bool{}
+	for _, value := range result {
+		seen[value] = true
+	}
+	for _, value := range incoming {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func appendUniqueInt(existing []int, value int) []int {
+	for _, current := range existing {
+		if current == value {
+			return existing
+		}
+	}
+	return append(existing, value)
+}
+
+func characterSummaryCheckpointFingerprint(config *store.ResolvedAIGenerationConfig, extra any) string {
+	return appcharactersummary.CheckpointFingerprint(config, extra)
+}
+
+func characterSummaryCheckpointBatchInputs(batches []characterSummaryBatch) []map[string]any {
+	return appcharactersummary.CheckpointBatchInputs(batches)
+}
+
+func characterSummaryCheckpointBatchInput(batch characterSummaryBatch) map[string]any {
+	return appcharactersummary.CheckpointBatchInput(batch)
+}
+
+func (s *Server) characterSummaryCheckpointPath(novelID string, upToEpisodeIndex string) string {
+	return checkpointstore.NewFileStore(s.stateDir()).Path(novelID, upToEpisodeIndex)
+}
+
+func (s *Server) loadCharacterSummaryCheckpoint(novelID string, upToEpisodeIndex string) characterSummaryCheckpoint {
+	return s.loadCharacterSummaryCheckpointForGeneration(novelID, upToEpisodeIndex, "")
+}
+
+func (s *Server) loadCharacterSummaryCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) characterSummaryCheckpoint {
+	checkpoint, err := s.characterSummaryRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
+	if err != nil ||
+		checkpoint.SchemaVersion != 1 ||
+		checkpoint.NovelID != novelID ||
+		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
+		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
+		return appcharactersummary.EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
+	}
+	return appcharactersummary.NormalizeCheckpoint(checkpoint)
+}
+
+func (s *Server) saveCharacterSummaryCheckpoint(novelID string, upToEpisodeIndex string, checkpoint characterSummaryCheckpoint) error {
+	return s.characterSummaryRuntime().SaveCheckpoint(novelID, upToEpisodeIndex, checkpoint)
+}
+
+func (s *Server) characterSummaryCheckpointExists(novelID string, upToEpisodeIndex string) bool {
+	return s.characterSummaryRuntime().CheckpointExists(novelID, upToEpisodeIndex)
+}
+
+func (s *Server) recordCharacterSummaryUsage(run ai.UsageRun) error {
+	return s.characterSummaryRuntime().RecordUsage(run)
+}
+
+func (s *Server) novelTitle(ctx context.Context, novelID string) *string {
+	return s.characterSummaryRuntime().NovelTitle(ctx, novelID)
+}
+
+func resolvedProfileID(config *store.ResolvedAIGenerationConfig) *string {
+	if config == nil || strings.TrimSpace(config.ProfileID) == "" {
+		return nil
+	}
+	return &config.ProfileID
+}
+
+func resolvedProfileLabel(config *store.ResolvedAIGenerationConfig) *string {
+	if config == nil || strings.TrimSpace(config.ProfileLabel) == "" {
+		return nil
+	}
+	return &config.ProfileLabel
+}
+
+func resolvedModelID(config *store.ResolvedAIGenerationConfig) *string {
+	if config == nil || strings.TrimSpace(config.ModelID) == "" {
+		return nil
+	}
+	return &config.ModelID
+}
+
+func heuristicEpisodeIndexes(episodes []characters.HeuristicEpisode) []string {
+	indexes := make([]string, 0, len(episodes))
+	for _, episode := range episodes {
+		indexes = append(indexes, episode.EpisodeIndex)
+	}
+	return indexes
+}
+
+func (s *Server) loadCharacterSummaryInputs(ctx context.Context, novelID string, upToEpisodeIndex string, maxChunkChars int, maxBatchChars int, afterEpisodeIndexes ...string) (characterSummaryInputs, error) {
+	afterEpisodeIndex := ""
+	if len(afterEpisodeIndexes) > 0 {
+		afterEpisodeIndex = strings.TrimSpace(afterEpisodeIndexes[0])
+	}
+	return s.characterSummaryRuntime().LoadInputs(ctx, novelID, upToEpisodeIndex, maxChunkChars, maxBatchChars, afterEpisodeIndex)
+}
+
+func (s *Server) loadCharacterSummaryGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
+	return s.characterSummaryRuntime().LoadGenerationSeed(novelID, upToEpisodeIndex)
+}
+
+func characterSummaryProcessedCovers(processedEpisodeIndex string, requestedEpisodeIndex string) bool {
+	processedEpisodeIndex = strings.TrimSpace(processedEpisodeIndex)
+	requestedEpisodeIndex = strings.TrimSpace(requestedEpisodeIndex)
+	if processedEpisodeIndex == "" || requestedEpisodeIndex == "" {
+		return false
+	}
+	return compareEpisodeString(processedEpisodeIndex, requestedEpisodeIndex) >= 0
+}
+
+func (s *Server) characterSummaryReprocessFromEpisode(ctx context.Context, novelID string, processedEpisodeIndex *string, requestedUpToEpisodeIndex string) (string, error) {
+	return s.characterSummaryRuntime().ReprocessFromEpisode(ctx, novelID, processedEpisodeIndex, requestedUpToEpisodeIndex)
+}
+
+func earliestGeneratedEpisodeDigest(digests []characters.GeneratedEpisodeDigest, processedEpisodeIndex string) string {
+	earliest := ""
+	for _, digest := range digests {
+		episodeIndex := strings.TrimSpace(digest.EpisodeIndex)
+		if episodeIndex == "" || compareEpisodeString(episodeIndex, processedEpisodeIndex) > 0 {
+			continue
+		}
+		if earliest == "" || compareEpisodeString(episodeIndex, earliest) < 0 {
+			earliest = episodeIndex
+		}
+	}
+	return earliest
+}
+
+func filterCharacterSummaryInputsAfter(inputs characterSummaryInputs, processedEpisodeIndex string) characterSummaryInputs {
+	if strings.TrimSpace(processedEpisodeIndex) == "" {
+		return inputs
+	}
+	filteredEpisodes := make([]characters.HeuristicEpisode, 0, len(inputs.Episodes))
+	for _, episode := range inputs.Episodes {
+		if compareEpisodeString(episode.EpisodeIndex, processedEpisodeIndex) > 0 {
+			filteredEpisodes = append(filteredEpisodes, episode)
+		}
+	}
+	chunks := []characterSummaryChunk{}
+	for _, batch := range inputs.Batches {
+		for _, chunk := range batch.Chunks {
+			if compareEpisodeString(chunk.EpisodeIndex, processedEpisodeIndex) > 0 {
+				chunks = append(chunks, chunk)
+			}
+		}
+	}
+	return characterSummaryInputs{
+		Episodes: filteredEpisodes,
+		Batches:  charactersummary.CreateBatchesWithBudget(chunks, characterSummaryBatchBudget{}),
+	}
+}
+
+func filterCharacterSummaryInputsFrom(inputs characterSummaryInputs, fromEpisodeIndex string) characterSummaryInputs {
+	if strings.TrimSpace(fromEpisodeIndex) == "" {
+		return inputs
+	}
+	filteredEpisodes := make([]characters.HeuristicEpisode, 0, len(inputs.Episodes))
+	for _, episode := range inputs.Episodes {
+		if compareEpisodeString(episode.EpisodeIndex, fromEpisodeIndex) >= 0 {
+			filteredEpisodes = append(filteredEpisodes, episode)
+		}
+	}
+	chunks := []characterSummaryChunk{}
+	for _, batch := range inputs.Batches {
+		for _, chunk := range batch.Chunks {
+			if compareEpisodeString(chunk.EpisodeIndex, fromEpisodeIndex) >= 0 {
+				chunks = append(chunks, chunk)
+			}
+		}
+	}
+	return characterSummaryInputs{
+		Episodes: filteredEpisodes,
+		Batches:  charactersummary.CreateBatchesWithBudget(chunks, characterSummaryBatchBudget{}),
+	}
+}
+
+func characterSummaryInputTokens(episodes []characters.HeuristicEpisode) int {
+	total := 0
+	for _, episode := range episodes {
+		total += estimateTokenCount(episode.Text)
+	}
+	return total
+}
+
+func characterSummaryBatchUsageRequests(batches []characterSummaryBatch) []ai.UsageRequest {
+	requests := make([]ai.UsageRequest, 0, len(batches))
+	for index, batch := range batches {
+		requests = append(requests, characterSummaryUsageRequestForBatch(index, batch))
+	}
+	return requests
+}
+
+func characterSummaryUsageRequestForBatch(index int, batch characterSummaryBatch) ai.UsageRequest {
+	inputTokens := 0
+	for _, chunk := range batch.Chunks {
+		inputTokens += estimateTokenCount(chunk.Text)
+	}
+	return ai.UsageRequest{
+		RequestIndex: index,
+		Kind:         "character_summary_batch",
+		InputTokens:  inputTokens,
+		TotalTokens:  inputTokens,
+	}
+}
+
+func usageRequestsInputTokens(requests []ai.UsageRequest) int {
+	total := 0
+	for _, request := range requests {
+		total += request.InputTokens
+	}
+	return total
+}
+
+func usageRequestsOutputTokens(requests []ai.UsageRequest) int {
+	total := 0
+	for _, request := range requests {
+		total += request.OutputTokens
+	}
+	return total
+}
+
+func usageRequestsTotalTokens(requests []ai.UsageRequest) int {
+	total := 0
+	for _, request := range requests {
+		if request.TotalTokens > 0 {
+			total += request.TotalTokens
+			continue
+		}
+		total += request.InputTokens + request.OutputTokens
+	}
+	return total
+}
+
+func (s *Server) nextCharacterSummaryRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template characterSummaryBatch, chunks []characterSummaryChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (characterSummaryBatch, []characterSummaryChunk, error) {
+	pending := []characters.GeneratedUnresolvedMention(nil)
+	if len(unresolvedMentions) > 0 {
+		pending = unresolvedMentions[0]
+	}
+	return s.characterSummaryRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, template, chunks, pending)
+}
+
+func (s *Server) characterSummaryRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch) ([]characterSummaryBatch, error) {
+	return charactersummary.PlanRuntimeBatches(batch, func(candidate characterSummaryBatch) (bool, error) {
+		return characterSummaryBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate)
+	})
+}
+
+func splitOversizedCharacterSummaryChunkBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) ([]characterSummaryBatch, error) {
+	return charactersummary.SplitOversizedChunkBatch(batch, func(candidate characterSummaryBatch) (bool, error) {
+		return characterSummaryBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate, unresolvedMentions...)
+	})
+}
+
+func characterSummaryBatchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
+	if config == nil {
+		return true, nil
+	}
+	stageStartedAt := time.Now()
+	pending := []characters.GeneratedUnresolvedMention(nil)
+	if len(unresolvedMentions) > 0 {
+		pending = unresolvedMentions[0]
+	}
+	systemPrompt, userPrompt := charactersummary.BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
+	logCharacterSummaryTiming("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
+	stageStartedAt = time.Now()
+	responseFormat := characterSummaryOpenRouterResponseFormat()
+	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}, nil, responseFormat)
+	logCharacterSummaryTiming("context_fit_token_estimate", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens)
+	stageStartedAt = time.Now()
+	maxTokens, err := resolveOpenRouterMaxOutputTokens(ctx, config.APIKey, config.ModelID, config.ProviderOrder, characterSummaryDefaultMaxTokens, promptTokens)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	logCharacterSummaryTiming("context_fit_max_tokens", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens, "maxTokens", maxTokens)
+	if err == nil {
+		return maxTokens >= characterSummaryMinimumCompletionTokens, nil
+	}
+	if errors.Is(err, errOpenRouterContextTooLarge) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (s *Server) generateOpenRouterCharacterSummaryBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (characterSummaryBatchResult, error) {
+	pending := []characters.GeneratedUnresolvedMention(nil)
+	if len(unresolvedMentions) > 0 {
+		pending = unresolvedMentions[0]
+	}
+	result, err := s.characterSummaryRuntime().GenerateBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, pending)
+	if err != nil {
+		return characterSummaryBatchResult{}, err
+	}
+	return characterSummaryBatchResult{Delta: result.Delta, Usage: result.Usage}, nil
+}
+
+func characterSummaryOpenRouterResponseFormat() map[string]any {
+	textVersionSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"text", "episodeIndex"},
+		"properties": map[string]any{
+			"text":         map[string]any{"type": "string"},
+			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+		},
+	}
+	historyVersionSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"episodeIndex", "text"},
+		"properties": map[string]any{
+			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"text":         map[string]any{"type": "string"},
+		},
+	}
+	characterDeltaSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required": []any{
+			"canonicalName",
+			"fullName",
+			"fullNameHistory",
+			"gender",
+			"genderHistory",
+			"firstAppearanceEpisodeIndex",
+			"aliases",
+			"appearanceHistory",
+			"personalityHistory",
+			"summaryHistory",
+		},
+		"properties": map[string]any{
+			"canonicalName":               textVersionSchema,
+			"fullName":                    map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
+			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
+			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
+			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
+			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
+			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
+			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},
+			"summaryHistory":              map[string]any{"type": "array", "items": historyVersionSchema},
+		},
+	}
+	characterUpdateSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required": []any{
+			"characterId",
+			"canonicalName",
+			"fullName",
+			"fullNameHistory",
+			"gender",
+			"genderHistory",
+			"firstAppearanceEpisodeIndex",
+			"aliases",
+			"appearanceHistory",
+			"personalityHistory",
+			"summaryHistory",
+		},
+		"properties": map[string]any{
+			"characterId":                 map[string]any{"type": "string"},
+			"canonicalName":               map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
+			"fullName":                    map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
+			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
+			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
+			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
+			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
+			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
+			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},
+			"summaryHistory":              map[string]any{"type": "array", "items": historyVersionSchema},
+		},
+	}
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "character_summary_delta_result",
+			"strict": true,
+			"schema": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions"},
+				"properties": map[string]any{
+					"processedUpToEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+					"newCharacters": map[string]any{
+						"type":  "array",
+						"items": characterDeltaSchema,
+					},
+					"characterUpdates": map[string]any{
+						"type":  "array",
+						"items": characterUpdateSchema,
+					},
+					"mergeProposals": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"required":             []any{"sourceCharacterId", "targetCharacterId", "confidence", "reason"},
+							"properties": map[string]any{
+								"sourceCharacterId": map[string]any{"type": "string"},
+								"targetCharacterId": map[string]any{"type": "string"},
+								"confidence":        map[string]any{"type": "number"},
+								"reason":            map[string]any{"type": "string"},
+							},
+						},
+					},
+					"unresolvedMentions": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"required":             []any{"mention", "episodeIndex", "reason"},
+							"properties": map[string]any{
+								"mention":      map[string]any{"type": "string"},
+								"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+								"reason":       map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func characterSummaryBatchTimingEvent(progress characterSummaryBatchProgress) map[string]any {
+	return map[string]any{
+		"type":                    "batchTiming",
+		"batchIndex":              progress.Batch.BatchIndex,
+		"batchCount":              progress.Batch.BatchCount,
+		"episodeIndexes":          progress.Batch.EpisodeIndexes,
+		"chunkCount":              len(progress.Batch.Chunks),
+		"elapsedMs":               progress.ElapsedMs,
+		"generatedCharacterCount": progress.GeneratedCharacterCount,
+		"mergedCharacterCount":    progress.MergedCharacterCount,
+		"message":                 "batch " + strconv.Itoa(progress.Batch.BatchIndex) + "/" + strconv.Itoa(progress.Batch.BatchCount) + " の生成を完了しました。",
+	}
+}
+
+func playgroundStatusEvent(stage string, message string, progress int, step int) map[string]any {
+	return map[string]any{
+		"type":      "status",
+		"stage":     stage,
+		"message":   message,
+		"progress":  progress,
+		"step":      step,
+		"stepCount": 4,
+	}
+}
+
+func playgroundBatchStatusEvent(batch characterSummaryBatch) map[string]any {
+	event := playgroundStatusEvent("batch", "batch "+strconv.Itoa(batch.BatchIndex)+"/"+strconv.Itoa(batch.BatchCount)+" を生成しています。", 70, 3)
+	event["batchIndex"] = batch.BatchIndex
+	event["batchCount"] = batch.BatchCount
+	return event
+}
+
+func (s *Server) characterSummaryPromptPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig) (map[string]any, error) {
+	preparedPreview, err := s.characterSummaryRuntime().PreparePreview(ctx, novelID, upToEpisodeIndex, resolvedConfig)
+	if err != nil {
+		return nil, err
+	}
+	return promptPreviewToMap(preparedPreview.Preview), nil
+}
+
+func promptPreviewToMap(preview appcharactersummary.PromptPreview) map[string]any {
+	batches := make([]map[string]any, 0, len(preview.Batches))
+	for _, batch := range preview.Batches {
+		chunks := make([]map[string]any, 0, len(batch.Chunks))
+		for _, chunk := range batch.Chunks {
+			chunks = append(chunks, map[string]any{
+				"episodeIndex": chunk.EpisodeIndex,
+				"title":        chunk.Title,
+				"chapter":      chunk.Chapter,
+				"subchapter":   chunk.Subchapter,
+				"chunkIndex":   chunk.ChunkIndex,
+				"chunkCount":   chunk.ChunkCount,
+				"text":         chunk.Text,
+			})
+		}
+		batches = append(batches, map[string]any{
+			"batchIndex":     batch.BatchIndex,
+			"batchCount":     batch.BatchCount,
+			"episodeIndexes": batch.EpisodeIndexes,
+			"chunkCount":     len(batch.Chunks),
+			"chunks":         chunks,
+		})
+	}
+	return map[string]any{
+		"systemPrompt": preview.SystemPrompt,
+		"batches":      batches,
+	}
+}
+
+func promptPreviewEpisodeIndexes(preview appcharactersummary.PromptPreview) []string {
+	values := []string{}
+	seen := map[string]bool{}
+	for _, batch := range preview.Batches {
+		for _, episodeIndex := range batch.EpisodeIndexes {
+			if episodeIndex == "" || seen[episodeIndex] {
+				continue
+			}
+			seen[episodeIndex] = true
+			values = append(values, episodeIndex)
+		}
+	}
+	return values
+}
+
+func promptPreviewChunkCount(preview appcharactersummary.PromptPreview) int {
+	total := 0
+	for _, batch := range preview.Batches {
+		total += batch.ChunkCount
+	}
+	return total
+}
+
+func readerDocumentBodyText(document library.ReaderDocument) string {
+	parts := []string{}
+	for _, block := range document.Blocks {
+		if block.Section != "body" {
+			continue
+		}
+		if block.Type == "paragraph" {
+			if text := strings.TrimSpace(charactersummary.RenderInlineTokens(block.Inlines)); text != "" {
+				parts = append(parts, text)
+			}
+			continue
+		}
+		if strings.TrimSpace(block.PlainText) != "" {
+			parts = append(parts, strings.TrimSpace(block.PlainText))
+			continue
+		}
+		if strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, strings.TrimSpace(block.Text))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func previewEpisodeIndexes(preview map[string]any) []string {
+	result := []string{}
+	batches, ok := preview["batches"].([]map[string]any)
+	if !ok {
+		return result
+	}
+	seen := map[string]bool{}
+	for _, batch := range batches {
+		indexes, ok := batch["episodeIndexes"].([]string)
+		if !ok {
+			continue
+		}
+		for _, index := range indexes {
+			if !seen[index] {
+				seen[index] = true
+				result = append(result, index)
+			}
+		}
+	}
+	return result
+}
+
+func previewChunkCount(preview map[string]any) int {
+	batches, ok := preview["batches"].([]map[string]any)
+	if !ok {
+		return 0
+	}
+	total := 0
+	for _, batch := range batches {
+		count, ok := batch["chunkCount"].(int)
+		if ok {
+			total += count
+		}
+	}
+	return total
+}
+
+func compareEpisodeString(left string, right string) int {
+	leftNumber, leftErr := strconv.Atoi(left)
+	rightNumber, rightErr := strconv.Atoi(right)
+	if leftErr == nil && rightErr == nil {
+		if leftNumber < rightNumber {
+			return -1
+		}
+		if leftNumber > rightNumber {
+			return 1
+		}
+		return 0
+	}
+	return strings.Compare(left, right)
+}

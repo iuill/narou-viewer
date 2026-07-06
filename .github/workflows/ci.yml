@@ -1,0 +1,464 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      playwright_artifact_mode:
+        description: "Playwright artifact retention mode"
+        required: true
+        default: "failure-only"
+        type: choice
+        options:
+          - failure-only
+          - full
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-size:
+    name: Repository size report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      SCC_VERSION: v3.7.0
+      SCC_LINUX_X86_64_SHA256: 3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install scc
+        run: |
+          tmpdir="$(mktemp -d)"
+          curl -fsSL "https://github.com/boyter/scc/releases/download/${SCC_VERSION}/scc_Linux_x86_64.tar.gz" -o "$tmpdir/scc_Linux_x86_64.tar.gz"
+          echo "${SCC_LINUX_X86_64_SHA256}  $tmpdir/scc_Linux_x86_64.tar.gz" | sha256sum -c -
+          tar -xzf "$tmpdir/scc_Linux_x86_64.tar.gz" -C "$tmpdir"
+          sudo install -m 0755 "$tmpdir/scc" /usr/local/bin/scc
+          rm -rf "$tmpdir"
+
+      - name: Measure repository size
+        env:
+          SCC_REPORT_DIR: ${{ runner.temp }}/scc-report
+          MEASURED_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          mkdir -p "${SCC_REPORT_DIR}"
+          scc --version > "${SCC_REPORT_DIR}/scc.version"
+          git fetch --no-tags --depth=1 origin "${MEASURED_SHA}"
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          checkout_parent="$(mktemp -d)"
+          head_checkout_dir="${checkout_parent}/head"
+          base_checkout_dir="${checkout_parent}/base"
+          trap 'git worktree remove --force "${head_checkout_dir}" 2>/dev/null || true; git worktree remove --force "${base_checkout_dir}" 2>/dev/null || true; rm -rf "${checkout_parent}"' EXIT
+          git worktree add --detach "${head_checkout_dir}" "${MEASURED_SHA}"
+          (cd "${head_checkout_dir}" && scc --by-file --format json .) > "${SCC_REPORT_DIR}/scc-by-file.json"
+          git worktree remove --force "${head_checkout_dir}"
+          git worktree add --detach "${base_checkout_dir}" "${BASE_SHA}"
+          (cd "${base_checkout_dir}" && scc --by-file --format json .) > "${SCC_REPORT_DIR}/scc-base-by-file.json"
+          git worktree remove --force "${base_checkout_dir}"
+
+      - name: Prepare PR size comment
+        env:
+          SCC_REPORT_DIR: ${{ runner.temp }}/scc-report
+          MEASURED_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/prepare-repository-size-report.mjs
+
+      - name: Update PR size comment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          SCC_REPORT_DIR: ${{ runner.temp }}/scc-report
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const marker = "<!-- narou-viewer-repository-size-report -->";
+            const reportDir = process.env.SCC_REPORT_DIR;
+            const body = fs.readFileSync(path.join(reportDir, "repository-size-comment.md"), "utf8");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) => comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun run install:locked
+
+      - name: Build E2E dist artifacts
+        run: bun run build:web:e2e
+
+      - name: Upload E2E build artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: e2e-build-dist-${{ github.sha }}
+          retention-days: 1
+          path: apps/viewer-web/dist
+          if-no-files-found: error
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun run install:locked
+
+      - name: Run lint and format checks
+        run: bun run lint
+
+      - name: Run unit tests with TypeScript coverage gate
+        run: bun run test:unit:coverage
+
+  viewer-api-go:
+    name: viewer-api-go
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: |
+            apps/viewer-api-go/go.sum
+            services/novel-fetcher/go.sum
+
+      - name: Build viewer-api-go
+        env:
+          CGO_ENABLED: "0"
+          VIEWER_API_GO_BUILD_OUTPUT: .tmp/e2e-binaries/viewer-api-go
+        run: bash ./scripts/build-viewer-api-go.sh
+
+      - name: Upload viewer-api-go E2E binary
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: viewer-api-go-e2e-binary-${{ github.sha }}
+          retention-days: 1
+          path: .tmp/e2e-binaries/viewer-api-go
+          if-no-files-found: error
+
+      - name: Run viewer-api-go quality checks
+        if: ${{ !cancelled() }}
+        run: bash ./scripts/verify-viewer-api-go-quality.sh
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun run install:locked
+
+      - name: Run Go API contract tests
+        run: bun run verify:api-go:contract
+
+      - name: Build production viewer-api-go image
+        run: docker build --file deploy/viewer-api-go/Dockerfile --tag narou-viewer-viewer-api-go:ci .
+
+  novel-fetcher:
+    name: novel-fetcher / audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: services/novel-fetcher/go.sum
+
+      - name: Verify novel-fetcher
+        run: bash ./scripts/verify-novel-fetcher.sh
+
+      - name: Build novel-fetcher E2E binary
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/e2e-binaries
+          cd services/novel-fetcher
+          CGO_ENABLED=0 go build -buildvcs=false -trimpath -o ../../.tmp/e2e-binaries/novel-fetcher ./cmd/novel-fetcher
+
+      - name: Upload novel-fetcher E2E binary
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: novel-fetcher-e2e-binary-${{ github.sha }}
+          retention-days: 1
+          path: .tmp/e2e-binaries/novel-fetcher
+          if-no-files-found: error
+
+      - name: Setup Bun
+        id: setup_bun_for_audit
+        if: ${{ !cancelled() }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        id: install_dependencies_for_audit
+        if: ${{ !cancelled() && steps.setup_bun_for_audit.outcome == 'success' }}
+        run: bun run install:locked
+
+      - name: Audit high-severity dependencies
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
+        run: bun run audit:dependencies
+
+      - name: Audit Go vulnerabilities
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
+        run: bun run audit:go
+
+      - name: Audit Go module release age
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
+        env:
+          # Temporary allowlist for security-fix modules; safe to remove after they exceed GO_MINIMUM_RELEASE_AGE_SECONDS.
+          GO_MODULE_AGE_ALLOWLIST: golang.org/x/net@v0.55.0 golang.org/x/sys@v0.45.0 modernc.org/sqlite@v1.52.0
+        run: bun run audit:go:module-age
+
+  api-contract:
+    name: API contract
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: devcontainer
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          submodules: recursive
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: services/novel-fetcher/go.sum
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Install dependencies
+        run: bun run install:locked
+
+      - name: Repair E2E fixture permissions for API contract
+        run: bun run e2e:repair
+
+      - name: Reset E2E state for API contract
+        run: bun run e2e:fixture:init && bun run e2e:state:reset
+
+      - name: Start E2E services
+        env:
+          E2E_SKIP_PLAYWRIGHT_IMAGE: "1"
+          E2E_SKIP_VIEWER_WEB: "1"
+          E2E_SERVICE_USER: "0:0"
+        run: bun run e2e:services:up
+
+      - name: Run API contract tests
+        env:
+          API_BASE_URL: http://127.0.0.1:18080
+          API_CONTRACT_MUTATING: "1"
+          API_CONTRACT_REQUIRE_FIXTURE: "1"
+        run: bun run test:api-contract
+
+      - name: Run destructive fetcher API contract tests
+        env:
+          API_BASE_URL: http://127.0.0.1:18080
+          API_CONTRACT_MUTATING: "1"
+          API_CONTRACT_REQUIRE_FIXTURE: "1"
+          API_CONTRACT_DESTRUCTIVE_FETCHER: "1"
+          API_CONTRACT_DESTRUCTIVE_FETCHER_TARGET_NOVEL_ID: c2l0ZTpzeW9zZXR1Om4xMjM0YWI
+        run: node ./node_modules/vitest/vitest.mjs run --config tests/api-contract/vitest.config.ts tests/api-contract/cases/zz-fetcher-mutating.test.ts
+
+      - name: Dump E2E service logs
+        if: failure()
+        run: |
+          bash ./scripts/e2e-compose.sh ps
+          bash ./scripts/e2e-compose.sh logs --no-color novel-fetcher-e2e viewer-api-e2e
+
+  e2e:
+    name: E2E (${{ matrix.job_label }})
+    # Intentionally depend only on build so the E2E matrix can overlap Docker,
+    # fixture, and artifact setup with E2E binary builds.
+    # The binaries are consumed by polling the same-run artifacts just before
+    # service startup, which keeps the producer jobs out of the E2E critical
+    # path while still failing explicitly if a required binary is not produced.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: pc-xga
+            artifact_suffix: pc-xga
+            job_label: pc-xga
+          - project: iphone-16e
+            artifact_suffix: iphone-16e
+            job_label: iphone-16e
+    env:
+      COMPOSE_PROJECT_NAME: devcontainer
+      PLAYWRIGHT_TRACE_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.playwright_artifact_mode == 'full' && 'on' || 'retain-on-failure' }}
+      PLAYWRIGHT_SCREENSHOT_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.playwright_artifact_mode == 'full' && 'on' || 'only-on-failure' }}
+      E2E_PRODUCTION_SERVICES: "1"
+      VIEWER_API_GO_E2E_BINARY_PATH: /workspace/.tmp/e2e-binaries/viewer-api-go
+      VIEWER_API_GO_E2E_IMAGE: busybox:1.37
+      NOVEL_FETCHER_E2E_BINARY_PATH: /workspace/.tmp/e2e-binaries/novel-fetcher
+      NOVEL_FETCHER_E2E_IMAGE: busybox:1.37
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Install dependencies
+        run: bun run install:locked
+
+      - name: Download E2E build artifacts
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: e2e-build-dist-${{ github.sha }}
+          path: apps/viewer-web/dist
+
+      - name: Verify E2E build artifacts
+        run: test -f apps/viewer-web/dist/index.html
+
+      - name: Prebuild E2E service images with cache write
+        if: ${{ matrix.job_label == 'pc-xga' }}
+        uses: docker/bake-action@82490499d2e5613fcead7e128237ef0b0ea210f7 # v7
+        with:
+          source: "{{defaultContext}}:.devcontainer"
+          files: docker-compose.yml
+          targets: playwright-e2e
+          load: true
+          set: |
+            playwright-e2e.tags=devcontainer-playwright-e2e:latest
+            playwright-e2e.cache-from=type=gha,scope=playwright-e2e
+            playwright-e2e.cache-to=type=gha,scope=playwright-e2e,mode=max
+
+      - name: Prebuild E2E service images with cache read-only
+        if: ${{ matrix.job_label != 'pc-xga' }}
+        uses: docker/bake-action@82490499d2e5613fcead7e128237ef0b0ea210f7 # v7
+        with:
+          source: "{{defaultContext}}:.devcontainer"
+          files: docker-compose.yml
+          targets: playwright-e2e
+          load: true
+          set: |
+            playwright-e2e.tags=devcontainer-playwright-e2e:latest
+            playwright-e2e.cache-from=type=gha,scope=playwright-e2e
+
+      - name: Repair E2E fixture permissions
+        run: bun run e2e:repair
+
+      - name: Wait for viewer-api-go E2E binary
+        env:
+          ARTIFACT_NAME: viewer-api-go-e2e-binary-${{ github.sha }}
+          ARTIFACT_OUTPUT_DIR: .tmp/e2e-binaries
+          ARTIFACT_EXECUTABLE_PATH: .tmp/e2e-binaries/viewer-api-go
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/wait-and-download-artifact.sh
+
+      - name: Wait for novel-fetcher E2E binary
+        env:
+          ARTIFACT_NAME: novel-fetcher-e2e-binary-${{ github.sha }}
+          ARTIFACT_OUTPUT_DIR: .tmp/e2e-binaries
+          ARTIFACT_EXECUTABLE_PATH: .tmp/e2e-binaries/novel-fetcher
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/wait-and-download-artifact.sh
+
+      - name: Run E2E tests in container
+        run: |
+          E2E_SERVICE_USER=0:0 bun run e2e:test:container -- --project=${{ matrix.project }}
+
+      - name: Dump E2E service logs
+        if: failure()
+        run: |
+          bash ./scripts/e2e-compose.sh ps
+          bash ./scripts/e2e-compose.sh logs --no-color novel-fetcher-e2e viewer-api-e2e viewer-web-e2e
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: playwright-artifacts-${{ matrix.artifact_suffix }}-${{ github.run_attempt }}
+          retention-days: 1
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: warn

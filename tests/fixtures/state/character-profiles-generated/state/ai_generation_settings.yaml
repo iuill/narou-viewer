@@ -1,0 +1,21 @@
+schema_version: 2
+revision: 0
+preferred_mode: heuristic
+selected_profile_id: default
+shared_providers:
+  openrouter:
+    api_key: null
+    updated_at: null
+profiles:
+  - id: default
+    label: Default
+    provider: openrouter
+    credentials:
+      source: shared
+      api_key: null
+      updated_at: null
+    model_id: null
+    provider_order: []
+    allow_fallbacks: false
+    require_parameters: true
+    updated_at: null

@@ -1,0 +1,44 @@
+{
+  "files": {
+    "includes": [
+      "apps/**/*.{js,mjs,cjs,ts,tsx,json,jsonc}",
+      "e2e/**/*.{js,mjs,cjs,ts,tsx,json,jsonc}",
+      "scripts/**/*.{js,mjs,cjs,ts,tsx,json,jsonc}",
+      "tests/**/*.{ts,tsx}",
+      ".devcontainer/**/*.{js,mjs,cjs,json,jsonc}",
+      ".github/**/*.{js,mjs,cjs,json,jsonc}",
+      "*.{ts,tsx}",
+      "*.json",
+      "!.tmp",
+      "!apps/**/dist",
+      "!coverage",
+      "!data/ai-experiments/runs",
+      "!data/tmp",
+      "!data_e2e/novel-fetcher",
+      "!dist",
+      "!node_modules",
+      "!playwright-report",
+      "!stats",
+      "!test-results"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "lineWidth": 120
+  },
+  "overrides": [
+    {
+      "includes": ["apps/**/*.{ts,tsx}", "e2e/**/*.ts", "scripts/**/*.ts", "tests/**/*.{ts,tsx}", "*.{ts,tsx}"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ],
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  }
+}

@@ -1,0 +1,15 @@
+schema_version: 3
+revision: 2
+novels:
+  novel-normal:
+    last_read_episode_index: 12
+    position: 345
+    scroll:
+      type: ratio
+      value: 0.42
+    updated_at: 2026-01-02T03:04:05.000Z
+    state_version: 7
+    updated_by_client_id: phase1-fixture-client
+  novel-missing-optionals:
+    last_read_episode_index: null
+    updated_at: null

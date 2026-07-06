@@ -1,0 +1,48 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - "apps/**/package.json"
+      - "bun.lock"
+      - "services/**/go.mod"
+      - "services/**/go.sum"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Detect dependency review support
+        id: support
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          repo_json="$(gh api "repos/${GITHUB_REPOSITORY}")"
+          visibility="$(jq -r '.visibility // ""' <<<"${repo_json}")"
+          security_status="$(jq -r '.security_and_analysis // empty | tojson' <<<"${repo_json}")"
+
+          if [[ "${visibility}" == "public" || -n "${security_status}" ]]; then
+            echo "supported=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "supported=false" >> "${GITHUB_OUTPUT}"
+            echo "Skipping dependency review because this repository does not expose dependency review support." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Review dependency changes
+        if: steps.support.outputs.supported == 'true'
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9 # v4.7.1
+        with:
+          fail-on-severity: high
+          fail-on-scopes: development, runtime, unknown

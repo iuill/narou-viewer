@@ -1,0 +1,70 @@
+{
+  "novelId": "phase1-ai-fixture",
+  "upToEpisodeIndex": "3",
+  "episodes": [
+    {
+      "episodeIndex": "1",
+      "title": "第一話",
+      "chapter": null,
+      "subchapter": null,
+      "html": "",
+      "readerDocument": {
+        "version": 1,
+        "blocks": [
+          {
+            "type": "paragraph",
+            "section": "body",
+            "inlines": [
+              { "type": "text", "text": "アリスは銀髪の少女だ。アリスは主人公の仲間だ。" }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "section": "body",
+            "inlines": [
+              { "type": "ruby", "text": "剣城", "ruby": "ツルギ" },
+              { "type": "ruby", "text": "瑛人", "ruby": "エイト" },
+              { "type": "text", "text": "は旅に出た。" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "episodeIndex": "2",
+      "title": "第二話",
+      "chapter": null,
+      "subchapter": null,
+      "html": "",
+      "readerDocument": {
+        "version": 1,
+        "blocks": [
+          {
+            "type": "paragraph",
+            "section": "body",
+            "inlines": [
+              { "type": "text", "text": "アリス・スミスは冷静に判断した。ボブは男性の騎士だ。" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "episodeIndex": "3",
+      "title": "第三話",
+      "chapter": null,
+      "subchapter": null,
+      "html": "<p>ボブは主人公を守る。</p>",
+      "readerDocument": {
+        "version": 1,
+        "blocks": []
+      }
+    }
+  ],
+  "aiGenerationConfig": {
+    "modelId": "openai/gpt-5-mini",
+    "providerOrder": ["OpenAI"],
+    "allowFallbacks": false,
+    "requireParameters": true
+  }
+}

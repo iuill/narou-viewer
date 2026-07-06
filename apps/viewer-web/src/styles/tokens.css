@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light;
+  --bg: #f4efe6;
+  --bg-strong: #e8ddc9;
+  --panel: rgba(255, 250, 242, 0.92);
+  --panel-border: rgba(84, 58, 22, 0.16);
+  --text: #2b2118;
+  --text-soft: #6f5a48;
+  --accent: #9d4b2f;
+  --accent-strong: #6e2811;
+  --accent-soft: rgba(157, 75, 47, 0.12);
+  --danger: #ab2f29;
+  --shadow: 0 24px 64px rgba(73, 43, 18, 0.12);
+  --font-sans-ja:
+    "BIZ UDPGothic", "Noto Sans CJK JP", "Noto Sans JP", "IPAexGothic", "IPAPGothic", "IPAGothic",
+    "Hiragino Sans", sans-serif;
+  --font-serif-ja:
+    "BIZ UDPMincho", "Noto Serif CJK JP", "Noto Serif JP", "IPAexMincho", "IPAPMincho", "IPAMincho",
+    "Yu Mincho", serif;
+  --reader-viewport-height: 100vh;
+  font-family: var(--font-sans-ja);
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(157, 75, 47, 0.18), transparent 28%),
+    linear-gradient(180deg, #f8f3eb 0%, #efe5d6 100%);
+}
+
+@supports (height: 100svh) {
+  :root {
+    --reader-viewport-height: 100svh;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}

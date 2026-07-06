@@ -1,0 +1,240 @@
+.novel-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+.summary-action-button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid rgba(157, 75, 47, 0.22);
+  border-radius: 999px;
+  background: #fffaf2;
+  color: var(--accent-strong);
+}
+
+.summary-action-button:hover {
+  border-color: rgba(157, 75, 47, 0.36);
+  background: var(--accent-soft);
+}
+
+.summary-action-button.danger {
+  color: var(--danger);
+  border-color: rgba(171, 47, 41, 0.2);
+}
+
+.summary-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.toc-section-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 18px;
+  padding: 4px;
+  border: 1px solid rgba(84, 58, 22, 0.12);
+  border-radius: 14px;
+  background: rgba(120, 98, 70, 0.08);
+}
+
+.toc-section-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  white-space: nowrap;
+}
+
+.toc-section-tabs button[aria-selected="true"] {
+  border-color: rgba(157, 75, 47, 0.2);
+  background: #fffaf2;
+  color: var(--accent-strong);
+  box-shadow: 0 8px 18px rgba(84, 58, 22, 0.08);
+}
+
+.toc-section-tabs span {
+  flex: 0 0 auto;
+  color: var(--text-soft);
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+.toc-section-tabs button[aria-selected="true"] span {
+  color: color-mix(in srgb, var(--accent-strong) 72%, var(--text-soft) 28%);
+}
+
+@media (max-width: 480px) {
+  .toc-section-tabs {
+    gap: 4px;
+  }
+
+  .toc-section-tabs button {
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 0.92rem;
+  }
+
+  .toc-section-tabs span {
+    font-size: 0.76rem;
+  }
+}
+
+.reader-topbar h1 {
+  margin: 0;
+  font-family: var(--font-serif-ja);
+  font-size: clamp(1.8rem, 3.6vw, 2.8rem);
+}
+
+.reader-topbar-meta {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+}
+
+.toc-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.toc-item.unfetched {
+  cursor: not-allowed;
+  color: var(--text-soft);
+  opacity: 0.72;
+}
+
+.toc-title {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toc-status {
+  color: var(--text-soft);
+  font-size: 0.92rem;
+  white-space: nowrap;
+}
+
+.reader-toc-entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 4px;
+}
+
+.reader-toc-index,
+.reader-toc-status {
+  flex: 0 0 auto;
+}
+
+.reader-toc-status {
+  white-space: nowrap;
+}
+
+.novel-summary {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin-bottom: 16px;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(247, 238, 224, 0.9);
+}
+
+.novel-summary p {
+  color: var(--text-soft);
+  line-height: 1.8;
+}
+
+.novel-summary-story {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.novel-summary-story p {
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
+.novel-summary-story .summary-link-button {
+  justify-self: start;
+}
+
+.novel-summary dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.novel-summary dl > div,
+.novel-summary dd {
+  min-width: 0;
+}
+
+.novel-summary dd {
+  overflow-wrap: anywhere;
+}
+
+.novel-summary dt {
+  margin-bottom: 4px;
+  color: var(--text-soft);
+  font-size: 0.84rem;
+}
+
+.summary-link-button {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.summary-link-button:hover {
+  color: var(--accent);
+}
+
+.toc-action-button,
+.toc-back-button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(84, 58, 22, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 250, 242, 0.88);
+  color: var(--text);
+}
+
+.toc-action-button:hover,
+.toc-back-button:hover {
+  border-color: rgba(157, 75, 47, 0.3);
+  background: var(--accent-soft);
+}
+
+.reader-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-bottom: 16px;
+}

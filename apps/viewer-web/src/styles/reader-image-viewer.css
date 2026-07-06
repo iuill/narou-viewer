@@ -1,0 +1,246 @@
+.reader-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--reader-z-image-viewer);
+  background: rgba(12, 16, 22, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.reader-image-viewer-stage {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 32px 24px 112px;
+  cursor: grab;
+}
+
+.reader-image-viewer-stage::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.reader-image-viewer-stage.dragging {
+  cursor: grabbing;
+}
+
+.reader-image-viewer-canvas {
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+  display: grid;
+  place-items: center;
+}
+
+.reader-image-viewer-image {
+  display: block;
+  max-width: none;
+  height: auto;
+  border-radius: 18px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+  background: rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.reader-image-viewer-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(18, 27, 37, 0.8);
+  color: #f7fbff;
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.reader-image-viewer-toolbar {
+  position: absolute;
+  bottom: 18px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.reader-image-viewer-toolbar-left {
+  left: 18px;
+}
+
+.reader-image-viewer-toolbar-right {
+  right: 18px;
+}
+
+.reader-image-viewer-info-button,
+.reader-image-viewer-zoom-button,
+.reader-image-viewer-zoom-control {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(18, 27, 37, 0.8);
+  color: #f7fbff;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+}
+
+.reader-image-viewer-info-button,
+.reader-image-viewer-zoom-button {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  font-size: 1.25rem;
+}
+
+.reader-image-viewer-info-button {
+  font-family: var(--font-serif-ja);
+  font-style: italic;
+}
+
+.reader-image-viewer-info-panel,
+.reader-image-viewer-zoom-control {
+  border-radius: 18px;
+  padding: 12px 14px;
+}
+
+.reader-image-viewer-info-panel {
+  max-width: min(420px, calc(100vw - 104px));
+}
+
+.reader-image-viewer-info-title,
+.reader-image-viewer-info-link {
+  margin: 0;
+}
+
+.reader-image-viewer-info-link {
+  margin-top: 6px;
+  font-size: 0.92rem;
+}
+
+.reader-image-viewer-info-link a {
+  color: #cbe6ff;
+  word-break: break-all;
+}
+
+.reader-image-viewer-zoom-control {
+  min-width: 180px;
+  display: grid;
+  gap: 8px;
+}
+
+.reader-image-viewer-zoom-control span {
+  font-size: 0.9rem;
+}
+
+.reader-image-viewer-zoom-control input {
+  width: 100%;
+}
+
+@media (max-width: 800px) {
+  .library-card,
+  .toc-item {
+    padding: 12px 14px;
+    border-radius: 16px;
+  }
+
+  .library-card {
+    gap: 4px;
+  }
+
+  .library-card-chip {
+    font-size: 0.84rem;
+  }
+
+  .toc-panel-content {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .toc-panel-content .episode-block {
+    order: 1;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .toc-panel-content .novel-summary {
+    order: 2;
+    margin-bottom: 0;
+  }
+
+  .toc-panel-content .bookmark-block {
+    order: 3;
+  }
+
+  .novel-summary dl {
+    grid-template-columns: 1fr;
+  }
+
+  .novel-summary-actions {
+    justify-content: flex-start;
+  }
+
+  .summary-action-button {
+    flex: 1 1 140px;
+    max-width: 100%;
+  }
+
+  .bookmark-item {
+    grid-template-columns: 1fr;
+  }
+
+  .reader-bookmark-panel-item {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .reader-prose.vertical,
+  .reader-prose.horizontal {
+    max-height: 60vh;
+  }
+
+  .reader-character-form {
+    grid-template-columns: 1fr;
+  }
+
+  .reader-prose-paged.vertical,
+  .reader-prose-paged.horizontal {
+    max-height: none;
+  }
+
+  .reader-prose.fullscreen.vertical,
+  .reader-prose.fullscreen.horizontal {
+    min-height: calc(var(--reader-viewport-height) - 320px);
+  }
+
+  .reader-image-viewer-stage {
+    padding: 24px 16px 140px;
+  }
+
+  .reader-image-viewer-toolbar {
+    gap: 10px;
+  }
+
+  .reader-image-viewer-toolbar-left,
+  .reader-image-viewer-toolbar-right {
+    left: 16px;
+    right: 16px;
+  }
+
+  .reader-image-viewer-toolbar-left {
+    bottom: 82px;
+  }
+
+  .reader-image-viewer-toolbar-right {
+    justify-content: flex-end;
+  }
+
+  .reader-image-viewer-info-panel,
+  .reader-image-viewer-zoom-control {
+    max-width: calc(100vw - 92px);
+  }
+
+  .reader-image-viewer-zoom-control {
+    min-width: 144px;
+  }
+}

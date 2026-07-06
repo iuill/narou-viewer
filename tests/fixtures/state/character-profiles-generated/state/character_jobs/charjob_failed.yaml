@@ -1,0 +1,14 @@
+schema_version: 2
+revision: 1
+job_id: charjob_failed
+novel_id: novel-character
+requested_up_to_episode_index: 4
+profile_id: custom-profile
+profile_label: Custom Profile
+generation_mode: openrouter
+model_id: openai/gpt-5-mini
+status: failed
+created_at: 2026-01-03T00:02:00.000Z
+started_at: 2026-01-03T00:02:01.000Z
+finished_at: 2026-01-03T00:02:05.000Z
+error_message: provider failed

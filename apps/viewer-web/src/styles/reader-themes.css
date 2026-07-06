@@ -1,0 +1,90 @@
+.reader-theme-classic {
+  --text: #2b2118;
+  --text-soft: #6f5a48;
+  --panel-border: rgba(84, 58, 22, 0.16);
+  --reader-shell-bg-top: #f8f3eb;
+  --reader-shell-bg-bottom: #efe5d6;
+  --reader-shell-overlay: rgba(157, 75, 47, 0.18);
+  --reader-surface: rgba(255, 250, 242, 0.88);
+  --reader-panel-surface: rgba(255, 250, 242, 0.96);
+  --reader-surface-border: rgba(84, 58, 22, 0.16);
+  --reader-surface-shadow: 0 6px 18px rgba(73, 43, 18, 0.14);
+  --reader-prose-top: rgba(255, 252, 246, 0.96);
+  --reader-prose-bottom: rgba(245, 236, 222, 0.94);
+  --reader-prose-rule: rgba(157, 75, 47, 0.04);
+  --reader-prose-border: rgba(84, 58, 22, 0.12);
+  --reader-indicator-bg: rgba(255, 250, 242, 0.78);
+}
+
+.reader-theme-paper {
+  --text: #34281f;
+  --text-soft: #6d5b4d;
+  --panel-border: rgba(117, 91, 66, 0.18);
+  --reader-shell-bg-top: #f7f0e3;
+  --reader-shell-bg-bottom: #e5d5be;
+  --reader-shell-overlay: rgba(169, 128, 78, 0.2);
+  --reader-surface: rgba(252, 247, 237, 0.9);
+  --reader-panel-surface: rgba(252, 247, 237, 0.97);
+  --reader-surface-border: rgba(117, 91, 66, 0.18);
+  --reader-surface-shadow: 0 8px 24px rgba(97, 74, 53, 0.12);
+  --reader-prose-top: rgba(252, 248, 240, 0.98);
+  --reader-prose-bottom: rgba(238, 226, 205, 0.94);
+  --reader-prose-rule: rgba(149, 111, 72, 0.05);
+  --reader-prose-border: rgba(117, 91, 66, 0.14);
+  --reader-indicator-bg: rgba(250, 244, 233, 0.82);
+}
+
+.reader-theme-forest {
+  --text: #1d2a22;
+  --text-soft: #526558;
+  --panel-border: rgba(52, 90, 65, 0.2);
+  --reader-shell-bg-top: #edf4ed;
+  --reader-shell-bg-bottom: #d5e5d4;
+  --reader-shell-overlay: rgba(69, 112, 80, 0.18);
+  --reader-surface: rgba(244, 250, 243, 0.86);
+  --reader-panel-surface: rgba(244, 250, 243, 0.95);
+  --reader-surface-border: rgba(52, 90, 65, 0.2);
+  --reader-surface-shadow: 0 8px 24px rgba(39, 74, 52, 0.14);
+  --reader-prose-top: rgba(247, 251, 245, 0.96);
+  --reader-prose-bottom: rgba(224, 237, 220, 0.94);
+  --reader-prose-rule: rgba(78, 121, 82, 0.05);
+  --reader-prose-border: rgba(52, 90, 65, 0.14);
+  --reader-indicator-bg: rgba(241, 248, 239, 0.8);
+}
+
+.reader-theme-ocean {
+  --text: #132433;
+  --text-soft: #496171;
+  --panel-border: rgba(53, 95, 127, 0.22);
+  --reader-shell-bg-top: #eef6fa;
+  --reader-shell-bg-bottom: #d4e3ef;
+  --reader-shell-overlay: rgba(59, 118, 164, 0.2);
+  --reader-surface: rgba(241, 249, 255, 0.86);
+  --reader-panel-surface: rgba(241, 249, 255, 0.95);
+  --reader-surface-border: rgba(53, 95, 127, 0.22);
+  --reader-surface-shadow: 0 8px 24px rgba(34, 68, 96, 0.14);
+  --reader-prose-top: rgba(245, 251, 255, 0.96);
+  --reader-prose-bottom: rgba(217, 233, 243, 0.94);
+  --reader-prose-rule: rgba(63, 117, 160, 0.05);
+  --reader-prose-border: rgba(53, 95, 127, 0.16);
+  --reader-indicator-bg: rgba(240, 248, 252, 0.82);
+}
+
+.reader-theme-midnight {
+  color-scheme: dark;
+  --text: #edf2f7;
+  --text-soft: #a7bac8;
+  --panel-border: rgba(118, 145, 172, 0.24);
+  --reader-shell-bg-top: #0f1824;
+  --reader-shell-bg-bottom: #1a2837;
+  --reader-shell-overlay: rgba(90, 138, 184, 0.18);
+  --reader-surface: rgba(24, 37, 52, 0.88);
+  --reader-panel-surface: rgba(24, 37, 52, 0.96);
+  --reader-surface-border: rgba(118, 145, 172, 0.24);
+  --reader-surface-shadow: 0 10px 28px rgba(4, 10, 18, 0.38);
+  --reader-prose-top: rgba(22, 34, 48, 0.98);
+  --reader-prose-bottom: rgba(28, 43, 60, 0.96);
+  --reader-prose-rule: rgba(145, 183, 214, 0.07);
+  --reader-prose-border: rgba(118, 145, 172, 0.2);
+  --reader-indicator-bg: rgba(20, 32, 45, 0.86);
+}

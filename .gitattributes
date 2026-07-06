@@ -1,0 +1,16 @@
+* text=auto
+
+*.sh text eol=lf
+scripts/* text eol=lf
+.devcontainer/scripts/* text eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.sqlite binary
+*.db binary

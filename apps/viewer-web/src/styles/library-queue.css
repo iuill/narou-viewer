@@ -1,0 +1,218 @@
+.library-queue-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(157, 75, 47, 0.16);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 248, 239, 0.98), rgba(245, 236, 221, 0.92));
+}
+
+.library-queue-header {
+  margin-bottom: 0;
+}
+
+.library-queue-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 8px 12px;
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.library-queue-list {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.library-queue-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 250, 242, 0.82);
+  border: 1px solid rgba(84, 58, 22, 0.1);
+}
+
+.library-queue-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.library-queue-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.library-queue-card-copy strong,
+.library-queue-card-copy p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.library-queue-card-copy p,
+.library-queue-card-meta {
+  color: var(--text-soft);
+}
+
+.library-queue-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 8px;
+}
+
+.queue-task-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.queue-task-badge.type-download {
+  background: rgba(45, 108, 223, 0.12);
+  color: #1f4f9c;
+}
+
+.queue-task-badge.type-update {
+  background: rgba(28, 128, 122, 0.12);
+  color: #176660;
+}
+
+.queue-task-badge.type-convert {
+  background: rgba(125, 78, 190, 0.12);
+  color: #5a3495;
+}
+
+.queue-task-badge.type-remove {
+  background: rgba(171, 47, 41, 0.1);
+  color: #8a251f;
+}
+
+.queue-task-badge.status-running,
+.queue-task-badge.status-completed {
+  background: rgba(63, 128, 85, 0.14);
+  color: #2c5c3d;
+}
+
+.queue-task-badge.status-queued {
+  background: rgba(120, 98, 70, 0.12);
+  color: #6f5a48;
+}
+
+.queue-task-badge.status-failed,
+.queue-task-badge.status-canceled {
+  background: rgba(171, 47, 41, 0.12);
+  color: #8a251f;
+}
+
+.queue-task-cancel-button {
+  min-height: 28px;
+  border: 1px solid rgba(171, 47, 41, 0.26);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #8a251f;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.queue-task-cancel-button:hover:not(:disabled) {
+  background: rgba(171, 47, 41, 0.1);
+}
+
+.queue-task-cancel-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.library-queue-progress {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.library-queue-progress-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.library-queue-progress-copy strong,
+.library-queue-progress-copy span {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.library-queue-progress-copy span {
+  color: var(--text-soft);
+  font-size: 0.9rem;
+}
+
+.library-queue-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 8px 14px;
+  font-size: 0.84rem;
+}
+
+.library-queue-card-meta span {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1280px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .hero-status {
+    justify-items: start;
+    width: 100%;
+  }
+
+  .hero-status-controls {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .status-popover,
+  .queue-popover,
+  .ai-generation-popover {
+    left: 0;
+    right: auto;
+    max-width: calc(100vw - 48px);
+  }
+
+  .hero-version {
+    width: 100%;
+    text-align: left;
+  }
+
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .library-queue-header-meta,
+  .library-queue-progress-copy {
+    justify-content: flex-start;
+  }
+}

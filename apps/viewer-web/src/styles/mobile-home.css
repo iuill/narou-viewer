@@ -1,0 +1,444 @@
+.mobile-home-shell {
+  padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+}
+
+.mobile-home-shell .hero {
+  grid-template-columns: 1fr;
+  margin-bottom: 14px;
+}
+
+.mobile-home-shell .hero-status {
+  display: none;
+}
+
+.mobile-home-shell .hero-version--mobile-home {
+  display: block;
+  justify-self: start;
+  width: 100%;
+  margin-top: 4px;
+  text-align: left;
+}
+
+.mobile-home {
+  min-width: 0;
+}
+
+.mobile-home-tabs {
+  position: fixed;
+  left: 50%;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: min(520px, calc(100vw - 20px));
+  padding: 8px;
+  border: 1px solid rgba(84, 58, 22, 0.16);
+  border-radius: 20px;
+  background: #fffaf2;
+  box-shadow: 0 18px 42px rgba(73, 43, 18, 0.22);
+  transform: translateX(-50%);
+}
+
+.mobile-home-tabs button {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-soft);
+}
+
+.mobile-home-tabs button.active {
+  border-color: rgba(157, 75, 47, 0.2);
+  background: rgba(157, 75, 47, 0.1);
+  color: var(--accent-strong);
+}
+
+.mobile-home-tabs span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mobile-home-tabs strong {
+  min-width: 0;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.mobile-home-shell .library-panel {
+  padding: 14px;
+}
+
+.mobile-home-shell .library-panel > .panel-header {
+  margin-bottom: 12px;
+}
+
+.mobile-home-shell .library-list {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(84, 58, 22, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 250, 242, 0.78);
+}
+
+.mobile-home-shell .library-card {
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(84, 58, 22, 0.1);
+  background: transparent;
+  box-shadow: none;
+}
+
+.mobile-home-shell .library-card:last-child {
+  border-bottom: 0;
+}
+
+.mobile-home-shell .library-card:hover,
+.mobile-home-shell .library-card:focus-within {
+  transform: none;
+}
+
+.mobile-home-shell .library-card-primary-button,
+.mobile-home-shell .library-card:not(article) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 10px;
+}
+
+.mobile-home-shell .library-card-primary-button.has-cover,
+.mobile-home-shell .library-card-primary-button:has(.library-card-cover),
+.mobile-home-shell .library-card.has-cover:not(article),
+.mobile-home-shell .library-card:not(article):has(.library-card-cover) {
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 12px;
+}
+
+.mobile-home-shell .library-card-cover {
+  width: 72px;
+}
+
+.mobile-home-shell .library-card.has-cover {
+  --library-card-cover-size: 72px;
+}
+
+.mobile-home-shell .library-card-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mobile-home-shell .library-card-title-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+}
+
+.mobile-home-shell .library-card.has-cover .library-card-title-row,
+.mobile-home-shell .library-card:has(.library-card-cover) .library-card-title-row,
+.mobile-home-shell .library-card-primary-button.has-cover .library-card-title-row,
+.mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-title-row {
+  grid-column: auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+}
+
+.mobile-home-shell .library-card-title-row strong {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.mobile-home-shell .library-site {
+  white-space: nowrap;
+}
+
+.mobile-home-shell .library-card.has-cover .library-site,
+.mobile-home-shell .library-card:has(.library-card-cover) .library-site,
+.mobile-home-shell .library-card-primary-button.has-cover .library-site,
+.mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-site {
+  justify-self: start;
+  white-space: normal;
+}
+
+.mobile-home-shell .library-card-author {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-home-shell .library-card-chip.reading {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.mobile-home-shell .library-card-meta,
+.mobile-home-shell .library-card-updated,
+.mobile-home-shell .library-fetch-status {
+  grid-column: 1 / -1;
+}
+
+.mobile-home-shell .library-card-actions {
+  gap: 8px;
+}
+
+.mobile-home-shell .library-card-actions .summary-link-button {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.mobile-home-shell .library-card-summary {
+  font-size: 0.92rem;
+}
+
+@media (max-width: 699px) {
+  .mobile-home-shell .library-card-primary-button,
+  .mobile-home-shell .library-card:not(article) {
+    align-items: start;
+  }
+
+  .mobile-home-shell .library-card-primary-button.has-cover,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover),
+  .mobile-home-shell .library-card.has-cover:not(article),
+  .mobile-home-shell .library-card:not(article):has(.library-card-cover) {
+    grid-template-columns: 64px minmax(0, 1fr);
+    column-gap: 10px;
+  }
+
+  .mobile-home-shell .library-card-cover {
+    width: 64px;
+  }
+
+  .mobile-home-shell .library-card.has-cover {
+    --library-card-cover-size: 64px;
+  }
+
+  .mobile-home-shell .library-card-chip {
+    line-height: 1.25;
+  }
+
+  .mobile-home-shell .library-card-chip.reading {
+    justify-self: start;
+    white-space: normal;
+  }
+
+  .mobile-home-shell .library-card-meta {
+    justify-content: flex-start;
+    gap: 5px;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-main,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-main,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-main,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-main {
+    display: contents;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-title-row,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-title-row,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-title-row,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-title-row,
+  .mobile-home-shell .library-card.has-cover .library-card-author,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-author,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-author,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-author {
+    grid-column: 1 / -1;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-cover,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-cover,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-cover,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-cover {
+    grid-column: 1;
+    grid-row: 3 / span 3;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-site,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-site,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-site,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-site {
+    white-space: nowrap;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-chip.reading,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-chip.reading,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-chip.reading,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-chip.reading,
+  .mobile-home-shell .library-card.has-cover .library-card-meta,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-meta,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-meta,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-meta,
+  .mobile-home-shell .library-card.has-cover .library-card-updated,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-updated,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-updated,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-updated,
+  .mobile-home-shell .library-card.has-cover .library-fetch-status,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-fetch-status,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-fetch-status,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-fetch-status {
+    grid-column: 2;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-chip.reading,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-chip.reading,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-chip.reading,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-chip.reading {
+    white-space: nowrap;
+  }
+
+  .mobile-home-shell .library-card.has-cover .library-card-meta,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-meta,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-meta,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-meta,
+  .mobile-home-shell .library-card.has-cover .library-card-updated,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-updated,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-updated,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-updated,
+  .mobile-home-shell .library-card.has-cover .library-fetch-status,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-fetch-status,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-fetch-status,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-fetch-status {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .mobile-home-shell .library-card-cover-source-link {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 0.76rem;
+  }
+
+  .mobile-home-shell .library-provider-credit summary {
+    width: fit-content;
+  }
+
+  .mobile-home-shell .library-provider-credit li {
+    display: grid;
+    gap: 2px;
+  }
+
+  .mobile-home-shell .library-provider-credit a {
+    justify-self: start;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 1280px) {
+  .mobile-home-shell .library-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 8px 14px;
+  }
+
+  .mobile-home-shell .library-card-primary-button {
+    grid-column: 1;
+  }
+
+  .mobile-home-shell .library-card-actions {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  .mobile-home-shell .library-card-summary {
+    grid-column: 1 / -1;
+  }
+
+  .mobile-home-shell .library-card-primary-button.has-cover,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+
+  .mobile-home-shell .library-card-cover {
+    width: 76px;
+  }
+
+  .mobile-home-shell .library-card.has-cover {
+    --library-card-cover-size: 76px;
+  }
+
+  .mobile-home-shell .library-card-main {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    column-gap: 12px;
+  }
+
+  .mobile-home-shell .library-card-title-row,
+  .mobile-home-shell .library-card.has-cover .library-card-title-row,
+  .mobile-home-shell .library-card:has(.library-card-cover) .library-card-title-row,
+  .mobile-home-shell .library-card-primary-button.has-cover .library-card-title-row,
+  .mobile-home-shell .library-card-primary-button:has(.library-card-cover) .library-card-title-row {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+  }
+
+  .mobile-home-shell .library-card-author {
+    grid-column: 1;
+  }
+
+  .mobile-home-shell .library-card-chip.reading {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .mobile-home-shell .library-card-meta,
+  .mobile-home-shell .library-card-updated,
+  .mobile-home-shell .library-fetch-status {
+    grid-column: 1 / -1;
+  }
+}
+
+.mobile-home-shell .library-download-composer,
+.mobile-home-shell .library-queue-section {
+  border-radius: 16px;
+}
+
+.mobile-home-shell .download-form.inline {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mobile-home-shell .download-form.inline .download-form-options,
+.mobile-home-shell .download-form.inline .download-form-actions {
+  grid-column: auto;
+}
+
+.mobile-home-shell .download-form-actions {
+  justify-content: stretch;
+}
+
+.mobile-home-shell .download-form-actions button {
+  width: 100%;
+}
+
+@media (max-width: 560px) {
+  .hero-brand {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .mobile-home-shell .hero-brand {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .mobile-home-shell .hero-logo {
+    width: 56px;
+  }
+
+  .mobile-home-shell .hero-title {
+    font-size: clamp(1.45rem, 6.8vw, 1.85rem);
+  }
+}

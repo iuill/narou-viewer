@@ -1,0 +1,7 @@
+schema_version: 2
+revision: 3
+novel_id: novel-character
+active_job_id: null
+job_ids:
+  - charjob_completed
+  - charjob_failed

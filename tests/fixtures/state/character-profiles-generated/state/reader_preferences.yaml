@@ -1,0 +1,7 @@
+schema_version: 3
+revision: 0
+reader:
+  reading_mode: vertical
+  font_family: mincho
+  theme: classic
+  updated_at: null

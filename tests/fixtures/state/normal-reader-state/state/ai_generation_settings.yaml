@@ -1,0 +1,36 @@
+schema_version: 2
+revision: 3
+preferred_mode: llm
+selected_profile_id: custom-profile
+shared_providers:
+  openrouter:
+    api_key: dummy-openrouter-phase1-shared
+    updated_at: 2026-01-02T03:07:00.000Z
+profiles:
+  - id: default
+    label: Default
+    provider: openrouter
+    credentials:
+      source: shared
+      api_key: null
+      updated_at: null
+    model_id: openai/gpt-5-mini
+    provider_order:
+      - OpenAI
+    allow_fallbacks: false
+    require_parameters: true
+    updated_at: 2026-01-02T03:07:30.000Z
+  - id: custom-profile
+    label: Custom Profile
+    provider: openrouter
+    credentials:
+      source: custom
+      api_key: dummy-openrouter-phase1-custom
+      updated_at: 2026-01-02T03:08:00.000Z
+    model_id: anthropic/claude-sonnet-4
+    provider_order:
+      - Anthropic
+      - OpenAI
+    allow_fallbacks: true
+    require_parameters: false
+    updated_at: 2026-01-02T03:08:30.000Z

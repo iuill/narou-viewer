@@ -1,0 +1,7 @@
+[install]
+linker = "hoisted"
+minimumReleaseAge = 1814400
+minimumReleaseAgeExcludes = ["esbuild"]
+
+[run]
+bun = true

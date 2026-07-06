@@ -1,0 +1,45 @@
+{
+  "name": "narou-viewer-dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "viewer-dev",
+  "runServices": ["viewer-dev", "novel-fetcher", "novel-fetcher-e2e", "viewer-api-e2e", "viewer-web-e2e"],
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "remoteUser": "node",
+  "shutdownAction": "stopCompose",
+  "containerEnv": {
+    "DEVCONTAINER_DOCKER_PROXY_SOCKET": "/run/devcontainer-docker-proxy/docker.sock",
+    "LANG": "ja_JP.UTF-8",
+    "LC_ALL": "ja_JP.UTF-8",
+    "TZ": "Asia/Tokyo"
+  },
+  "remoteEnv": {
+    "DOCKER_HOST": "unix://${containerEnv:DEVCONTAINER_DOCKER_PROXY_SOCKET}",
+    "LANG": "${containerEnv:LANG}",
+    "LC_ALL": "${containerEnv:LC_ALL}",
+    "TZ": "${containerEnv:TZ}"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {}
+  },
+  "mounts": ["source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"],
+  "forwardPorts": [5173, 8080, 24283],
+  "postCreateCommand": "bash .devcontainer/scripts/install-bun-and-deps.sh",
+  "postStartCommand": "(bash .devcontainer/scripts/configure-git-safe-directories.sh || true) && bash .devcontainer/scripts/ensure-docker-socket-proxy.sh && (bash .devcontainer/scripts/ensure-ssh-logfile.sh || true) && (bash .devcontainer/scripts/ensure-copilot-skills-links.sh || true)",
+  "postAttachCommand": "bash .devcontainer/scripts/configure-git-safe-directories.sh || true",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      },
+      "extensions": [
+        "openai.chatgpt",
+        "Anthropic.claude-code",
+        "mhutchie.git-graph",
+        "GitHub.copilot-chat",
+        "ms-vscode.live-server"
+      ]
+    }
+  }
+}

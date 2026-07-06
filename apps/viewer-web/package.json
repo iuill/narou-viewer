@@ -1,0 +1,27 @@
+{
+  "name": "@narou-viewer/viewer-web",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun ../../scripts/run-with-root-env.mjs vite --host 0.0.0.0 --port 5173",
+    "typecheck": "bun ../../scripts/run-with-root-env.mjs tsc --noEmit -p tsconfig.json",
+    "build": "bun run typecheck && bun ../../scripts/run-with-root-env.mjs vite build",
+    "test:unit": "vitest run --project viewer-web",
+    "preview": "bun ../../scripts/run-with-root-env.mjs vite preview --host 0.0.0.0 --port 4173",
+    "preview:e2e": "bun ../../scripts/run-with-root-env.mjs vite preview --host 0.0.0.0 --port 15173"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.8.3",
+    "vite": "^7.3.2"
+  }
+}

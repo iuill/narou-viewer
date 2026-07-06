@@ -1,0 +1,156 @@
+.library-site,
+.toc-index,
+.reader-meta-row,
+.bookmark-item span {
+  color: var(--text-soft);
+  font-size: 0.88rem;
+}
+
+.bookmark-block {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(84, 58, 22, 0.12);
+}
+
+.episode-block {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(84, 58, 22, 0.12);
+}
+
+.reader-bookmarks {
+  margin-top: 24px;
+  gap: 6px;
+}
+
+.reader-bookmark-panel-list {
+  margin-top: 0;
+}
+
+.reader-bookmark-panel-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.reader-bookmark-panel-item-content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.reader-bookmark-panel-item-heading {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.reader-bookmark-panel-item-index {
+  flex: 0 0 auto;
+  font-family: var(--font-serif-ja);
+  font-size: 0.96rem;
+  color: var(--text);
+}
+
+.reader-bookmark-panel-item-title {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-bookmark-panel-item-meta {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.reader-bookmark-panel-item-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.reader-bookmark-panel-item-actions button {
+  padding: 8px 12px;
+}
+
+.bookmark-list-toggle {
+  margin-top: 10px;
+}
+
+.bookmark-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+
+.bookmark-item:hover,
+.bookmark-item:focus-within {
+  border-color: rgba(157, 75, 47, 0.3);
+  background: var(--accent-soft);
+}
+
+.bookmark-item button {
+  justify-self: start;
+}
+
+.bookmark-item .danger {
+  color: var(--danger);
+}
+
+@media (min-width: 561px) and (max-width: 1100px) {
+  .reader-shell {
+    --reader-page-side-gutter: 32px;
+    /* Top/bottom space stays in prose padding because block gutters create a
+       visible seam on the first/last page fill area. */
+    --reader-page-block-gutter: 0px;
+  }
+
+  .reader-prose-paged.vertical {
+    /* Vertical pages need block padding on the prose itself so the top/bottom
+       whitespace survives without relying on viewport gutters. */
+    padding-top: 32px;
+    padding-bottom: 32px;
+  }
+
+  .reader-prose-paged.horizontal {
+    padding-top: 32px;
+    padding-bottom: 32px;
+  }
+
+  .reader-prose .reader-title {
+    font-size: 1.72rem;
+    line-height: 1.55;
+  }
+
+  .reader-fab {
+    width: 52px;
+    height: 52px;
+  }
+
+  .reader-home-icon,
+  .reader-page-previous-icon,
+  .reader-page-next-icon,
+  .reader-episode-previous-icon,
+  .reader-episode-next-icon,
+  .reader-speech-icon,
+  .reader-toc-icon,
+  .reader-overflow-icon,
+  .reader-fullscreen-icon,
+  .reader-characters-icon,
+  .reader-bookmark-icon,
+  .reader-settings-icon,
+  .reader-experimental-font-icon,
+  .reader-info-icon {
+    width: 30px;
+    height: 30px;
+  }
+}

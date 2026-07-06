@@ -1,0 +1,7 @@
+schema_version: 3
+revision: 4
+reader:
+  reading_mode: horizontal
+  font_family: gothic
+  theme: ocean
+  updated_at: 2026-01-02T03:06:00.000Z

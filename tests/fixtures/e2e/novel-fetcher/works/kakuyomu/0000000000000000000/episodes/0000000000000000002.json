@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "episode_id": "0000000000000000002",
+  "site_episode_id": "0000000000000000002",
+  "source_url": "https://kakuyomu.example/works/0000000000000000000/episodes/0000000000000000002",
+  "sort_order": 1,
+  "display_index": "0000000000000000002",
+  "title": "第2話",
+  "chapter": "章",
+  "published_at": "2026/05/09 12:00",
+  "updated_at": "2026/05/09 12:00",
+  "blocks": [
+    {
+      "type": "meta",
+      "section": "chapter",
+      "text": "章"
+    },
+    {
+      "type": "title",
+      "text": "第2話"
+    },
+    {
+      "type": "html",
+      "section": "introduction",
+      "html": "<p>合成前書きです。</p>"
+    },
+    {
+      "type": "html",
+      "section": "body",
+      "html": "<p>合成本文 case-g-02。カクヨム形式の並び順確認用です。</p>"
+    },
+    {
+      "type": "html",
+      "section": "postscript",
+      "html": "<p>合成後書きです。</p>"
+    }
+  ],
+  "fetched_at": "2026-05-09T13:02:00Z"
+}

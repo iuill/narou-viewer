@@ -1,0 +1,136 @@
+.hero,
+.panel,
+.empty-state,
+.reader-stage {
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  position: relative;
+  z-index: 2;
+  overflow: visible;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 24px;
+  border-radius: 28px;
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.hero-brand {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.hero-heading {
+  min-width: 0;
+}
+
+.hero-logo {
+  width: clamp(72px, 9vw, 104px);
+  height: auto;
+  display: block;
+  flex: 0 0 auto;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 250, 242, 0.96), rgba(245, 234, 218, 0.92));
+  box-shadow:
+    0 16px 32px rgba(73, 43, 18, 0.12),
+    inset 0 0 0 1px rgba(84, 58, 22, 0.08);
+}
+
+.hero-title {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  color: var(--accent-strong);
+  font-family: "Rampart One", var(--font-sans-ja);
+  font-size: clamp(2.4rem, 6vw, 4.2rem);
+  line-height: 1.04;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+  text-shadow: 0 4px 14px rgba(110, 40, 17, 0.12);
+  transform: translateY(-0.08em);
+}
+
+.hero-copy {
+  max-width: 64ch;
+  margin: 16px 0 0;
+  color: var(--text-soft);
+  line-height: 1.75;
+}
+
+.hero-version {
+  justify-self: end;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 2px;
+  color: var(--text-soft);
+  text-align: right;
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Roboto Mono", monospace;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  opacity: 0.9;
+}
+
+.hero-version--mobile-home {
+  display: none;
+}
+
+.hero-update-notice {
+  justify-self: end;
+  max-width: min(36rem, 100%);
+  padding: 10px 14px;
+  border: 1px solid rgba(157, 75, 47, 0.2);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 245, 231, 0.98), rgba(248, 231, 208, 0.94));
+  box-shadow: 0 10px 24px rgba(111, 57, 27, 0.08);
+  color: var(--text-main);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.hero-config-notice {
+  border-color: rgba(157, 75, 47, 0.28);
+  color: #8f3b25;
+  font-weight: 700;
+}
+
+.hero-status {
+  position: relative;
+  display: grid;
+  justify-items: end;
+  align-content: start;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.hero-status.open {
+  z-index: 3;
+}
+
+.hero-status p {
+  margin: 0;
+}
+
+.hero-status-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+}
