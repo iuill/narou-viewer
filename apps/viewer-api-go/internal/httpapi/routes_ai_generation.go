@@ -14,50 +14,51 @@ import (
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
-	appcharactersummary "narou-viewer/apps/viewer-api-go/internal/application/charactersummary"
+	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
-	"narou-viewer/apps/viewer-api-go/internal/charactersummary"
-	"narou-viewer/apps/viewer-api-go/internal/charactersummary/checkpointstore"
+	"narou-viewer/apps/viewer-api-go/internal/extraction"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
 
-type characterSummaryCheckpoint = checkpointstore.Checkpoint
+type extractionCheckpoint = checkpointstore.Checkpoint
 
-type characterSummaryRequestOptions = appcharactersummary.RequestOptions
+type extractionRequestOptions = appextraction.RequestOptions
 
-type characterSummaryBatchProgress = appcharactersummary.BatchProgress
+type extractionBatchProgress = appextraction.BatchProgress
 
-type characterSummaryEpisodeInput = charactersummary.EpisodeInput
-type characterSummaryChunk = charactersummary.Chunk
-type characterSummaryBatch = charactersummary.Batch
-type characterSummaryBatchBudget = charactersummary.BatchBudget
-type characterSummaryDelta = charactersummary.Delta
-type characterSummaryUnresolvedMention = charactersummary.UnresolvedMention
-type characterSummaryGenerationState = charactersummary.GenerationState
+type extractionEpisodeInput = extraction.EpisodeInput
+type extractionChunk = extraction.Chunk
+type extractionBatch = extraction.Batch
+type extractionBatchBudget = extraction.BatchBudget
+type extractionDelta = extraction.Delta
+type extractionUnresolvedMention = extraction.UnresolvedMention
+type extractionGenerationState = extraction.GenerationState
 
-type characterSummaryBatchResult struct {
-	Delta characterSummaryDelta
+type extractionBatchResult struct {
+	Delta extractionDelta
 	Usage ai.UsageRequest
 }
 
-const characterSummaryDefaultMaxTokens = 12000
+const extractionDefaultMaxTokens = 12000
 
-type characterSummaryInputs = appcharactersummary.Inputs
+type extractionInputs = appextraction.Inputs
 
-const characterSummaryMinimumCompletionTokens = 512
+const extractionMinimumCompletionTokens = 512
 const (
 	maxProviderOrderItems      = 16
 	maxProviderOrderItemLength = 80
 )
 
-func characterSummaryTimingLogEnabled() bool {
+func extractionTimingLogEnabled() bool {
 	return strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG")) == "1"
 }
 
-func logCharacterSummaryTiming(stage string, startedAt time.Time, fields ...any) {
-	if !characterSummaryTimingLogEnabled() {
+func logExtractionTiming(stage string, startedAt time.Time, fields ...any) {
+	if !extractionTimingLogEnabled() {
 		return
 	}
 	values := []any{
@@ -68,8 +69,8 @@ func logCharacterSummaryTiming(stage string, startedAt time.Time, fields ...any)
 	log.Printf("viewer-api-go: character-summary timing %s", formatTimingFields(values...))
 }
 
-func LogCharacterSummaryTiming(stage string, startedAt time.Time, fields ...any) {
-	logCharacterSummaryTiming(stage, startedAt, fields...)
+func LogExtractionTiming(stage string, startedAt time.Time, fields ...any) {
+	logExtractionTiming(stage, startedAt, fields...)
 }
 
 func formatTimingFields(fields ...any) string {
@@ -238,9 +239,9 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 		update.SharedProviders = &shared
 	}
 	if rawStrategyModels, ok := body["characterSummaryStrategyModels"]; ok {
-		strategyModels, ok := parseAICharacterSummaryStrategyModels(rawStrategyModels)
+		strategyModels, ok := parseAIExtractionStrategyModels(rawStrategyModels)
 		if !ok {
-			return update, "characterSummaryStrategyModels is invalid."
+			return update, "extractionStrategyModels is invalid."
 		}
 		update.CharacterSummaryStrategyModels = &strategyModels
 	}
@@ -265,7 +266,7 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 	return update, ""
 }
 
-func parseAICharacterSummaryStrategyModels(value any) (store.AICharacterSummaryStrategyModelsInput, bool) {
+func parseAIExtractionStrategyModels(value any) (store.AICharacterSummaryStrategyModelsInput, bool) {
 	if value == nil {
 		return store.AICharacterSummaryStrategyModelsInput{}, true
 	}
@@ -570,7 +571,7 @@ func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
 	if !methodOnly(w, r, http.MethodGet) {
 		return
 	}
-	records, err := characters.LoadAllJobs(s.stateDir())
+	records, err := extractdomain.LoadAllJobs(s.stateDir())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Character jobs could not be read.")
 		return
@@ -650,14 +651,14 @@ func (s *Server) aiUsageDBPath() string {
 	return filepath.Join(s.dataDir, "state", "ai_usage.sqlite")
 }
 
-func (s *Server) parseCharacterSummaryRequestOptions(body map[string]any) (characterSummaryRequestOptions, string) {
-	options := characterSummaryRequestOptions{}
+func (s *Server) parseExtractionRequestOptions(body map[string]any) (extractionRequestOptions, string) {
+	options := extractionRequestOptions{}
 	if rawStrategy, exists := body["generationStrategy"]; exists {
 		strategy, ok := rawStrategy.(string)
 		if !ok {
 			return options, "キャラクター一覧生成方式が不正です。"
 		}
-		normalized := appcharactersummary.NormalizeGenerationStrategy(strategy)
+		normalized := appextraction.NormalizeGenerationStrategy(strategy)
 		if strings.TrimSpace(strategy) != "" && normalized != strings.TrimSpace(strategy) {
 			return options, "キャラクター一覧生成方式が不正です。"
 		}
@@ -748,7 +749,7 @@ func nullableBodyString(value any) (*string, bool) {
 	return &trimmed, true
 }
 
-func (s *Server) resolveCharacterSummaryRequestOptions(options *characterSummaryRequestOptions) (string, int) {
+func (s *Server) resolveExtractionRequestOptions(options *extractionRequestOptions) (string, int) {
 	if options == nil || !options.ProfileResolution {
 		return "", http.StatusOK
 	}
@@ -801,21 +802,21 @@ func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
 		return
 	}
-	options, errMessage := s.parseCharacterSummaryRequestOptions(body)
+	options, errMessage := s.parseExtractionRequestOptions(body)
 	if errMessage != "" {
 		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
-	if errMessage, status := s.resolveCharacterSummaryRequestOptions(&options); errMessage != "" {
+	if errMessage, status := s.resolveExtractionRequestOptions(&options); errMessage != "" {
 		writeError(w, status, errMessage)
 		return
 	}
 	options.PreviewOnly = true
 	ctx, cancel := nonStreamingLLMContext(r.Context())
 	defer cancel()
-	result, err := s.characterSummaryResult(ctx, novelID, upToEpisodeIndex, options)
+	result, err := s.extractionResult(ctx, novelID, upToEpisodeIndex, options)
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, characterSummaryPlaygroundErrorMessage(err))
+		writeError(w, http.StatusServiceUnavailable, extractionPlaygroundErrorMessage(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -852,12 +853,12 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
 		return
 	}
-	options, errMessage := s.parseCharacterSummaryRequestOptions(body)
+	options, errMessage := s.parseExtractionRequestOptions(body)
 	if errMessage != "" {
 		writeError(w, http.StatusBadRequest, errMessage)
 		return
 	}
-	if errMessage, status := s.resolveCharacterSummaryRequestOptions(&options); errMessage != "" {
+	if errMessage, status := s.resolveExtractionRequestOptions(&options); errMessage != "" {
 		writeError(w, status, errMessage)
 		return
 	}
@@ -886,8 +887,8 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = writeStreamEvent(playgroundStatusEvent("preparing", "入力を確認しました。", 10, 1))
 	_ = writeStreamEvent(playgroundStatusEvent("loadingEpisodes", "本文データを読み込んでいます。", 35, 2))
-	var preview appcharactersummary.PromptPreview
-	preparedPreview, err := s.characterSummaryRuntime().PreparePreview(r.Context(), novelID, upToEpisodeIndex, options.ResolvedConfig)
+	var preview appextraction.PromptPreview
+	preparedPreview, err := s.extractionRuntime().PreparePreview(r.Context(), novelID, upToEpisodeIndex, options.ResolvedConfig)
 	if err == nil {
 		options.SummaryInputs = &preparedPreview.Inputs
 		preview = preparedPreview.Preview
@@ -899,18 +900,18 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 	_ = writeStreamEvent(playgroundStatusEvent("generating", "キャラクター一覧を生成しています。", 70, 3))
 	startedAt := time.Now()
 	emittedBatchTiming := false
-	options.BatchProgressSink = func(progress characterSummaryBatchProgress) {
+	options.BatchProgressSink = func(progress extractionBatchProgress) {
 		switch progress.Phase {
 		case "start":
 			_ = writeStreamEvent(playgroundBatchStatusEvent(progress.Batch))
 		case "complete":
 			emittedBatchTiming = true
-			_ = writeStreamEvent(characterSummaryBatchTimingEvent(progress))
+			_ = writeStreamEvent(extractionBatchTimingEvent(progress))
 		}
 	}
-	result, err := s.characterSummaryResult(r.Context(), novelID, upToEpisodeIndex, options)
+	result, err := s.extractionResult(r.Context(), novelID, upToEpisodeIndex, options)
 	if err != nil {
-		_ = writeStreamEvent(map[string]any{"type": "error", "error": characterSummaryPlaygroundErrorMessage(err)})
+		_ = writeStreamEvent(map[string]any{"type": "error", "error": extractionPlaygroundErrorMessage(err)})
 		return
 	}
 	generatedCount := 0
@@ -937,8 +938,8 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *Server) characterSummaryResult(ctx context.Context, novelID string, upToEpisodeIndex string, options characterSummaryRequestOptions) (map[string]any, error) {
-	result, err := s.characterSummaryRuntime().Result(ctx, novelID, upToEpisodeIndex, options)
+func (s *Server) extractionResult(ctx context.Context, novelID string, upToEpisodeIndex string, options extractionRequestOptions) (map[string]any, error) {
+	result, err := s.extractionRuntime().Result(ctx, novelID, upToEpisodeIndex, options)
 	if err != nil {
 		return nil, err
 	}
@@ -956,19 +957,19 @@ func (s *Server) characterSummaryResult(ctx context.Context, novelID string, upT
 	}, nil
 }
 
-func (s *Server) characterSummaryWorkflow() *appcharactersummary.Workflow {
-	return s.characterSummaryRuntime().Workflow()
+func (s *Server) extractionWorkflow() *appextraction.Workflow {
+	return s.extractionRuntime().Workflow()
 }
 
-func (s *Server) generateAndSaveCharacterSummary(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(characterSummaryBatchProgress)) error {
-	return s.characterSummaryRuntime().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink)
+func (s *Server) generateAndSaveExtraction(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(extractionBatchProgress)) error {
+	return s.extractionRuntime().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink)
 }
 
-func (s *Server) generateCharacterSummaryPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(characterSummaryBatchProgress), episodeIndexes []string, preloaded *characterSummaryInputs) (summary characters.SummaryResponse, err error) {
-	return s.characterSummaryRuntime().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink, episodeIndexes, preloaded)
+func (s *Server) generateExtractionPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(extractionBatchProgress), episodeIndexes []string, preloaded *extractionInputs) (summary characters.SummaryResponse, err error) {
+	return s.extractionRuntime().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink, episodeIndexes, preloaded)
 }
 
-func characterSummaryPlaygroundErrorMessage(err error) string {
+func extractionPlaygroundErrorMessage(err error) string {
 	if err == nil {
 		return "Character profiles could not be read."
 	}
@@ -979,34 +980,34 @@ func characterSummaryPlaygroundErrorMessage(err error) string {
 	return "Character profiles could not be read: " + message
 }
 
-func rebatchCharacterSummaryInputs(ctx context.Context, inputs characterSummaryInputs, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) characterSummaryInputs {
+func rebatchExtractionInputs(ctx context.Context, inputs extractionInputs, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) extractionInputs {
 	if config == nil || len(inputs.Batches) == 0 {
 		return inputs
 	}
-	chunks := make([]characterSummaryChunk, 0)
+	chunks := make([]extractionChunk, 0)
 	for _, batch := range inputs.Batches {
 		chunks = append(chunks, batch.Chunks...)
 	}
-	inputs.Batches = charactersummary.CreateBatchesWithBudget(chunks, resolveCharacterSummaryBatchBudget(ctx, config, fallbackMaxBatchChars))
+	inputs.Batches = extraction.CreateBatchesWithBudget(chunks, resolveExtractionBatchBudget(ctx, config, fallbackMaxBatchChars))
 	return inputs
 }
 
-func buildGeneratedCharacterSummaryPreview(stateDir string, novelID string, upToEpisodeIndex string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, episodeIndexes []string, options characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
-	return buildCharacterSummaryPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
-		if err := copyCharacterSummaryPreviewEvents(stateDir, tempDir, novelID); err != nil {
+func buildGeneratedExtractionPreview(stateDir string, novelID string, upToEpisodeIndex string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, episodeIndexes []string, options characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
+	return buildExtractionPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
+		if err := copyExtractionPreviewEvents(stateDir, tempDir, novelID); err != nil {
 			return err
 		}
 		return characters.SaveGeneratedSummaryWithOptions(tempDir, novelID, upToEpisodeIndex, generated, episodes, options)
 	})
 }
 
-func buildHeuristicCharacterSummaryPreview(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode, episodeIndexes []string) (characters.SummaryResponse, error) {
-	return buildCharacterSummaryPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
+func buildHeuristicExtractionPreview(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode, episodeIndexes []string) (characters.SummaryResponse, error) {
+	return buildExtractionPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
 		return characters.SaveHeuristicSummary(tempDir, novelID, upToEpisodeIndex, episodes)
 	})
 }
 
-func buildCharacterSummaryPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
+func buildExtractionPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
 	tempDir, err := os.MkdirTemp("", "narou-viewer-character-summary-preview-*")
 	if err != nil {
 		return characters.SummaryResponse{}, err
@@ -1015,10 +1016,10 @@ func buildCharacterSummaryPreview(novelID string, upToEpisodeIndex string, episo
 	if err := writeSummary(tempDir); err != nil {
 		return characters.SummaryResponse{}, err
 	}
-	return loadRequiredCharacterSummaryPreview(tempDir, novelID, upToEpisodeIndex, episodeIndexes)
+	return loadRequiredExtractionPreview(tempDir, novelID, upToEpisodeIndex, episodeIndexes)
 }
 
-func (s *Server) loadCharacterSummaryPendingUnresolved(novelID string, reprocessFromEpisodeIndex string) ([]characters.GeneratedUnresolvedMention, error) {
+func (s *Server) loadExtractionPendingUnresolved(novelID string, reprocessFromEpisodeIndex string) ([]characters.GeneratedUnresolvedMention, error) {
 	pending, err := characters.LoadGeneratedUnresolvedMentions(s.stateDir(), novelID)
 	if err != nil {
 		return nil, err
@@ -1043,7 +1044,7 @@ func filterGeneratedUnresolvedMentionsBeforeEpisode(values []characters.Generate
 	return result
 }
 
-func copyCharacterSummaryPreviewEvents(sourceStateDir string, targetStateDir string, novelID string) error {
+func copyExtractionPreviewEvents(sourceStateDir string, targetStateDir string, novelID string) error {
 	if strings.TrimSpace(sourceStateDir) == "" || strings.TrimSpace(targetStateDir) == "" || strings.TrimSpace(novelID) == "" {
 		return nil
 	}
@@ -1062,7 +1063,7 @@ func copyCharacterSummaryPreviewEvents(sourceStateDir string, targetStateDir str
 	return fsatomic.WriteFile(targetPath, raw, 0o600)
 }
 
-func loadRequiredCharacterSummaryPreview(stateDir string, novelID string, upToEpisodeIndex string, episodeIndexes []string) (characters.SummaryResponse, error) {
+func loadRequiredExtractionPreview(stateDir string, novelID string, upToEpisodeIndex string, episodeIndexes []string) (characters.SummaryResponse, error) {
 	summary, ok, err := characters.LoadSummaryForEpisodes(stateDir, novelID, upToEpisodeIndex, episodeIndexes)
 	if err != nil {
 		return characters.SummaryResponse{}, err
@@ -1073,35 +1074,35 @@ func loadRequiredCharacterSummaryPreview(stateDir string, novelID string, upToEp
 	return summary, nil
 }
 
-func (s *Server) generateOpenRouterCharacterSummaryWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []characterSummaryBatch, progressSink func(characterSummaryBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, characterSummaryGenerationState, []ai.UsageRequest, error) {
-	pendingUnresolved, err := s.characterSummaryInitialUnresolved(novelID, initialUnresolved...)
+func (s *Server) generateOpenRouterExtractionWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []extractionBatch, progressSink func(extractionBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+	pendingUnresolved, err := s.extractionInitialUnresolved(novelID, initialUnresolved...)
 	if err != nil {
-		return nil, characterSummaryGenerationState{}, nil, err
+		return nil, extractionGenerationState{}, nil, err
 	}
-	return s.characterSummaryRuntime().Workflow().RunOpenRouterWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+	return s.extractionRuntime().Workflow().RunOpenRouterWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
 }
 
-func (s *Server) generateOpenRouterCharacterSummary(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []characterSummaryBatch, progressSink func(characterSummaryBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, characterSummaryGenerationState, []ai.UsageRequest, error) {
-	pendingUnresolved, err := s.characterSummaryInitialUnresolved(novelID, initialUnresolved...)
+func (s *Server) generateOpenRouterExtraction(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []extractionBatch, progressSink func(extractionBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+	pendingUnresolved, err := s.extractionInitialUnresolved(novelID, initialUnresolved...)
 	if err != nil {
-		return nil, characterSummaryGenerationState{}, nil, err
+		return nil, extractionGenerationState{}, nil, err
 	}
-	return s.characterSummaryRuntime().Workflow().RunOpenRouterPreview(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+	return s.extractionRuntime().Workflow().RunOpenRouterPreview(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
 }
 
-func (s *Server) characterSummaryInitialUnresolved(novelID string, initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedUnresolvedMention, error) {
+func (s *Server) extractionInitialUnresolved(novelID string, initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedUnresolvedMention, error) {
 	if len(initialUnresolved) > 0 {
 		return append([]characters.GeneratedUnresolvedMention{}, initialUnresolved[0]...), nil
 	}
 	return characters.LoadGeneratedUnresolvedMentions(s.stateDir(), novelID)
 }
 
-func characterSummaryCheckpointHasSnapshot(checkpoint characterSummaryCheckpoint) bool {
-	return appcharactersummary.CheckpointHasSnapshot(checkpoint)
+func extractionCheckpointHasSnapshot(checkpoint extractionCheckpoint) bool {
+	return appextraction.CheckpointHasSnapshot(checkpoint)
 }
 
-func characterSummaryStateFromAllocator(unresolved []characters.GeneratedUnresolvedMention, allocator *characters.GeneratedCharacterIDAllocator) characterSummaryGenerationState {
-	state := characterSummaryGenerationState{
+func extractionStateFromAllocator(unresolved []characters.GeneratedUnresolvedMention, allocator *characters.GeneratedCharacterIDAllocator) extractionGenerationState {
+	state := extractionGenerationState{
 		UnresolvedMentions: append([]characters.GeneratedUnresolvedMention{}, unresolved...),
 	}
 	if allocator != nil {
@@ -1153,52 +1154,52 @@ func appendUniqueInt(existing []int, value int) []int {
 	return append(existing, value)
 }
 
-func characterSummaryCheckpointFingerprint(config *store.ResolvedAIGenerationConfig, extra any) string {
-	return appcharactersummary.CheckpointFingerprint(config, extra)
+func extractionCheckpointFingerprint(config *store.ResolvedAIGenerationConfig, extra any) string {
+	return appextraction.CheckpointFingerprint(config, extra)
 }
 
-func characterSummaryCheckpointBatchInputs(batches []characterSummaryBatch) []map[string]any {
-	return appcharactersummary.CheckpointBatchInputs(batches)
+func extractionCheckpointBatchInputs(batches []extractionBatch) []map[string]any {
+	return appextraction.CheckpointBatchInputs(batches)
 }
 
-func characterSummaryCheckpointBatchInput(batch characterSummaryBatch) map[string]any {
-	return appcharactersummary.CheckpointBatchInput(batch)
+func extractionCheckpointBatchInput(batch extractionBatch) map[string]any {
+	return appextraction.CheckpointBatchInput(batch)
 }
 
-func (s *Server) characterSummaryCheckpointPath(novelID string, upToEpisodeIndex string) string {
+func (s *Server) extractionCheckpointPath(novelID string, upToEpisodeIndex string) string {
 	return checkpointstore.NewFileStore(s.stateDir()).Path(novelID, upToEpisodeIndex)
 }
 
-func (s *Server) loadCharacterSummaryCheckpoint(novelID string, upToEpisodeIndex string) characterSummaryCheckpoint {
-	return s.loadCharacterSummaryCheckpointForGeneration(novelID, upToEpisodeIndex, "")
+func (s *Server) loadExtractionCheckpoint(novelID string, upToEpisodeIndex string) extractionCheckpoint {
+	return s.loadExtractionCheckpointForGeneration(novelID, upToEpisodeIndex, "")
 }
 
-func (s *Server) loadCharacterSummaryCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) characterSummaryCheckpoint {
-	checkpoint, err := s.characterSummaryRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
+func (s *Server) loadExtractionCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) extractionCheckpoint {
+	checkpoint, err := s.extractionRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
 		checkpoint.SchemaVersion != 1 ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
-		return appcharactersummary.EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
+		return appextraction.EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
 	}
-	return appcharactersummary.NormalizeCheckpoint(checkpoint)
+	return appextraction.NormalizeCheckpoint(checkpoint)
 }
 
-func (s *Server) saveCharacterSummaryCheckpoint(novelID string, upToEpisodeIndex string, checkpoint characterSummaryCheckpoint) error {
-	return s.characterSummaryRuntime().SaveCheckpoint(novelID, upToEpisodeIndex, checkpoint)
+func (s *Server) saveExtractionCheckpoint(novelID string, upToEpisodeIndex string, checkpoint extractionCheckpoint) error {
+	return s.extractionRuntime().SaveCheckpoint(novelID, upToEpisodeIndex, checkpoint)
 }
 
-func (s *Server) characterSummaryCheckpointExists(novelID string, upToEpisodeIndex string) bool {
-	return s.characterSummaryRuntime().CheckpointExists(novelID, upToEpisodeIndex)
+func (s *Server) extractionCheckpointExists(novelID string, upToEpisodeIndex string) bool {
+	return s.extractionRuntime().CheckpointExists(novelID, upToEpisodeIndex)
 }
 
-func (s *Server) recordCharacterSummaryUsage(run ai.UsageRun) error {
-	return s.characterSummaryRuntime().RecordUsage(run)
+func (s *Server) recordExtractionUsage(run ai.UsageRun) error {
+	return s.extractionRuntime().RecordUsage(run)
 }
 
 func (s *Server) novelTitle(ctx context.Context, novelID string) *string {
-	return s.characterSummaryRuntime().NovelTitle(ctx, novelID)
+	return s.extractionRuntime().NovelTitle(ctx, novelID)
 }
 
 func resolvedProfileID(config *store.ResolvedAIGenerationConfig) *string {
@@ -1230,19 +1231,19 @@ func heuristicEpisodeIndexes(episodes []characters.HeuristicEpisode) []string {
 	return indexes
 }
 
-func (s *Server) loadCharacterSummaryInputs(ctx context.Context, novelID string, upToEpisodeIndex string, maxChunkChars int, maxBatchChars int, afterEpisodeIndexes ...string) (characterSummaryInputs, error) {
+func (s *Server) loadExtractionInputs(ctx context.Context, novelID string, upToEpisodeIndex string, maxChunkChars int, maxBatchChars int, afterEpisodeIndexes ...string) (extractionInputs, error) {
 	afterEpisodeIndex := ""
 	if len(afterEpisodeIndexes) > 0 {
 		afterEpisodeIndex = strings.TrimSpace(afterEpisodeIndexes[0])
 	}
-	return s.characterSummaryRuntime().LoadInputs(ctx, novelID, upToEpisodeIndex, maxChunkChars, maxBatchChars, afterEpisodeIndex)
+	return s.extractionRuntime().LoadInputs(ctx, novelID, upToEpisodeIndex, maxChunkChars, maxBatchChars, afterEpisodeIndex)
 }
 
-func (s *Server) loadCharacterSummaryGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	return s.characterSummaryRuntime().LoadGenerationSeed(novelID, upToEpisodeIndex)
+func (s *Server) loadExtractionGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
+	return s.extractionRuntime().LoadGenerationSeed(novelID, upToEpisodeIndex)
 }
 
-func characterSummaryProcessedCovers(processedEpisodeIndex string, requestedEpisodeIndex string) bool {
+func extractionProcessedCovers(processedEpisodeIndex string, requestedEpisodeIndex string) bool {
 	processedEpisodeIndex = strings.TrimSpace(processedEpisodeIndex)
 	requestedEpisodeIndex = strings.TrimSpace(requestedEpisodeIndex)
 	if processedEpisodeIndex == "" || requestedEpisodeIndex == "" {
@@ -1251,8 +1252,8 @@ func characterSummaryProcessedCovers(processedEpisodeIndex string, requestedEpis
 	return compareEpisodeString(processedEpisodeIndex, requestedEpisodeIndex) >= 0
 }
 
-func (s *Server) characterSummaryReprocessFromEpisode(ctx context.Context, novelID string, processedEpisodeIndex *string, requestedUpToEpisodeIndex string) (string, error) {
-	return s.characterSummaryRuntime().ReprocessFromEpisode(ctx, novelID, processedEpisodeIndex, requestedUpToEpisodeIndex)
+func (s *Server) extractionReprocessFromEpisode(ctx context.Context, novelID string, processedEpisodeIndex *string, requestedUpToEpisodeIndex string) (string, error) {
+	return s.extractionRuntime().ReprocessFromEpisode(ctx, novelID, processedEpisodeIndex, requestedUpToEpisodeIndex)
 }
 
 func earliestGeneratedEpisodeDigest(digests []characters.GeneratedEpisodeDigest, processedEpisodeIndex string) string {
@@ -1269,7 +1270,7 @@ func earliestGeneratedEpisodeDigest(digests []characters.GeneratedEpisodeDigest,
 	return earliest
 }
 
-func filterCharacterSummaryInputsAfter(inputs characterSummaryInputs, processedEpisodeIndex string) characterSummaryInputs {
+func filterExtractionInputsAfter(inputs extractionInputs, processedEpisodeIndex string) extractionInputs {
 	if strings.TrimSpace(processedEpisodeIndex) == "" {
 		return inputs
 	}
@@ -1279,7 +1280,7 @@ func filterCharacterSummaryInputsAfter(inputs characterSummaryInputs, processedE
 			filteredEpisodes = append(filteredEpisodes, episode)
 		}
 	}
-	chunks := []characterSummaryChunk{}
+	chunks := []extractionChunk{}
 	for _, batch := range inputs.Batches {
 		for _, chunk := range batch.Chunks {
 			if compareEpisodeString(chunk.EpisodeIndex, processedEpisodeIndex) > 0 {
@@ -1287,13 +1288,13 @@ func filterCharacterSummaryInputsAfter(inputs characterSummaryInputs, processedE
 			}
 		}
 	}
-	return characterSummaryInputs{
+	return extractionInputs{
 		Episodes: filteredEpisodes,
-		Batches:  charactersummary.CreateBatchesWithBudget(chunks, characterSummaryBatchBudget{}),
+		Batches:  extraction.CreateBatchesWithBudget(chunks, extractionBatchBudget{}),
 	}
 }
 
-func filterCharacterSummaryInputsFrom(inputs characterSummaryInputs, fromEpisodeIndex string) characterSummaryInputs {
+func filterExtractionInputsFrom(inputs extractionInputs, fromEpisodeIndex string) extractionInputs {
 	if strings.TrimSpace(fromEpisodeIndex) == "" {
 		return inputs
 	}
@@ -1303,7 +1304,7 @@ func filterCharacterSummaryInputsFrom(inputs characterSummaryInputs, fromEpisode
 			filteredEpisodes = append(filteredEpisodes, episode)
 		}
 	}
-	chunks := []characterSummaryChunk{}
+	chunks := []extractionChunk{}
 	for _, batch := range inputs.Batches {
 		for _, chunk := range batch.Chunks {
 			if compareEpisodeString(chunk.EpisodeIndex, fromEpisodeIndex) >= 0 {
@@ -1311,13 +1312,13 @@ func filterCharacterSummaryInputsFrom(inputs characterSummaryInputs, fromEpisode
 			}
 		}
 	}
-	return characterSummaryInputs{
+	return extractionInputs{
 		Episodes: filteredEpisodes,
-		Batches:  charactersummary.CreateBatchesWithBudget(chunks, characterSummaryBatchBudget{}),
+		Batches:  extraction.CreateBatchesWithBudget(chunks, extractionBatchBudget{}),
 	}
 }
 
-func characterSummaryInputTokens(episodes []characters.HeuristicEpisode) int {
+func extractionInputTokens(episodes []characters.HeuristicEpisode) int {
 	total := 0
 	for _, episode := range episodes {
 		total += estimateTokenCount(episode.Text)
@@ -1325,15 +1326,15 @@ func characterSummaryInputTokens(episodes []characters.HeuristicEpisode) int {
 	return total
 }
 
-func characterSummaryBatchUsageRequests(batches []characterSummaryBatch) []ai.UsageRequest {
+func extractionBatchUsageRequests(batches []extractionBatch) []ai.UsageRequest {
 	requests := make([]ai.UsageRequest, 0, len(batches))
 	for index, batch := range batches {
-		requests = append(requests, characterSummaryUsageRequestForBatch(index, batch))
+		requests = append(requests, extractionUsageRequestForBatch(index, batch))
 	}
 	return requests
 }
 
-func characterSummaryUsageRequestForBatch(index int, batch characterSummaryBatch) ai.UsageRequest {
+func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRequest {
 	inputTokens := 0
 	for _, chunk := range batch.Chunks {
 		inputTokens += estimateTokenCount(chunk.Text)
@@ -1374,27 +1375,27 @@ func usageRequestsTotalTokens(requests []ai.UsageRequest) int {
 	return total
 }
 
-func (s *Server) nextCharacterSummaryRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template characterSummaryBatch, chunks []characterSummaryChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (characterSummaryBatch, []characterSummaryChunk, error) {
+func (s *Server) nextExtractionRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template extractionBatch, chunks []extractionChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	return s.characterSummaryRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, template, chunks, pending)
+	return s.extractionRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, template, chunks, pending)
 }
 
-func (s *Server) characterSummaryRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch) ([]characterSummaryBatch, error) {
-	return charactersummary.PlanRuntimeBatches(batch, func(candidate characterSummaryBatch) (bool, error) {
-		return characterSummaryBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate)
+func (s *Server) extractionRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch) ([]extractionBatch, error) {
+	return extraction.PlanRuntimeBatches(batch, func(candidate extractionBatch) (bool, error) {
+		return extractionBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate)
 	})
 }
 
-func splitOversizedCharacterSummaryChunkBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) ([]characterSummaryBatch, error) {
-	return charactersummary.SplitOversizedChunkBatch(batch, func(candidate characterSummaryBatch) (bool, error) {
-		return characterSummaryBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate, unresolvedMentions...)
+func splitOversizedExtractionChunkBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) ([]extractionBatch, error) {
+	return extraction.SplitOversizedChunkBatch(batch, func(candidate extractionBatch) (bool, error) {
+		return extractionBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate, unresolvedMentions...)
 	})
 }
 
-func characterSummaryBatchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
+func extractionBatchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
 	if config == nil {
 		return true, nil
 	}
@@ -1403,24 +1404,24 @@ func characterSummaryBatchFitsContext(ctx context.Context, config *store.Resolve
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	systemPrompt, userPrompt := charactersummary.BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
-	logCharacterSummaryTiming("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
+	systemPrompt, userPrompt := extraction.BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
+	logExtractionTiming("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
-	responseFormat := characterSummaryOpenRouterResponseFormat()
+	responseFormat := extractionOpenRouterResponseFormat()
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
 	}, nil, responseFormat)
-	logCharacterSummaryTiming("context_fit_token_estimate", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens)
+	logExtractionTiming("context_fit_token_estimate", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens)
 	stageStartedAt = time.Now()
-	maxTokens, err := resolveOpenRouterMaxOutputTokens(ctx, config.APIKey, config.ModelID, config.ProviderOrder, characterSummaryDefaultMaxTokens, promptTokens)
+	maxTokens, err := resolveOpenRouterMaxOutputTokens(ctx, config.APIKey, config.ModelID, config.ProviderOrder, extractionDefaultMaxTokens, promptTokens)
 	status := "ok"
 	if err != nil {
 		status = "error"
 	}
-	logCharacterSummaryTiming("context_fit_max_tokens", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens, "maxTokens", maxTokens)
+	logExtractionTiming("context_fit_max_tokens", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens, "maxTokens", maxTokens)
 	if err == nil {
-		return maxTokens >= characterSummaryMinimumCompletionTokens, nil
+		return maxTokens >= extractionMinimumCompletionTokens, nil
 	}
 	if errors.Is(err, errOpenRouterContextTooLarge) {
 		return false, nil
@@ -1428,19 +1429,19 @@ func characterSummaryBatchFitsContext(ctx context.Context, config *store.Resolve
 	return false, err
 }
 
-func (s *Server) generateOpenRouterCharacterSummaryBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch characterSummaryBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (characterSummaryBatchResult, error) {
+func (s *Server) generateOpenRouterExtractionBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatchResult, error) {
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	result, err := s.characterSummaryRuntime().GenerateBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, pending)
+	result, err := s.extractionRuntime().GenerateBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, pending)
 	if err != nil {
-		return characterSummaryBatchResult{}, err
+		return extractionBatchResult{}, err
 	}
-	return characterSummaryBatchResult{Delta: result.Delta, Usage: result.Usage}, nil
+	return extractionBatchResult{Delta: result.Delta, Usage: result.Usage}, nil
 }
 
-func characterSummaryOpenRouterResponseFormat() map[string]any {
+func extractionOpenRouterResponseFormat() map[string]any {
 	textVersionSchema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -1569,7 +1570,7 @@ func characterSummaryOpenRouterResponseFormat() map[string]any {
 	}
 }
 
-func characterSummaryBatchTimingEvent(progress characterSummaryBatchProgress) map[string]any {
+func extractionBatchTimingEvent(progress extractionBatchProgress) map[string]any {
 	return map[string]any{
 		"type":                    "batchTiming",
 		"batchIndex":              progress.Batch.BatchIndex,
@@ -1594,22 +1595,22 @@ func playgroundStatusEvent(stage string, message string, progress int, step int)
 	}
 }
 
-func playgroundBatchStatusEvent(batch characterSummaryBatch) map[string]any {
+func playgroundBatchStatusEvent(batch extractionBatch) map[string]any {
 	event := playgroundStatusEvent("batch", "batch "+strconv.Itoa(batch.BatchIndex)+"/"+strconv.Itoa(batch.BatchCount)+" を生成しています。", 70, 3)
 	event["batchIndex"] = batch.BatchIndex
 	event["batchCount"] = batch.BatchCount
 	return event
 }
 
-func (s *Server) characterSummaryPromptPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig) (map[string]any, error) {
-	preparedPreview, err := s.characterSummaryRuntime().PreparePreview(ctx, novelID, upToEpisodeIndex, resolvedConfig)
+func (s *Server) extractionPromptPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig) (map[string]any, error) {
+	preparedPreview, err := s.extractionRuntime().PreparePreview(ctx, novelID, upToEpisodeIndex, resolvedConfig)
 	if err != nil {
 		return nil, err
 	}
 	return promptPreviewToMap(preparedPreview.Preview), nil
 }
 
-func promptPreviewToMap(preview appcharactersummary.PromptPreview) map[string]any {
+func promptPreviewToMap(preview appextraction.PromptPreview) map[string]any {
 	batches := make([]map[string]any, 0, len(preview.Batches))
 	for _, batch := range preview.Batches {
 		chunks := make([]map[string]any, 0, len(batch.Chunks))
@@ -1638,7 +1639,7 @@ func promptPreviewToMap(preview appcharactersummary.PromptPreview) map[string]an
 	}
 }
 
-func promptPreviewEpisodeIndexes(preview appcharactersummary.PromptPreview) []string {
+func promptPreviewEpisodeIndexes(preview appextraction.PromptPreview) []string {
 	values := []string{}
 	seen := map[string]bool{}
 	for _, batch := range preview.Batches {
@@ -1653,7 +1654,7 @@ func promptPreviewEpisodeIndexes(preview appcharactersummary.PromptPreview) []st
 	return values
 }
 
-func promptPreviewChunkCount(preview appcharactersummary.PromptPreview) int {
+func promptPreviewChunkCount(preview appextraction.PromptPreview) int {
 	total := 0
 	for _, batch := range preview.Batches {
 		total += batch.ChunkCount
@@ -1668,7 +1669,7 @@ func readerDocumentBodyText(document library.ReaderDocument) string {
 			continue
 		}
 		if block.Type == "paragraph" {
-			if text := strings.TrimSpace(charactersummary.RenderInlineTokens(block.Inlines)); text != "" {
+			if text := strings.TrimSpace(extraction.RenderInlineTokens(block.Inlines)); text != "" {
 				parts = append(parts, text)
 			}
 			continue

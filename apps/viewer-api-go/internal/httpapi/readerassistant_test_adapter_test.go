@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
-	"narou-viewer/apps/viewer-api-go/internal/application/charactersummaryruntime"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
-	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
@@ -172,20 +172,20 @@ func stringValue(value *string) string {
 	return readerassistant.StringValue(value)
 }
 
-func setCharacterJobProgress(job *characters.Job, progress int, stage string, currentBatchIndex *int, batchCount *int, generatedCharacterCount *int) {
-	charactersummaryruntime.SetCharacterJobProgress(job, progress, stage, currentBatchIndex, batchCount, generatedCharacterCount)
+func setCharacterJobProgress(job *extractdomain.Job, progress int, stage string, currentBatchIndex *int, batchCount *int, generatedCharacterCount *int) {
+	extractionruntime.SetExtractionJobProgress(job, progress, stage, currentBatchIndex, batchCount, generatedCharacterCount)
 }
 
 func characterJobBatchProgressPercent(completedBatches int, batchCount int) int {
-	return charactersummaryruntime.CharacterJobBatchProgressPercent(completedBatches, batchCount)
+	return extractionruntime.ExtractionJobBatchProgressPercent(completedBatches, batchCount)
 }
 
 func valueOrDefaultInt(value *int, fallback int) int {
-	return charactersummaryruntime.ValueOrDefaultInt(value, fallback)
+	return extractionruntime.ValueOrDefaultInt(value, fallback)
 }
 
 func valueOrDefaultString(value *string, fallback string) string {
-	return charactersummaryruntime.ValueOrDefaultString(value, fallback)
+	return extractionruntime.ValueOrDefaultString(value, fallback)
 }
 
 func readerAssistantToolDefinitions() []ai.ToolDefinition {
@@ -284,11 +284,11 @@ func (s *Server) runReaderAssistantAgentLoop(ctx context.Context, assistantConte
 	return readerAssistantServiceForTest(s).RunAgentLoop(ctx, assistantContext, config, streamSink)
 }
 
-func (s *Server) processCharacterJob(ctx context.Context, novelID string, job characters.Job) bool {
-	processor := charactersummaryruntime.NewProcessor(charactersummaryruntime.Dependencies{
+func (s *Server) processCharacterJob(ctx context.Context, novelID string, job extractdomain.Job) bool {
+	processor := extractionruntime.NewProcessor(extractionruntime.Dependencies{
 		StateDir: s.stateDir(),
-		Workflow: s.characterSummaryWorkflow(),
-		Logger:   logCharacterSummaryTiming,
+		Workflow: s.extractionWorkflow(),
+		Logger:   logExtractionTiming,
 	})
 	return processor.Process(ctx, novelID, job)
 }

@@ -8,6 +8,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
@@ -67,6 +68,9 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	stateDir := filepath.Join(dataDir, "state")
 	if err := characters.EnsureStateDirs(stateDir); err != nil {
 		t.Fatalf("EnsureStateDirs returned error: %v", err)
+	}
+	if err := extractdomain.EnsureStateDirs(stateDir); err != nil {
+		t.Fatalf("extraction EnsureStateDirs returned error: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character profile fixture: %v", err)

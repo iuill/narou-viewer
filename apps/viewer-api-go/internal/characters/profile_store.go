@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"narou-viewer/apps/viewer-api-go/internal/novelstate"
 )
 
 func LoadSummary(stateDir string, novelID string, upToEpisodeIndex string) (SummaryResponse, bool, error) {
@@ -109,7 +111,7 @@ func SaveGeneratedSummaryWithEpisodes(stateDir string, novelID string, processed
 }
 
 func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedUpToEpisodeIndex string, generated []GeneratedCharacter, episodes []HeuristicEpisode, options SaveGeneratedSummaryOptions) error {
-	return withNovelStateLock(novelID, func() error {
+	return novelstate.WithLock(novelID, func() error {
 		assigned, eventsDoc, err := assignGeneratedCharacterIDs(stateDir, novelID, processedUpToEpisodeIndex, generated)
 		if err != nil {
 			return err
@@ -144,7 +146,7 @@ func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedU
 
 func MaterializeGeneratedSummary(stateDir string, novelID string) (bool, error) {
 	materialized := false
-	err := withNovelStateLock(novelID, func() error {
+	err := novelstate.WithLock(novelID, func() error {
 		doc, ok, err := loadCharacterEventsDocument(stateDir, novelID)
 		if err != nil || !ok || doc.ProcessedUpToEpisodeIndex == nil {
 			return err

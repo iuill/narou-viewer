@@ -5,7 +5,7 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
-	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
@@ -61,7 +61,7 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 			cleanup.BookmarksDeleted += result.BookmarksDeleted
 		}
 
-		characterResult, err := characters.PruneNovelState(s.stateDir, novelID)
+		characterResult, err := extractdomain.PruneNovelState(s.stateDir, novelID)
 		if err != nil {
 			return cleanup, err
 		}
