@@ -1,64 +1,91 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { clearCharacterSummary, fetchCharacterJobs, fetchCharacterSummary, submitCharacterJob } from "../features/characters/api";
-import type { CharacterGenerationStrategy, CharacterJobsResponse, CharacterSummaryResponse } from "../features/characters/types";
+import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
+import { fetchCharacterSummary } from "../features/characters/api";
+import type { CharacterSummaryResponse } from "../features/characters/types";
+import {
+  clearExtraction,
+  fetchExtractionJobs,
+  submitExtraction,
+} from "../features/extraction/api";
+import type {
+  ExtractionGenerationStrategy,
+  ExtractionJobsResponse,
+} from "../features/extraction/types";
+import { fetchTerms } from "../features/terms/api";
+import type { TermsResponse } from "../features/terms/types";
 import type { EpisodeIndex, TocResponse } from "../features/reader/types";
 import { compareEpisodeIndex } from "../features/reader/episodeIndex";
 import {
   isCharacterSummaryActiveJob,
   isCharacterSummaryCompletedJob,
   isCharacterSummaryRequestAllowed,
-  resolveCharacterSummaryRefreshTarget
+  resolveCharacterSummaryRefreshTarget,
 } from "../characterSummaryUtils";
 
-type UseCharacterSummaryOptions = {
+type UseExtractionOptions = {
   currentTocEpisodeIndex: number;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
   isOpen: boolean;
   onClosePanel: () => void;
   onOpenPanel: () => void;
+  onOpenTermsPanel: () => void;
   selectedNovelId: string | null;
   setReaderNotice: Dispatch<SetStateAction<string | null>>;
   screenMode: "library" | "reader";
   toc: TocResponse | null;
 };
 
-type UseCharacterSummaryResult = {
-  activeJobs: NonNullable<CharacterJobsResponse["jobs"]>;
+type UseExtractionResult = {
+  activeJobs: NonNullable<ExtractionJobsResponse["jobs"]>;
   canGenerate: boolean;
   canClear: boolean;
-  completedJobs: NonNullable<CharacterJobsResponse["jobs"]>;
+  completedJobs: NonNullable<ExtractionJobsResponse["jobs"]>;
   data: CharacterSummaryResponse | null;
+  termsData: TermsResponse | null;
   defaultUpToEpisodeIndex: string | null;
   error: string | null;
   handleClear: () => Promise<void>;
   handleGenerate: () => Promise<void>;
   handleOpen: () => Promise<void>;
+  handleOpenTerms: () => Promise<void>;
   isClearing: boolean;
   isLoading: boolean;
   isSubmitting: boolean;
   notice: string | null;
-  requestedGenerationStrategy: CharacterGenerationStrategy;
+  requestedGenerationStrategy: ExtractionGenerationStrategy;
   requestedUpToEpisodeIndex: string;
-  setRequestedGenerationStrategy: Dispatch<SetStateAction<CharacterGenerationStrategy>>;
+  setRequestedGenerationStrategy: Dispatch<
+    SetStateAction<ExtractionGenerationStrategy>
+  >;
   setRequestedUpToEpisodeIndex: Dispatch<SetStateAction<string>>;
 };
 
-export function useCharacterSummary({
+export function useExtraction({
   currentTocEpisodeIndex,
   formatEpisodeOrderLabel,
   isOpen,
   onClosePanel,
   onOpenPanel,
+  onOpenTermsPanel,
   selectedNovelId,
   setReaderNotice,
   screenMode,
-  toc
-}: UseCharacterSummaryOptions): UseCharacterSummaryResult {
-  const [requestedUpToEpisodeIndex, setRequestedUpToEpisodeIndex] = useState("");
+  toc,
+}: UseExtractionOptions): UseExtractionResult {
+  const [requestedUpToEpisodeIndex, setRequestedUpToEpisodeIndex] =
+    useState("");
   const [requestedGenerationStrategy, setRequestedGenerationStrategy] =
-    useState<CharacterGenerationStrategy>("parallel_identity");
+    useState<ExtractionGenerationStrategy>("parallel_identity");
   const [data, setData] = useState<CharacterSummaryResponse | null>(null);
-  const [jobs, setJobs] = useState<CharacterJobsResponse | null>(null);
+  const [termsData, setTermsData] = useState<TermsResponse | null>(null);
+  const [jobs, setJobs] = useState<ExtractionJobsResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -90,26 +117,37 @@ export function useCharacterSummary({
       return null;
     }
 
-    return toc.episodes[Number.parseInt(defaultUpToEpisodeIndex, 10) - 1]?.episodeIndex ?? null;
+    return (
+      toc.episodes[Number.parseInt(defaultUpToEpisodeIndex, 10) - 1]
+        ?.episodeIndex ?? null
+    );
   }, [defaultUpToEpisodeIndex, toc]);
   const canGenerate = isCharacterSummaryRequestAllowed({
     defaultUpToEpisodeIndex,
-    requestedUpToEpisodeIndex: requestedUpToEpisodeOrder
+    requestedUpToEpisodeIndex: requestedUpToEpisodeOrder,
   });
   const activeJobs = useMemo(
-    () => jobs?.jobs.filter((job) => isCharacterSummaryActiveJob(job.status)) ?? [],
-    [jobs]
+    () =>
+      jobs?.jobs.filter((job) => isCharacterSummaryActiveJob(job.status)) ?? [],
+    [jobs],
   );
   const completedJobs = useMemo(
-    () => jobs?.jobs.filter((job) => isCharacterSummaryCompletedJob(job.status)) ?? [],
-    [jobs]
+    () =>
+      jobs?.jobs.filter((job) => isCharacterSummaryCompletedJob(job.status)) ??
+      [],
+    [jobs],
   );
   const canClear =
     selectedNovelId !== null &&
     activeJobs.length === 0 &&
-    (data?.status === "ready" || completedJobs.length > 0);
+    (data?.status === "ready" ||
+      termsData?.status === "ready" ||
+      completedJobs.length > 0);
 
-  async function load(targetUpToEpisodeIndex: EpisodeIndex, options?: { background?: boolean }) {
+  async function load(
+    targetUpToEpisodeIndex: EpisodeIndex,
+    options?: { background?: boolean },
+  ) {
     if (!selectedNovelId) {
       return;
     }
@@ -117,7 +155,8 @@ export function useCharacterSummary({
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
     const isBackgroundRefresh = options?.background === true;
-    const hasVisibleSummary = data !== null || jobs !== null;
+    const hasVisibleSummary =
+      data !== null || termsData !== null || jobs !== null;
 
     if (!isBackgroundRefresh) {
       setIsLoading(true);
@@ -128,31 +167,74 @@ export function useCharacterSummary({
 
     try {
       const novelId = selectedNovelId;
-      const [initialSummary, nextJobs] = await Promise.all([
+      const [initialSummary, initialTerms, nextJobs] = await Promise.all([
         fetchCharacterSummary(novelId, targetUpToEpisodeIndex),
-        fetchCharacterJobs(novelId)
+        fetchTerms(novelId, targetUpToEpisodeIndex),
+        fetchExtractionJobs(novelId),
       ]);
 
       let summary = initialSummary;
-      let nextNotice: string | null = null;
+      let displayedTerms = initialTerms;
+      const notices: string[] = [];
 
       if (
         initialSummary.status === "not_generated" &&
         initialSummary.processedUpToEpisodeIndex !== null &&
-        compareEpisodeIndex(initialSummary.processedUpToEpisodeIndex, targetUpToEpisodeIndex) < 0
+        compareEpisodeIndex(
+          initialSummary.processedUpToEpisodeIndex,
+          targetUpToEpisodeIndex,
+        ) < 0
       ) {
         if (requestSeq !== requestSeqRef.current) {
           return;
         }
 
-        const fallbackSummary = await fetchCharacterSummary(novelId, initialSummary.processedUpToEpisodeIndex);
+        const fallbackSummary = await fetchCharacterSummary(
+          novelId,
+          initialSummary.processedUpToEpisodeIndex,
+        );
 
         if (fallbackSummary.status === "ready") {
           summary = fallbackSummary;
-          nextNotice =
+          notices.push(
             `第${formatEpisodeOrderLabel(fallbackSummary.upToEpisodeIndex)}話時点までの生成済み一覧を表示しています。` +
-            `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点の一覧はまだ生成されていません。`;
+              `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点の人物一覧はまだ生成されていません。`,
+          );
         }
+      }
+
+      if (
+        initialTerms.status === "not_generated" &&
+        initialTerms.processedUpToEpisodeIndex !== null &&
+        compareEpisodeIndex(
+          initialTerms.processedUpToEpisodeIndex,
+          targetUpToEpisodeIndex,
+        ) < 0
+      ) {
+        if (requestSeq !== requestSeqRef.current) {
+          return;
+        }
+        const fallbackTerms = await fetchTerms(
+          novelId,
+          initialTerms.processedUpToEpisodeIndex,
+        );
+        if (fallbackTerms.status === "ready") {
+          displayedTerms = fallbackTerms;
+          notices.push(
+            `第${formatEpisodeOrderLabel(fallbackTerms.upToEpisodeIndex)}話時点までの用語一覧を表示しています。` +
+              `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点の用語一覧はまだ生成されていません。`,
+          );
+        }
+      }
+
+      if (
+        initialSummary.status === "ready" &&
+        initialTerms.status === "not_generated" &&
+        initialTerms.processedUpToEpisodeIndex === null
+      ) {
+        notices.push(
+          "旧生成データには用語が含まれないため、抽出データをクリアして再生成してください。",
+        );
       }
 
       if (requestSeq !== requestSeqRef.current) {
@@ -160,17 +242,21 @@ export function useCharacterSummary({
       }
 
       setData(summary);
+      setTermsData(displayedTerms);
       setJobs(nextJobs);
-      setNotice(nextNotice);
+      setNotice(notices.length > 0 ? notices.join(" ") : null);
     } catch (loadError) {
       if (requestSeq !== requestSeqRef.current) {
         return;
       }
 
-      setError(loadError instanceof Error ? loadError.message : "Unknown error");
+      setError(
+        loadError instanceof Error ? loadError.message : "Unknown error",
+      );
 
       if (!isBackgroundRefresh || !hasVisibleSummary) {
         setData(null);
+        setTermsData(null);
         setJobs(null);
         setNotice(null);
       }
@@ -181,15 +267,18 @@ export function useCharacterSummary({
     }
   }
 
-  const refreshInBackground = useEffectEvent((targetUpToEpisodeIndex: EpisodeIndex) => {
-    void load(targetUpToEpisodeIndex, { background: true });
-  });
+  const refreshInBackground = useEffectEvent(
+    (targetUpToEpisodeIndex: EpisodeIndex) => {
+      void load(targetUpToEpisodeIndex, { background: true });
+    },
+  );
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectedNovelId intentionally resets panel state without reacting to handler identity.
   useEffect(() => {
     requestSeqRef.current += 1;
     onClosePanel();
     setData(null);
+    setTermsData(null);
     setJobs(null);
     setError(null);
     setRequestedUpToEpisodeIndex("");
@@ -221,19 +310,28 @@ export function useCharacterSummary({
         return defaultUpToEpisodeIndex;
       }
 
-      return compareEpisodeIndex(current, defaultUpToEpisodeIndex) <= 0 ? current : defaultUpToEpisodeIndex;
+      return compareEpisodeIndex(current, defaultUpToEpisodeIndex) <= 0
+        ? current
+        : defaultUpToEpisodeIndex;
     });
   }, [defaultUpToEpisodeIndex, isOpen]);
 
   useEffect(() => {
     const refreshTarget = resolveCharacterSummaryRefreshTarget({
       defaultUpToEpisodeIndex,
-      requestedUpToEpisodeIndex: requestedUpToEpisodeOrder
+      requestedUpToEpisodeIndex: requestedUpToEpisodeOrder,
     });
     const refreshTargetEpisodeIndex =
-      refreshTarget !== null && toc ? toc.episodes[Number.parseInt(refreshTarget, 10) - 1]?.episodeIndex ?? null : null;
+      refreshTarget !== null && toc
+        ? (toc.episodes[Number.parseInt(refreshTarget, 10) - 1]?.episodeIndex ??
+          null)
+        : null;
 
-    if (!isOpen || selectedNovelId === null || refreshTargetEpisodeIndex === null) {
+    if (
+      !isOpen ||
+      selectedNovelId === null ||
+      refreshTargetEpisodeIndex === null
+    ) {
       return;
     }
 
@@ -244,7 +342,13 @@ export function useCharacterSummary({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [defaultUpToEpisodeIndex, isOpen, requestedUpToEpisodeOrder, selectedNovelId, toc]);
+  }, [
+    defaultUpToEpisodeIndex,
+    isOpen,
+    requestedUpToEpisodeOrder,
+    selectedNovelId,
+    toc,
+  ]);
 
   async function handleOpen() {
     setRequestedUpToEpisodeIndex(defaultUpToEpisodeIndex ?? "");
@@ -254,6 +358,21 @@ export function useCharacterSummary({
       await load(defaultUpToEpisodeActualIndex);
     } else {
       setData(null);
+      setTermsData(null);
+      setJobs(null);
+      setNotice(null);
+      setError(null);
+    }
+  }
+
+  async function handleOpenTerms() {
+    setRequestedUpToEpisodeIndex(defaultUpToEpisodeIndex ?? "");
+    onOpenTermsPanel();
+    if (defaultUpToEpisodeActualIndex) {
+      await load(defaultUpToEpisodeActualIndex);
+    } else {
+      setData(null);
+      setTermsData(null);
       setJobs(null);
       setNotice(null);
       setError(null);
@@ -265,12 +384,13 @@ export function useCharacterSummary({
       return;
     }
 
-    const refreshTarget = requestedUpToEpisodeActualIndex ?? defaultUpToEpisodeActualIndex;
+    const refreshTarget =
+      requestedUpToEpisodeActualIndex ?? defaultUpToEpisodeActualIndex;
     setIsClearing(true);
     setError(null);
 
     try {
-      const result = await clearCharacterSummary(selectedNovelId);
+      const result = await clearExtraction(selectedNovelId);
       setReaderNotice(result.message);
       setNotice(null);
       setJobs({ jobs: [] });
@@ -278,9 +398,12 @@ export function useCharacterSummary({
         await load(refreshTarget);
       } else {
         setData(null);
+        setTermsData(null);
       }
     } catch (clearError) {
-      setError(clearError instanceof Error ? clearError.message : "Unknown error");
+      setError(
+        clearError instanceof Error ? clearError.message : "Unknown error",
+      );
     } finally {
       setIsClearing(false);
     }
@@ -295,7 +418,7 @@ export function useCharacterSummary({
       requestedUpToEpisodeActualIndex === null ||
       !isCharacterSummaryRequestAllowed({
         defaultUpToEpisodeIndex,
-        requestedUpToEpisodeIndex: requestedUpToEpisodeOrder
+        requestedUpToEpisodeIndex: requestedUpToEpisodeOrder,
       })
     ) {
       return;
@@ -305,14 +428,16 @@ export function useCharacterSummary({
     setError(null);
 
     try {
-      const result = await submitCharacterJob(selectedNovelId, {
+      const result = await submitExtraction(selectedNovelId, {
         upToEpisodeIndex: requestedUpToEpisodeActualIndex,
-        generationStrategy: requestedGenerationStrategy
+        generationStrategy: requestedGenerationStrategy,
       });
       setReaderNotice(result.message);
       await load(requestedUpToEpisodeActualIndex);
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Unknown error");
+      setError(
+        submitError instanceof Error ? submitError.message : "Unknown error",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -324,11 +449,13 @@ export function useCharacterSummary({
     canGenerate,
     completedJobs,
     data,
+    termsData,
     defaultUpToEpisodeIndex,
     error,
     handleClear,
     handleGenerate,
     handleOpen,
+    handleOpenTerms,
     isClearing,
     isLoading,
     isSubmitting,
@@ -336,6 +463,6 @@ export function useCharacterSummary({
     requestedGenerationStrategy,
     requestedUpToEpisodeIndex,
     setRequestedGenerationStrategy,
-    setRequestedUpToEpisodeIndex
+    setRequestedUpToEpisodeIndex,
   };
 }

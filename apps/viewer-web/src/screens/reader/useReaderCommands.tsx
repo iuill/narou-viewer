@@ -43,11 +43,13 @@ type UseReaderCommandsOptions = {
   episodeContentEtag: string | null;
   handleCreateBookmark: () => Promise<void>;
   handleOpenCharacterSummary: () => void | Promise<void>;
+  handleOpenTerms: () => void | Promise<void>;
   handleReturnToLibrary: () => void | Promise<void>;
   handleToggleReaderFullscreen: () => void | Promise<void>;
   hasUnlistedEpisodes: boolean;
   isBookmarkSaving: boolean;
   isCharacterSummaryOpen: boolean;
+  isTermsOpen: boolean;
   isEpisodeLoading: boolean;
   isReaderAiAssistantAvailable: boolean;
   isReaderAiAssistantOpen: boolean;
@@ -105,11 +107,13 @@ export function useReaderCommands({
   episodeContentEtag,
   handleCreateBookmark,
   handleOpenCharacterSummary,
+  handleOpenTerms,
   handleReturnToLibrary,
   handleToggleReaderFullscreen,
   hasUnlistedEpisodes,
   isBookmarkSaving,
   isCharacterSummaryOpen,
+  isTermsOpen,
   isEpisodeLoading,
   isReaderAiAssistantAvailable,
   isReaderAiAssistantOpen,
@@ -518,11 +522,13 @@ export function useReaderCommands({
     handleCreateBookmark,
     handleEpisodeMove,
     handleOpenCharacterSummary,
+    handleOpenTerms,
     handlePageMove,
     handleReturnToLibrary,
     handleToggleReaderFullscreen,
     isBookmarkSaving,
     isCharacterSummaryOpen,
+    isTermsOpen,
     isEpisodeLoading,
     isReaderAiAssistantAvailable,
     isReaderAiAssistantOpen,

@@ -1,4 +1,4 @@
-import type { CharacterGenerationStrategy } from "../characters/types";
+import type { ExtractionGenerationStrategy as CharacterGenerationStrategy } from "../extraction/types";
 
 export type AiGenerationMode = "openrouter" | "heuristic" | "disabled" | null;
 

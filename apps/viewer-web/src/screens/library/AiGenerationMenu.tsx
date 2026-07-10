@@ -25,7 +25,7 @@ export function AiGenerationNavList({
     <div className="ai-generation-nav-list">
       <button className="ai-generation-nav-button" onClick={() => void onOpenView("jobs")} type="button">
         <strong>キャラ生成履歴</strong>
-        <span>キャラクター一覧生成の進行状況と失敗履歴を確認します。</span>
+        <span>人物と用語の抽出状況と失敗履歴を確認します。</span>
       </button>
       <button className="ai-generation-nav-button" onClick={() => void onOpenView("usage")} type="button">
         <strong>読書AI利用統計</strong>
@@ -37,7 +37,7 @@ export function AiGenerationNavList({
       </button>
       <button className="ai-generation-nav-button" onClick={() => void onOpenView("playground")} type="button">
         <strong>生成テスト</strong>
-        <span>作品と話数を選んでキャラクター一覧生成を試します。</span>
+        <span>作品と話数を選んで人物・用語の抽出を試します。</span>
       </button>
     </div>
   );

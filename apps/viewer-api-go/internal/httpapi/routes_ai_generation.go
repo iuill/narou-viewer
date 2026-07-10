@@ -902,7 +902,7 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 			"preview": preview,
 		})
 	}
-	_ = writeStreamEvent(playgroundStatusEvent("generating", "キャラクター一覧を生成しています。", 70, 3))
+	_ = writeStreamEvent(playgroundStatusEvent("generating", "人物と用語を抽出しています。", 70, 3))
 	startedAt := time.Now()
 	emittedBatchTiming := false
 	options.BatchProgressSink = func(progress extractionBatchProgress) {
@@ -920,6 +920,7 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	generatedCount := len(result.Characters)
+	generatedTermCount := len(result.Terms)
 	if !emittedBatchTiming {
 		_ = writeStreamEvent(map[string]any{
 			"type":                    "batchTiming",
@@ -930,7 +931,9 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 			"elapsedMs":               time.Since(startedAt).Milliseconds(),
 			"generatedCharacterCount": generatedCount,
 			"mergedCharacterCount":    generatedCount,
-			"message":                 "キャラクター一覧生成を完了しました。",
+			"generatedTermCount":      generatedTermCount,
+			"mergedTermCount":         generatedTermCount,
+			"message":                 "人物と用語の抽出を完了しました。",
 		})
 	}
 	_ = writeStreamEvent(playgroundStatusEvent("buildingResponse", "レスポンスを組み立てています。", 90, 4))
@@ -1444,6 +1447,8 @@ func extractionBatchTimingEvent(progress extractionBatchProgress) map[string]any
 		"elapsedMs":               progress.ElapsedMs,
 		"generatedCharacterCount": progress.GeneratedCharacterCount,
 		"mergedCharacterCount":    progress.MergedCharacterCount,
+		"generatedTermCount":      progress.GeneratedTermCount,
+		"mergedTermCount":         progress.MergedTermCount,
 		"message":                 "batch " + strconv.Itoa(progress.Batch.BatchIndex) + "/" + strconv.Itoa(progress.Batch.BatchCount) + " の生成を完了しました。",
 	}
 }

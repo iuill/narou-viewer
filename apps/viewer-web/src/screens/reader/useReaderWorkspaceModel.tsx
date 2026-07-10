@@ -6,7 +6,7 @@ import { useReaderSessionCommands } from "../../features/reader/useReaderSession
 import type { EpisodeIndex, TocEpisode } from "../../features/reader/types";
 import { detectWebKitEngine } from "../../features/reader/verticalPagination";
 import { useAutoClearedNotice } from "../../hooks/useAutoClearedNotice";
-import { useCharacterSummary } from "../../hooks/useCharacterSummary";
+import { useExtraction } from "../../hooks/useExtraction";
 import { useTouchDevice } from "../../hooks/useMediaQuery";
 import { useReaderBookmarks } from "../../hooks/useReaderBookmarks";
 import { useReaderControlsLayout } from "../../hooks/useReaderControlsLayout";
@@ -214,9 +214,9 @@ export function useReaderWorkspaceModel({
   const {
     activeReaderPanel,
     closeActiveReaderPanel,
-    closeCharacterSummaryPanel,
     closeReaderPanel,
     isCharacterSummaryOpen,
+    isTermsOpen,
     isReaderAiAssistantOpen,
     isReaderBookmarksOpen,
     isReaderExperimentalFontOpen,
@@ -226,6 +226,7 @@ export function useReaderWorkspaceModel({
     isReaderTocOpen,
     isReaderOverflowOpen,
     openCharacterSummaryPanel,
+    openTermsPanel,
     setIsReaderOverflowOpen,
     toggleReaderPanel
   } = useReaderPanels({
@@ -451,11 +452,13 @@ export function useReaderWorkspaceModel({
     canGenerate: characterSummaryCanGenerate,
     completedJobs: characterSummaryCompletedJobs,
     data: characterSummaryData,
+    termsData,
     defaultUpToEpisodeIndex: characterSummaryDefaultUpToEpisodeIndex,
     error: characterSummaryError,
     handleClear: handleClearCharacterSummary,
     handleGenerate: handleGenerateCharacterSummary,
     handleOpen: handleOpenCharacterSummary,
+    handleOpenTerms,
     isClearing: isCharacterSummaryClearing,
     isLoading: isCharacterSummaryLoading,
     isSubmitting: isCharacterSummarySubmitting,
@@ -464,12 +467,13 @@ export function useReaderWorkspaceModel({
     requestedUpToEpisodeIndex: characterSummaryUpToEpisodeIndex,
     setRequestedGenerationStrategy: setCharacterSummaryGenerationStrategy,
     setRequestedUpToEpisodeIndex: setCharacterSummaryUpToEpisodeIndex
-  } = useCharacterSummary({
+  } = useExtraction({
     currentTocEpisodeIndex,
     formatEpisodeOrderLabel: formatCharacterSummaryEpisodeOrder,
-    isOpen: isCharacterSummaryOpen,
-    onClosePanel: closeCharacterSummaryPanel,
+    isOpen: isCharacterSummaryOpen || isTermsOpen,
+    onClosePanel: closeActiveReaderPanel,
     onOpenPanel: openCharacterSummaryPanel,
+    onOpenTermsPanel: openTermsPanel,
     screenMode,
     selectedNovelId,
     setReaderNotice,
@@ -582,11 +586,13 @@ export function useReaderWorkspaceModel({
     episodeContentEtag: episode?.contentEtag ?? null,
     handleCreateBookmark,
     handleOpenCharacterSummary,
+    handleOpenTerms,
     handleReturnToLibrary,
     handleToggleReaderFullscreen,
     hasUnlistedEpisodes,
     isBookmarkSaving,
     isCharacterSummaryOpen,
+    isTermsOpen,
     isEpisodeLoading,
     isReaderAiAssistantAvailable: false,
     isReaderAiAssistantOpen,
@@ -678,6 +684,7 @@ export function useReaderWorkspaceModel({
     isCharacterSummaryLoading,
     isCharacterSummaryOpen,
     isCharacterSummarySubmitting,
+    isTermsOpen,
     isEpisodeLoading,
     isImageViewerDragging,
     isImageViewerInfoOpen,
@@ -742,6 +749,7 @@ export function useReaderWorkspaceModel({
     selectedNovelId,
     sourceNovelTitle: currentNovel?.title ?? toc?.title ?? "小説",
     toc,
+    termsData,
     tocPagination,
     totalPages,
     verticalLastPageReservePx,

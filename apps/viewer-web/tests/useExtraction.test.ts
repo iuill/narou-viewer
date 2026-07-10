@@ -3,23 +3,37 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
-import { fetchCharacterJobs, fetchCharacterSummary, submitCharacterJob } from "../src/features/characters/api";
-import type { CharacterJobsResponse, CharacterSummaryResponse } from "../src/features/characters/types";
+import { fetchCharacterSummary } from "../src/features/characters/api";
+import type { CharacterSummaryResponse } from "../src/features/characters/types";
+import {
+  fetchExtractionJobs,
+  submitExtraction,
+} from "../src/features/extraction/api";
+import type { ExtractionJobsResponse } from "../src/features/extraction/types";
 import type { TocResponse } from "../src/features/reader/types";
-import { useCharacterSummary } from "../src/hooks/useCharacterSummary";
+import { fetchTerms } from "../src/features/terms/api";
+import type { TermsResponse } from "../src/features/terms/types";
+import { useExtraction } from "../src/hooks/useExtraction";
 
 vi.mock("../src/features/characters/api", () => ({
-  fetchCharacterJobs: vi.fn(),
   fetchCharacterSummary: vi.fn(),
-  submitCharacterJob: vi.fn()
 }));
+vi.mock("../src/features/extraction/api", () => ({
+  clearExtraction: vi.fn(),
+  fetchExtractionJobs: vi.fn(),
+  submitExtraction: vi.fn(),
+}));
+vi.mock("../src/features/terms/api", () => ({ fetchTerms: vi.fn() }));
 
-type HookResult = ReturnType<typeof useCharacterSummary>;
+type HookResult = ReturnType<typeof useExtraction>;
 
 function installDom(): JSDOM {
-  const dom = new JSDOM("<!doctype html><html><body><div id=\"root\"></div></body></html>", {
-    url: "http://localhost/"
-  });
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="root"></div></body></html>',
+    {
+      url: "http://localhost/",
+    },
+  );
 
   vi.stubGlobal("window", dom.window);
   vi.stubGlobal("document", dom.window.document);
@@ -54,7 +68,7 @@ function createToc(): TocResponse {
         sourceUrl: null,
         updatedAt: null,
         contentEtag: "toc-1",
-        bodyStatus: "complete"
+        bodyStatus: "complete",
       },
       {
         episodeIndex: "2",
@@ -64,19 +78,31 @@ function createToc(): TocResponse {
         sourceUrl: null,
         updatedAt: null,
         contentEtag: "toc-2",
-        bodyStatus: "complete"
-      }
-    ]
+        bodyStatus: "complete",
+      },
+    ],
   };
 }
 
-function createReadySummary(upToEpisodeIndex: string): CharacterSummaryResponse {
+function createReadySummary(
+  upToEpisodeIndex: string,
+): CharacterSummaryResponse {
   return {
     status: "ready",
     novelId: "novel-a",
     upToEpisodeIndex,
     processedUpToEpisodeIndex: upToEpisodeIndex,
-    characters: []
+    characters: [],
+  };
+}
+
+function createReadyTerms(upToEpisodeIndex: string): TermsResponse {
+  return {
+    status: "ready",
+    novelId: "novel-a",
+    upToEpisodeIndex,
+    processedUpToEpisodeIndex: upToEpisodeIndex,
+    terms: [],
   };
 }
 
@@ -93,7 +119,7 @@ function renderHookHarness(props: {
   let openCalls = 0;
 
   function Harness() {
-    const result = useCharacterSummary({
+    const result = useExtraction({
       currentTocEpisodeIndex: props.currentTocEpisodeIndex ?? 1,
       formatEpisodeOrderLabel: (episodeIndex) => episodeIndex,
       isOpen: true,
@@ -101,6 +127,7 @@ function renderHookHarness(props: {
       onOpenPanel: () => {
         openCalls += 1;
       },
+      onOpenTermsPanel: vi.fn(),
       screenMode: "reader",
       selectedNovelId: "novel-a",
       setReaderNotice: (nextNotice) => {
@@ -111,7 +138,7 @@ function renderHookHarness(props: {
           notices.push(nextNotice);
         }
       },
-      toc: createToc()
+      toc: createToc(),
     });
     props.onRender(result, notices, openCalls);
     return null;
@@ -122,7 +149,7 @@ function renderHookHarness(props: {
   return root;
 }
 
-describe("useCharacterSummary", () => {
+describe("useExtraction", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -130,15 +157,16 @@ describe("useCharacterSummary", () => {
 
   it("opens with fallback summary notice when target is not generated yet", async () => {
     installDom();
-    const jobs: CharacterJobsResponse = { jobs: [] };
-    vi.mocked(fetchCharacterJobs).mockResolvedValue(jobs);
+    const jobs: ExtractionJobsResponse = { jobs: [] };
+    vi.mocked(fetchExtractionJobs).mockResolvedValue(jobs);
+    vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
     vi.mocked(fetchCharacterSummary)
       .mockResolvedValueOnce({
         status: "not_generated",
         novelId: "novel-a",
         upToEpisodeIndex: "2",
         processedUpToEpisodeIndex: "1",
-        characters: []
+        characters: [],
       })
       .mockResolvedValueOnce(createReadySummary("1"));
 
@@ -151,7 +179,7 @@ describe("useCharacterSummary", () => {
         onRender: (result, _notices, nextOpenCalls) => {
           latest = result;
           openCalls = nextOpenCalls;
-        }
+        },
       });
       await flushAsyncWork();
     });
@@ -165,7 +193,9 @@ describe("useCharacterSummary", () => {
     expect(fetchCharacterSummary).toHaveBeenNthCalledWith(1, "novel-a", "2");
     expect(fetchCharacterSummary).toHaveBeenNthCalledWith(2, "novel-a", "1");
     expect(latest?.data?.status).toBe("ready");
-    expect(latest?.notice).toContain("第1話時点までの生成済み一覧を表示しています。");
+    expect(latest?.notice).toContain(
+      "第1話時点までの生成済み一覧を表示しています。",
+    );
 
     await act(async () => {
       root?.unmount();
@@ -174,14 +204,15 @@ describe("useCharacterSummary", () => {
 
   it("submits a character summary job and refreshes the panel", async () => {
     installDom();
-    vi.mocked(fetchCharacterJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
     vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
-    vi.mocked(submitCharacterJob).mockResolvedValue({
+    vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
+    vi.mocked(submitExtraction).mockResolvedValue({
       jobId: "job-a",
       generationStrategy: "parallel_identity",
       message: "生成を開始しました。",
       requestedUpToEpisodeIndex: "2",
-      status: "queued"
+      status: "queued",
     });
 
     let latest: HookResult | null = null;
@@ -193,7 +224,7 @@ describe("useCharacterSummary", () => {
         onRender: (result, notices) => {
           latest = result;
           latestNotices = notices;
-        }
+        },
       });
       await flushAsyncWork();
     });
@@ -205,9 +236,9 @@ describe("useCharacterSummary", () => {
       await flushAsyncWork();
     });
 
-    expect(submitCharacterJob).toHaveBeenCalledWith("novel-a", {
+    expect(submitExtraction).toHaveBeenCalledWith("novel-a", {
       generationStrategy: "parallel_identity",
-      upToEpisodeIndex: "2"
+      upToEpisodeIndex: "2",
     });
     expect(fetchCharacterSummary).toHaveBeenCalledWith("novel-a", "2");
     expect(latestNotices).toContain("生成を開始しました。");
@@ -215,5 +246,75 @@ describe("useCharacterSummary", () => {
     await act(async () => {
       root?.unmount();
     });
+  });
+
+  it("resolves character and term fallbacks independently", async () => {
+    installDom();
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
+    vi.mocked(fetchTerms)
+      .mockResolvedValueOnce({
+        status: "not_generated",
+        novelId: "novel-a",
+        upToEpisodeIndex: "2",
+        processedUpToEpisodeIndex: "1",
+        terms: [],
+      })
+      .mockResolvedValueOnce(createReadyTerms("1"));
+
+    let latest: HookResult | null = null;
+    let root: Root | null = null;
+    await act(async () => {
+      root = renderHookHarness({
+        currentTocEpisodeIndex: 2,
+        onRender: (result) => {
+          latest = result;
+        },
+      });
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+
+    expect(latest?.data?.upToEpisodeIndex).toBe("2");
+    expect(latest?.termsData?.upToEpisodeIndex).toBe("1");
+    expect(latest?.notice).toContain(
+      "第2話時点の用語一覧はまだ生成されていません。",
+    );
+    await act(async () => root?.unmount());
+  });
+
+  it("shows an actionable notice for legacy character-only state", async () => {
+    installDom();
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
+    vi.mocked(fetchTerms).mockResolvedValue({
+      status: "not_generated",
+      novelId: "novel-a",
+      upToEpisodeIndex: "2",
+      processedUpToEpisodeIndex: null,
+      terms: [],
+    });
+
+    let latest: HookResult | null = null;
+    let root: Root | null = null;
+    await act(async () => {
+      root = renderHookHarness({
+        currentTocEpisodeIndex: 2,
+        onRender: (result) => {
+          latest = result;
+        },
+      });
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+    expect(latest?.notice).toContain("旧生成データには用語が含まれないため");
+    expect(latest?.canClear).toBe(true);
+    await act(async () => root?.unmount());
   });
 });

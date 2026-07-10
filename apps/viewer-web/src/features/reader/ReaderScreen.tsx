@@ -13,6 +13,7 @@ import { ReaderAiAssistantPanel, type ReaderAiAssistantState } from "../../Reade
 import { ReaderBookmarkPanel } from "../../ReaderBookmarkPanel";
 import { ReaderBottomControls, type ReaderControlAction } from "../../ReaderBottomControls";
 import { ReaderCharacterSummaryPanel } from "../../ReaderCharacterSummaryPanel";
+import { ReaderTermListPanel } from "../../ReaderTermListPanel";
 import { ReaderExperimentalFontPanel } from "../../ReaderExperimentalFontPanel";
 import { ReaderFloatingPanel } from "../../ReaderFloatingPanel";
 import { ReaderImageViewer, type ImageViewerState } from "../../ReaderImageViewer";
@@ -22,7 +23,9 @@ import { ReaderSettingsPanel } from "../../ReaderSettingsPanel";
 import { ReaderSpeechPanel } from "../../ReaderSpeechPanel";
 import { ReaderSyncConflictPanel } from "../../ReaderSyncConflictPanel";
 import type { ApiClientUpdateRequiredEventDetail } from "../../api/contract";
-import type { CharacterGenerationStrategy, CharacterJobSummary, CharacterSummaryResponse } from "../characters/types";
+import type { CharacterSummaryResponse } from "../characters/types";
+import type { ExtractionGenerationStrategy, ExtractionJobSummary } from "../extraction/types";
+import type { TermsResponse } from "../terms/types";
 import type { NovelSummary } from "../library/types";
 import type { ReaderSpeechChunk, ReaderSpeechVoiceOption } from "../../readerSpeech";
 import type { ReaderExperimentalFontId, ReaderExperimentalFontWeight, ReadingMode } from "../../readerPreferences";
@@ -53,15 +56,15 @@ export type ReaderScreenState = {
   activeReaderSettings: NovelReaderSettingsResponse | null;
   bookmarks: Bookmark[];
   canApplyReaderSyncConflict: boolean;
-  characterSummaryActiveJobs: CharacterJobSummary[];
+  characterSummaryActiveJobs: ExtractionJobSummary[];
   characterSummaryCanClear: boolean;
   characterSummaryCanGenerate: boolean;
-  characterSummaryCompletedJobs: CharacterJobSummary[];
+  characterSummaryCompletedJobs: ExtractionJobSummary[];
   characterSummaryData: CharacterSummaryResponse | null;
   characterSummaryDefaultUpToEpisodeIndex: EpisodeIndex | null;
   characterSummaryError: string | null;
   characterSummaryNotice: string | null;
-  characterSummaryGenerationStrategy: CharacterGenerationStrategy;
+  characterSummaryGenerationStrategy: ExtractionGenerationStrategy;
   characterSummaryUpToEpisodeIndex: string;
   clientUpdateRequired: ApiClientUpdateRequiredEventDetail | null;
   currentNovel: NovelSummary | null;
@@ -79,6 +82,7 @@ export type ReaderScreenState = {
   isCharacterSummaryLoading: boolean;
   isCharacterSummaryOpen: boolean;
   isCharacterSummarySubmitting: boolean;
+  isTermsOpen: boolean;
   isEpisodeLoading: boolean;
   isImageViewerDragging: boolean;
   isImageViewerInfoOpen: boolean;
@@ -143,6 +147,7 @@ export type ReaderScreenState = {
   selectedNovelId: string | null;
   sourceNovelTitle: string;
   toc: TocResponse | null;
+  termsData: TermsResponse | null;
   tocPagination: PaginationResult<TocEpisode>;
   totalPages: number;
   verticalLastPageReservePx: number;
@@ -183,7 +188,7 @@ export type ReaderScreenCommands = {
   handleViewportTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => void;
   readerCommands: ReaderSelectionCommands;
   readerSessionCommands: ReaderStateCommands;
-  setCharacterSummaryGenerationStrategy: Dispatch<SetStateAction<CharacterGenerationStrategy>>;
+  setCharacterSummaryGenerationStrategy: Dispatch<SetStateAction<ExtractionGenerationStrategy>>;
   setCharacterSummaryUpToEpisodeIndex: Dispatch<SetStateAction<string>>;
   setDebugPageOverflow: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -290,6 +295,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     isCharacterSummaryLoading,
     isCharacterSummaryOpen,
     isCharacterSummarySubmitting,
+    isTermsOpen,
     isEpisodeLoading,
     isImageViewerDragging,
     isImageViewerInfoOpen,
@@ -388,6 +394,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     sourceNovelTitle,
     stopReaderSpeech,
     toc,
+    termsData,
     tocPagination,
     totalPages,
     verticalLastPageReservePx,
@@ -643,6 +650,18 @@ export function ReaderScreen(props: ReaderScreenProps) {
               onSubmit={handleGenerateCharacterSummary}
               requestedGenerationStrategy={characterSummaryGenerationStrategy}
               requestedUpToEpisodeIndex={characterSummaryUpToEpisodeIndex}
+            />
+          </section>
+        ) : null}
+        {isTermsOpen ? (
+          <section ref={readerPanelRef}>
+            <ReaderTermListPanel
+              data={termsData}
+              error={characterSummaryError}
+              formatEpisodeOrderLabel={formatCharacterSummaryEpisodeOrder}
+              isLoading={isCharacterSummaryLoading}
+              notice={characterSummaryNotice}
+              onClose={closeReaderPanel}
             />
           </section>
         ) : null}

@@ -1,12 +1,8 @@
 import { useMemo, useState } from "react";
 import { formatDate } from "./shared/date";
 import { ReaderFloatingPanel } from "./ReaderFloatingPanel";
-import type {
-  CharacterGenerationStrategy,
-  CharacterJobSummary,
-  CharacterSummaryEntry,
-  CharacterSummaryResponse
-} from "./features/characters/types";
+import type { CharacterSummaryEntry, CharacterSummaryResponse } from "./features/characters/types";
+import type { ExtractionGenerationStrategy, ExtractionJobSummary } from "./features/extraction/types";
 
 type CharacterImportanceCategory = NonNullable<CharacterSummaryEntry["importance"]>["category"];
 
@@ -21,18 +17,18 @@ type Props = {
   notice: string | null;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
   isLoading: boolean;
-  requestedGenerationStrategy: CharacterGenerationStrategy;
+  requestedGenerationStrategy: ExtractionGenerationStrategy;
   requestedUpToEpisodeIndex: string;
   canGenerate: boolean;
   canClear: boolean;
   isSubmitting: boolean;
   isClearing: boolean;
   data: CharacterSummaryResponseLike | null;
-  activeJobs: CharacterJobSummary[];
-  completedJobs: CharacterJobSummary[];
+  activeJobs: ExtractionJobSummary[];
+  completedJobs: ExtractionJobSummary[];
   onClose: () => void;
   onClear: () => void | Promise<void>;
-  onRequestedGenerationStrategyChange: (strategy: CharacterGenerationStrategy) => void;
+  onRequestedGenerationStrategyChange: (strategy: ExtractionGenerationStrategy) => void;
   onRequestedUpToEpisodeIndexChange: (episodeIndex: string) => void;
   onSubmit: () => void | Promise<void>;
 };
@@ -53,7 +49,7 @@ const CHARACTER_JOB_STAGE_LABELS: Record<string, string> = {
   failed: "失敗",
   recovered: "再開待ち"
 };
-const CHARACTER_GENERATION_STRATEGY_LABELS: Record<CharacterGenerationStrategy, string> = {
+const CHARACTER_GENERATION_STRATEGY_LABELS: Record<ExtractionGenerationStrategy, string> = {
   discovery_parallel_correction: "名前発見 + 並列抽出 + 補正",
   parallel_identity: "並列抽出 + 同一人物解決",
   serial: "現行 serial"
@@ -99,7 +95,7 @@ export function ReaderCharacterSummaryPanel({
       description={
         defaultUpToEpisodeIndex
           ? `第${defaultUpToEpisodeIndex}話時点までの情報を確認します。`
-          : "第1話閲覧中のため、キャラクター一覧は生成できません。"
+          : "第1話閲覧中のため、抽出は実行できません。"
       }
       onClose={onClose}
       title="キャラクター一覧"
@@ -107,7 +103,7 @@ export function ReaderCharacterSummaryPanel({
       {error ? <p className="message error">{error}</p> : null}
       {notice ? <p className="message">{notice}</p> : null}
       <p aria-live="polite" className={`reader-character-status${isLoading ? " is-visible" : ""}`}>
-        <span>{isLoading ? "キャラクター情報を読み込み中..." : "読み込み完了"}</span>
+        <span>{isLoading ? "人物と用語の抽出情報を読み込み中..." : "読み込み完了"}</span>
       </p>
       <form
         className="reader-panel-card reader-panel-card--compact reader-character-form"
@@ -132,7 +128,7 @@ export function ReaderCharacterSummaryPanel({
           <span>生成方式</span>
           <select
             disabled={defaultUpToEpisodeIndex === null || isSubmitting}
-            onChange={(event) => onRequestedGenerationStrategyChange(event.target.value as CharacterGenerationStrategy)}
+            onChange={(event) => onRequestedGenerationStrategyChange(event.target.value as ExtractionGenerationStrategy)}
             value={requestedGenerationStrategy}
           >
             <option value="parallel_identity">{CHARACTER_GENERATION_STRATEGY_LABELS.parallel_identity}</option>
@@ -147,7 +143,7 @@ export function ReaderCharacterSummaryPanel({
             className="reader-character-clear-button"
             disabled={!canClear || isClearing || isSubmitting}
             onClick={() => {
-              if (window.confirm("保存済みのキャラクター一覧生成データと履歴をクリアします。よろしいですか？")) {
+              if (window.confirm("保存済みの人物・用語の抽出データと履歴をクリアします。よろしいですか？")) {
                 void onClear();
               }
             }}
@@ -156,7 +152,7 @@ export function ReaderCharacterSummaryPanel({
             {isClearing ? "クリア中..." : "生成データをクリア"}
           </button>
           <button disabled={!canGenerate || isSubmitting} type="submit">
-            {isSubmitting ? "登録中..." : "生成を依頼"}
+            {isSubmitting ? "登録中..." : "人物と用語を抽出"}
           </button>
         </div>
       </form>
@@ -305,14 +301,15 @@ export function ReaderCharacterSummaryPanel({
   );
 }
 
-function CharacterJobProgress({ job }: { job: CharacterJobSummary }) {
+function CharacterJobProgress({ job }: { job: ExtractionJobSummary }) {
   const progress = clampProgress(job.progress);
   const batchLabel =
     job.currentBatchIndex && job.batchCount ? `batch ${job.currentBatchIndex}/${job.batchCount}` : null;
   const generatedLabel =
     typeof job.generatedCharacterCount === "number" ? `${job.generatedCharacterCount} 人まで反映` : null;
+  const generatedTermLabel = typeof job.generatedTermCount === "number" ? `${job.generatedTermCount} 用語まで反映` : null;
 
-  if (progress === null && batchLabel === null && generatedLabel === null) {
+  if (progress === null && batchLabel === null && generatedLabel === null && generatedTermLabel === null) {
     return null;
   }
 
@@ -334,16 +331,19 @@ function CharacterJobProgress({ job }: { job: CharacterJobSummary }) {
         {progress !== null ? `${progress}%` : null}
         {batchLabel ? `${progress !== null ? " / " : ""}${batchLabel}` : null}
         {generatedLabel ? `${progress !== null || batchLabel ? " / " : ""}${generatedLabel}` : null}
+        {generatedTermLabel
+          ? `${progress !== null || batchLabel || generatedLabel ? " / " : ""}${generatedTermLabel}`
+          : null}
       </p>
     </div>
   );
 }
 
-function formatCharacterJobStage(job: CharacterJobSummary): string {
+function formatCharacterJobStage(job: ExtractionJobSummary): string {
   return CHARACTER_JOB_STAGE_LABELS[job.progressStage ?? job.status] ?? job.progressStage ?? job.status;
 }
 
-function formatCharacterGenerationStrategy(strategy: CharacterJobSummary["generationStrategy"]): string {
+function formatCharacterGenerationStrategy(strategy: ExtractionJobSummary["generationStrategy"]): string {
   if (strategy === "serial" || strategy === "parallel_identity" || strategy === "discovery_parallel_correction") {
     return CHARACTER_GENERATION_STRATEGY_LABELS[strategy];
   }

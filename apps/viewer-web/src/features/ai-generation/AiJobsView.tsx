@@ -33,7 +33,7 @@ export function AiJobsView({
           <div className="panel-header compact">
             <div>
               <h3>キャラ生成履歴</h3>
-              <p>キャラクター一覧生成の進行状況と失敗履歴を確認できます。</p>
+              <p>人物と用語の抽出状況と失敗履歴を確認できます。</p>
             </div>
             <div className="mode-toggle ai-job-filter-tabs">
               <button className={aiGenerationJobFilter === "active" ? "active" : ""} onClick={() => onSetAiGenerationJobFilter("active")} type="button">

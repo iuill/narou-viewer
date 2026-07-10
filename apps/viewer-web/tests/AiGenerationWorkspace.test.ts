@@ -369,6 +369,14 @@ describe("AiGenerationWorkspace", () => {
               score: 0.91
             }
           }
+        ],
+        terms: [
+          {
+            term: "聖剣",
+            reading: "せいけん",
+            category: "item",
+            description: "王家に伝わる剣。"
+          }
         ]
       },
       aiGenerationPlaygroundPromptPreview: {

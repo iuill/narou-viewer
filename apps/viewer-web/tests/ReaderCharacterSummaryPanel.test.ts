@@ -327,7 +327,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root, dom } = await renderPanel(props);
 
-    expect(container.textContent).toContain("第1話閲覧中のため、キャラクター一覧は生成できません。");
+    expect(container.textContent).toContain("第1話閲覧中のため、抽出は実行できません。");
     expect(container.textContent).toContain("第1話ではキャラクター一覧を生成できません。");
 
     const input = container.querySelector('input[type="number"]');
@@ -335,7 +335,7 @@ describe("ReaderCharacterSummaryPanel", () => {
       throw new Error("number input not found");
     }
 
-    const submitButton = getButtonByText(container, "生成を依頼");
+    const submitButton = getButtonByText(container, "人物と用語を抽出");
     expect(input.disabled).toBe(true);
     expect(submitButton.disabled).toBe(true);
 
@@ -352,7 +352,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(container.textContent).toContain("キャラクター情報を読み込み中...");
+    expect(container.textContent).toContain("人物と用語の抽出情報を読み込み中...");
     expect(container.textContent).toContain("登録中...");
 
     await act(async () => {

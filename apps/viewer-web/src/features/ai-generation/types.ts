@@ -1,5 +1,10 @@
-import type { CharacterGenerationStrategy, CharacterJobSummary, CharacterSummaryEntry } from "../characters/types";
+import type { CharacterSummaryEntry } from "../characters/types";
+import type {
+  ExtractionGenerationStrategy as CharacterGenerationStrategy,
+  ExtractionJobSummary as CharacterJobSummary
+} from "../extraction/types";
 import type { EpisodeIndex } from "../reader/types";
+import type { TermEntry } from "../terms/types";
 
 export type AiGenerationSettingsResponse = {
   apiBaseUrlConfigured: boolean;
@@ -104,6 +109,7 @@ export type AiGenerationPlaygroundResponse = {
   generationStrategy?: CharacterGenerationStrategy | null;
   modelId: string | null;
   characters: CharacterSummaryEntry[];
+  terms: TermEntry[];
 };
 
 export type AiGenerationPlaygroundRequest = {
@@ -138,7 +144,9 @@ export type AiGenerationPlaygroundBatchTiming = {
   chunkCount: number;
   elapsedMs: number;
   generatedCharacterCount: number;
+  generatedTermCount?: number;
   mergedCharacterCount: number;
+  mergedTermCount?: number;
   message: string;
 };
 

@@ -129,7 +129,7 @@ export function AiPlaygroundView({
                         </p>
                       </div>
                       <p>
-                        第{aiGenerationPlaygroundResult.processedUpToEpisodeIndex}話時点 / {aiGenerationPlaygroundResult.characters.length} 人
+                        第{aiGenerationPlaygroundResult.processedUpToEpisodeIndex}話時点 / {aiGenerationPlaygroundResult.characters.length} 人 / {aiGenerationPlaygroundResult.terms.length} 用語
                       </p>
                     </div>
                     {aiGenerationPlaygroundResult.characters.length > 0 ? (
@@ -166,6 +166,23 @@ export function AiPlaygroundView({
                       </div>
                     ) : (
                       <p className="message">キャラクターは抽出されませんでした。</p>
+                    )}
+                    <h4>用語</h4>
+                    {aiGenerationPlaygroundResult.terms.length > 0 ? (
+                      <div className="reader-term-cards">
+                        {aiGenerationPlaygroundResult.terms.map((term) => (
+                          <article className="reader-panel-card reader-term-card" key={term.term}>
+                            <header>
+                              <strong>{term.term}</strong>
+                              <span className="reader-panel-chip">{term.category}</span>
+                            </header>
+                            {term.reading ? <p>{term.reading}</p> : null}
+                            <p>{term.description}</p>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="message">用語は抽出されませんでした。</p>
                     )}
                   </>
                 ) : (

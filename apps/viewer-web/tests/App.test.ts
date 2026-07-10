@@ -6034,11 +6034,21 @@ describe("App", () => {
         });
       }
 
+      if (requestUrl.pathname === "/api/library/novels/n1/terms") {
+        return jsonResponse({
+          status: "ready",
+          novelId: "n1",
+          upToEpisodeIndex: "2",
+          processedUpToEpisodeIndex: "2",
+          terms: [{ term: "聖剣", reading: "せいけん", category: "item", description: "王家に伝わる剣。" }]
+        });
+      }
+
       if (requestUrl.pathname === "/api/library/novels/n1/extraction-jobs") {
         if (init?.method === "POST") {
           return jsonResponse({
             jobId: "job-2",
-            message: "キャラクター一覧生成を依頼しました。"
+            message: "人物と用語の抽出を依頼しました。"
           });
         }
 
@@ -6075,14 +6085,19 @@ describe("App", () => {
     await waitFor(() => Boolean(container.querySelector(".reader-character-panel")));
     expect(container.textContent).toContain("キャラクターは抽出されませんでした。必要なら対象話数を変えて再生成できます。");
 
-    const generateButton = getButtonByText(container, "生成を依頼");
+    const generateButton = getButtonByText(container, "人物と用語を抽出");
     await click(generateButton, dom);
-    await waitFor(() => container.textContent?.includes("キャラクター一覧生成を依頼しました。") === true);
+    await waitFor(() => container.textContent?.includes("人物と用語の抽出を依頼しました。") === true);
     await waitFor(() => container.textContent?.includes("主人公") === true);
     expect(container.textContent).toContain("過去の生成履歴");
 
     await click(container.querySelector('button[aria-label="キャラクター一覧を閉じる"]') as Element, dom);
     await waitFor(() => !container.textContent?.includes("キャラクター一覧"));
+
+    await click(container.querySelector('button[aria-label="用語一覧"]') as Element, dom);
+    await waitFor(() => Boolean(container.querySelector(".reader-term-panel")));
+    expect(container.textContent).toContain("聖剣");
+    expect(container.textContent).toContain("王家に伝わる剣。");
 
     await act(async () => {
       root.unmount();
@@ -6295,6 +6310,16 @@ describe("App", () => {
         throw new Error(
           `Unhandled characters request upToEpisodeIndex: ${requestUrl.searchParams.get("upToEpisodeIndex")}`
         );
+      }
+
+      if (requestUrl.pathname === "/api/library/novels/n1/terms") {
+        return jsonResponse({
+          status: "ready",
+          novelId: "n1",
+          upToEpisodeIndex: "2",
+          processedUpToEpisodeIndex: "2",
+          terms: []
+        });
       }
 
       if (requestUrl.pathname === "/api/library/novels/n1/extraction-jobs") {

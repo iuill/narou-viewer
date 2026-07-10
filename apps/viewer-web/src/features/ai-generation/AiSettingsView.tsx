@@ -244,7 +244,7 @@ export function AiSettingsView({
           <section className="library-queue-section">
             <div className="panel-header compact library-queue-header">
               <div>
-                <h3>キャラクター生成モデル</h3>
+                <h3>抽出モデル</h3>
                 <p>名前発見 + 並列抽出 + 補正で使う補助モデルを指定します。</p>
               </div>
             </div>
@@ -409,7 +409,7 @@ export function AiSettingsView({
                 />
                 {openAiGenerationHelpKey === "modelId" ? (
                   <p className="field-help-text">
-                    キャラクター一覧生成に使う OpenRouter の実モデルIDです。例: `openai/gpt-5-mini`
+                    人物と用語の抽出に使う OpenRouter の実モデルIDです。例: `openai/gpt-5-mini`
                   </p>
                 ) : null}
                 {editingAiGenerationProfileDraft.modelInfo ? (
@@ -531,7 +531,7 @@ export function AiSettingsView({
             <p className="message">編集するプロファイルを選択してください。</p>
           )}
           <p className="message">
-            `プロファイル設定を保存` で、共通 APIキー と編集中プロファイル、既定プロファイル、キャラクター生成モデルの指定が反映されます。APIキー欄を空のまま保存すると、既存のキーは変更しません。
+            `プロファイル設定を保存` で、共通 APIキー と編集中プロファイル、既定プロファイル、抽出モデルの指定が反映されます。APIキー欄を空のまま保存すると、既存のキーは変更しません。
           </p>
 
   </div>;
