@@ -2604,6 +2604,7 @@ describe("App", () => {
       "読書設定",
       "実験フォント",
       "キャラクター一覧",
+      "用語一覧",
       "読書AI",
       "情報",
       "フルスクリーン表示"
@@ -3208,6 +3209,8 @@ describe("App", () => {
       dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
     });
     await waitFor(() => Boolean(container.querySelector(".reader-shell")) && container.textContent?.includes("小説A 第1話") === true);
+	await click(getButtonByLabel(container, "読書設定"), dom);
+	await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
     resolveN1SettingsPut?.(
       jsonResponse({
@@ -6338,7 +6341,7 @@ describe("App", () => {
     await click(container.querySelector('button[aria-label="キャラクター一覧"]') as Element, dom);
     await waitFor(() => container.textContent?.includes("主人公") === true);
     expect(container.textContent).toContain(
-      "第1話時点までの生成済み一覧を表示しています。第2話時点の一覧はまだ生成されていません。"
+      "第1話時点までの生成済み一覧を表示しています。第2話時点の人物一覧はまだ生成されていません。"
     );
     expect(container.textContent).toContain("第1話時点 / 1 / 1 人");
 
