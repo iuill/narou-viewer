@@ -141,6 +141,95 @@ func ApplyTermDelta(existing []GeneratedTerm, incoming []GeneratedTerm) []Genera
 	return result
 }
 
+// BuildCumulativeSnapshots folds episode-local description facts into the
+// self-contained snapshots expected by projection and display code. It is used
+// after parallel extraction, where later batches cannot see earlier results.
+func BuildCumulativeSnapshots(existing []GeneratedTerm, incoming []GeneratedTerm) []GeneratedTerm {
+	facts := aggregateTermFacts(incoming)
+	incomingEpisodes := map[string]map[string]bool{}
+	for _, term := range facts {
+		key := strings.TrimSpace(term.Term)
+		incomingEpisodes[key] = map[string]bool{}
+		for _, history := range term.DescriptionHistory {
+			incomingEpisodes[key][strings.TrimSpace(history.EpisodeIndex)] = true
+		}
+	}
+	merged := ApplyTermDelta(existing, facts)
+	for termIndex := range merged {
+		previous := ""
+		for historyIndex := range merged[termIndex].DescriptionHistory {
+			current := strings.TrimSpace(merged[termIndex].DescriptionHistory[historyIndex].Text)
+			episodeIndex := strings.TrimSpace(merged[termIndex].DescriptionHistory[historyIndex].EpisodeIndex)
+			if incomingEpisodes[merged[termIndex].Term][episodeIndex] {
+				current = mergeDescriptionSnapshot(previous, current)
+			}
+			merged[termIndex].DescriptionHistory[historyIndex].Text = current
+			previous = merged[termIndex].DescriptionHistory[historyIndex].Text
+		}
+	}
+	return merged
+}
+
+func aggregateTermFacts(incoming []GeneratedTerm) []GeneratedTerm {
+	byTerm := map[string]GeneratedTerm{}
+	order := []string{}
+	for _, candidate := range incoming {
+		key := strings.TrimSpace(candidate.Term)
+		if key == "" {
+			continue
+		}
+		current, found := byTerm[key]
+		if !found {
+			current = GeneratedTerm{Term: key}
+			order = append(order, key)
+		}
+		current.ReadingHistory = mergeTextVersions(current.ReadingHistory, candidate.ReadingHistory)
+		current.CategoryHistory = mergeCategoryVersions(current.CategoryHistory, candidate.CategoryHistory)
+		descriptions := map[string]string{}
+		for _, history := range current.DescriptionHistory {
+			descriptions[strings.TrimSpace(history.EpisodeIndex)] = strings.TrimSpace(history.Text)
+		}
+		for _, history := range candidate.DescriptionHistory {
+			episodeIndex := strings.TrimSpace(history.EpisodeIndex)
+			if episodeIndex != "" {
+				descriptions[episodeIndex] = mergeDescriptionSnapshot(descriptions[episodeIndex], history.Text)
+			}
+		}
+		current.DescriptionHistory = current.DescriptionHistory[:0]
+		for episodeIndex, text := range descriptions {
+			if text != "" {
+				current.DescriptionHistory = append(current.DescriptionHistory, HistoryVersion{Text: text, EpisodeIndex: episodeIndex})
+			}
+		}
+		sort.Slice(current.DescriptionHistory, func(i, j int) bool {
+			return compareEpisode(current.DescriptionHistory[i].EpisodeIndex, current.DescriptionHistory[j].EpisodeIndex) < 0
+		})
+		byTerm[key] = current
+	}
+	result := make([]GeneratedTerm, 0, len(order))
+	for _, key := range order {
+		result = append(result, byTerm[key])
+	}
+	return result
+}
+
+func mergeDescriptionSnapshot(previous string, current string) string {
+	previous = strings.TrimSpace(previous)
+	current = strings.TrimSpace(current)
+	switch {
+	case previous == "":
+		return current
+	case current == "":
+		return previous
+	case strings.Contains(current, previous):
+		return current
+	case strings.Contains(previous, current):
+		return previous
+	default:
+		return previous + " " + current
+	}
+}
+
 func ReplaceFromEpisodeIndex(generated []GeneratedTerm, fromEpisodeIndex string) []GeneratedTerm {
 	result := make([]GeneratedTerm, 0, len(generated))
 	for _, term := range generated {

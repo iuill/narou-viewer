@@ -79,7 +79,7 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
-	extracted, _, usageRequests, unresolved, err := r.extractParallelIdentityCandidates(ctx, config, novelID, upToEpisodeIndex, seedTerms, runtimeBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, usageRequests, unresolved, err := r.extractParallelIdentityCandidates(ctx, config, novelID, upToEpisodeIndex, seedTerms, runtimeBatches, progressSink, initialUnresolved)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), usageRequests, err
 	}
@@ -98,13 +98,8 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	generated = allocator.Assign(generated)
 	sortGeneratedCharacters(generated)
 	unresolved = filterResolvedGeneratedUnresolvedMentions(unresolved, generated)
-	generatedTerms, termUsage, err := r.extractTermsChronologically(ctx, config, novelID, upToEpisodeIndex, generated, seedTerms, batches, unresolved)
-	if err != nil {
-		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
-	}
-	usageRequests = appendReindexedUsageRequests(usageRequests, termUsage)
 	state := extractionStateFromAllocator(unresolved, allocator)
-	state.Terms = generatedTerms
+	state.Terms = core.FilterAndMergeParallelTermFacts(seedTerms, rawTerms, generated)
 	return generated, state, usageRequests, nil
 }
 
@@ -131,7 +126,7 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), discoveryUsage, err
 	}
-	extracted, _, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved)
 	usageRequests = append(discoveryUsage, usageRequests...)
 	for index := range usageRequests {
 		usageRequests[index].RequestIndex = index
@@ -164,47 +159,9 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	}
 	sortGeneratedCharacters(generated)
 	unresolved = filterResolvedGeneratedUnresolvedMentions(unresolved, generated)
-	generatedTerms, termUsage, err := r.extractTermsChronologically(ctx, config, novelID, upToEpisodeIndex, generated, seedTerms, batches, unresolved)
-	if err != nil {
-		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
-	}
-	usageRequests = appendReindexedUsageRequests(usageRequests, termUsage)
 	state := extractionStateFromAllocator(unresolved, allocator)
-	state.Terms = generatedTerms
+	state.Terms = core.FilterAndMergeParallelTermFacts(seedTerms, rawTerms, generated)
 	return generated, state, usageRequests, nil
-}
-
-func (r *Runtime) extractTermsChronologically(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, generatedCharacters []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, pendingUnresolved []characters.GeneratedUnresolvedMention) ([]terms.GeneratedTerm, []ai.UsageRequest, error) {
-	generatedTerms := append([]terms.GeneratedTerm{}, seedTerms...)
-	usageRequests := []ai.UsageRequest{}
-	for _, batch := range batches {
-		remaining := append([]extractionChunk{}, batch.Chunks...)
-		for len(remaining) > 0 {
-			runtimeBatch, nextRemaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, generatedCharacters, generatedTerms, batch, remaining, pendingUnresolved)
-			if err != nil {
-				return nil, usageRequests, err
-			}
-			result, err := r.generateOpenRouterBatchForFocus(ctx, config, novelID, upToEpisodeIndex, generatedCharacters, generatedTerms, runtimeBatch, "terms", pendingUnresolved)
-			if err != nil {
-				return nil, usageRequests, err
-			}
-			result.Usage.Kind = "extraction_terms_chronological"
-			result.Usage.RequestIndex = len(usageRequests)
-			usageRequests = append(usageRequests, result.Usage)
-			generatedTerms = core.FilterAndMergeTermDeltas(generatedTerms, result.Delta.Terms, generatedCharacters)
-			remaining = nextRemaining
-		}
-	}
-	return generatedTerms, usageRequests, nil
-}
-
-func appendReindexedUsageRequests(existing []ai.UsageRequest, incoming []ai.UsageRequest) []ai.UsageRequest {
-	result := append([]ai.UsageRequest{}, existing...)
-	for _, request := range incoming {
-		request.RequestIndex = len(result)
-		result = append(result, request)
-	}
-	return result
 }
 
 func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, pendingUnresolved []characters.GeneratedUnresolvedMention) ([]extractionBatch, error) {
@@ -363,6 +320,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	results := make([]parallelIdentityExtractionResult, len(batches))
 	var sinkMu sync.Mutex
 	completedCount := 0
+	completedTermNames := map[string]bool{}
 	runErr := runParallelIdentityLLMJobs(ctx, len(batches), func(requestCtx context.Context, index int) error {
 		batch := batches[index]
 		startedAt := time.Now()
@@ -371,7 +329,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 			progressSink(appextraction.BatchProgress{Phase: "start", Batch: batch})
 			sinkMu.Unlock()
 		}
-		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "characters", initialUnresolved)
+		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "parallel_entities", initialUnresolved)
 		extraction := parallelIdentityExtractionResult{RequestIndex: index, Batch: batch, Err: err}
 		if err == nil {
 			result.Usage.RequestIndex = index
@@ -384,6 +342,11 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		if progressSink != nil {
 			sinkMu.Lock()
 			completedCount++
+			for _, term := range extraction.Terms {
+				if name := strings.TrimSpace(term.Term); name != "" {
+					completedTermNames[name] = true
+				}
+			}
 			progressSink(appextraction.BatchProgress{
 				Phase:                   "complete",
 				Batch:                   batch,
@@ -391,6 +354,8 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 				ElapsedMs:               time.Since(startedAt).Milliseconds(),
 				GeneratedCharacterCount: len(extraction.Candidates),
 				MergedCharacterCount:    len(extraction.Candidates),
+				GeneratedTermCount:      len(extraction.Terms),
+				MergedTermCount:         len(completedTermNames),
 			})
 			sinkMu.Unlock()
 		}

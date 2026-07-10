@@ -569,6 +569,17 @@ func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Term != "王都" {
 		t.Fatalf("existing terms that later resolve to a character must be removed: %+v", filtered)
 	}
+	parallelFacts := []terms.GeneratedTerm{
+		{Term: "騎士団長", DescriptionHistory: []terms.HistoryVersion{{Text: "人物。", EpisodeIndex: "2"}}},
+		{Term: "王都", DescriptionHistory: []terms.HistoryVersion{{Text: "城壁がある。", EpisodeIndex: "2"}}},
+	}
+	filtered = FilterAndMergeParallelTermFacts(existing, parallelFacts, []characters.GeneratedCharacter{{
+		CanonicalName: "騎士団長",
+		Aliases:       []characters.GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "2"}},
+	}})
+	if len(filtered) != 1 || filtered[0].Term != "王都" || filtered[0].DescriptionHistory[1].Text != "王国の首都。 城壁がある。" {
+		t.Fatalf("parallel facts must fold cumulatively and exclude character names: %+v", filtered)
+	}
 }
 
 func TestExtractionEngineMergesGeneratedCharacters(t *testing.T) {

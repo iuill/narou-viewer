@@ -1637,6 +1637,18 @@ func FilterAndMergeTermDeltas(existing []terms.GeneratedTerm, incoming []terms.G
 	return filtered
 }
 
+func FilterAndMergeParallelTermFacts(existing []terms.GeneratedTerm, incoming []terms.GeneratedTerm, generatedCharacters []characters.GeneratedCharacter) []terms.GeneratedTerm {
+	names := CharacterNameSet(generatedCharacters)
+	merged := terms.BuildCumulativeSnapshots(existing, incoming)
+	filtered := make([]terms.GeneratedTerm, 0, len(merged))
+	for _, term := range merged {
+		if !names[strings.TrimSpace(term.Term)] {
+			filtered = append(filtered, term)
+		}
+	}
+	return filtered
+}
+
 func valueOrEmptyString(value *string) string {
 	if value == nil {
 		return ""

@@ -141,13 +141,8 @@ func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID 
 		systemPromptOverride = config.SystemPrompt
 	}
 	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolved, systemPromptOverride)
-	if len(focus) > 0 {
-		switch focus[0] {
-		case "characters":
-			systemPrompt += "\nThis is the character pass. Extract character deltas and unresolved mentions only; always return terms as an empty array."
-		case "terms":
-			systemPrompt += "\nThis is the chronological term pass. Extract terms only; always return newCharacters, characterUpdates, mergeProposals, and unresolvedMentions as empty arrays."
-		}
+	if len(focus) > 0 && focus[0] == "parallel_entities" {
+		systemPrompt += "\n並列抽出では人物と用語を同じレスポンスで必ず抽出してください。この場合だけ、term の descriptionHistory は累積 snapshot ではなく、今回の episodes で新しく明示された事実だけを書いてください。過去や未来の本文から補完しないでください。"
 	}
 	messages := []ai.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}}
 	responseFormat := extractionOpenRouterResponseFormat()

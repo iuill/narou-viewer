@@ -155,8 +155,8 @@ func TestExtractParallelIdentityCandidatesReturnsFirstBatchError(t *testing.T) {
 func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
-		`{"processedUpToEpisodeIndex":"1","terms":[],"characters":[{"canonicalName":"アリス","summary":"廊下に立っていた人物。"}]}`,
-		`{"processedUpToEpisodeIndex":"2","terms":[],"characters":[{"canonicalName":"ボブ","summary":"庭にいた人物。"}]}`,
+		`{"processedUpToEpisodeIndex":"1","terms":[{"term":"魔導院","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都にある。","episodeIndex":"1"}]}],"characters":[{"canonicalName":"アリス","summary":"廊下に立っていた人物。"}]}`,
+		`{"processedUpToEpisodeIndex":"2","terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"村へ派遣された。","episodeIndex":"2"}]}],"characters":[{"canonicalName":"ボブ","summary":"庭にいた人物。"}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
@@ -203,36 +203,39 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	if len(unresolved) != 0 {
 		t.Fatalf("unresolved = %+v", unresolved)
 	}
-	if len(rawTerms) != 0 {
+	if len(rawTerms) != 2 || rawTerms[0].Term != "魔導院" || rawTerms[1].Term != "白銀騎士団" {
 		t.Fatalf("rawTerms = %+v", rawTerms)
 	}
 	completedCounts := []int{}
+	mergedTermCounts := []int{}
 	for _, progress := range progressEvents {
 		if progress.Phase == "complete" {
 			completedCounts = append(completedCounts, progress.CompletedBatchCount)
+			mergedTermCounts = append(mergedTermCounts, progress.MergedTermCount)
 		}
 	}
 	if len(completedCounts) != 2 || completedCounts[0] != 1 || completedCounts[1] != 2 {
 		t.Fatalf("completedCounts = %+v events=%+v", completedCounts, progressEvents)
 	}
+	if len(mergedTermCounts) != 2 || mergedTermCounts[0] != 1 || mergedTermCounts[1] != 2 {
+		t.Fatalf("mergedTermCounts = %+v events=%+v", mergedTermCounts, progressEvents)
+	}
 }
 
-func TestExtractTermsChronologicallyCarriesPriorSnapshotIntoNextBatch(t *testing.T) {
+func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 	requestIndex := 0
 	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if requestIndex == 1 {
-			raw, _ := json.Marshal(request["messages"])
-			if !strings.Contains(string(raw), "王都直属の騎士団") {
-				t.Fatalf("second batch should receive the first snapshot as knownTerms: %s", raw)
-			}
+		raw, _ := json.Marshal(request["messages"])
+		if !strings.Contains(string(raw), "人物と用語を同じレスポンス") {
+			t.Fatalf("parallel request must extract both entity types: %s", raw)
 		}
 		responses := []string{
 			`{"processedUpToEpisodeIndex":"1","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都直属の騎士団。","episodeIndex":"1"}]}]}`,
-			`{"processedUpToEpisodeIndex":"2","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"王都直属で、辺境の村へ派遣された騎士団。","episodeIndex":"2"}]}]}`,
+			`{"processedUpToEpisodeIndex":"2","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"辺境の村へ派遣された。","episodeIndex":"2"}]}]}`,
 		}
 		content := responses[requestIndex]
 		requestIndex++
@@ -243,13 +246,15 @@ func TestExtractTermsChronologicallyCarriesPriorSnapshotIntoNextBatch(t *testing
 	}))
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "1")
+	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "0")
 
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	batches := []extractionBatch{
 		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "白銀騎士団は王都直属の騎士団。"}}},
 		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "白銀騎士団が辺境の村へ派遣された。"}}},
 	}
-	generatedTerms, usage, err := runtime.extractTermsChronologically(
+	_, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(
 		context.Background(),
 		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true},
 		"novel-1",
@@ -258,15 +263,16 @@ func TestExtractTermsChronologicallyCarriesPriorSnapshotIntoNextBatch(t *testing
 		nil,
 		batches,
 		nil,
+		nil,
 	)
 	if err != nil {
-		t.Fatalf("extractTermsChronologically returned error: %v", err)
+		t.Fatalf("generateOpenRouterExtractionParallelIdentity returned error: %v", err)
 	}
-	if requestIndex != 2 || len(usage) != 2 || usage[1].Kind != "extraction_terms_chronological" {
+	if requestIndex != 2 || len(usage) != 2 {
 		t.Fatalf("requests=%d usage=%+v", requestIndex, usage)
 	}
-	if len(generatedTerms) != 1 || len(generatedTerms[0].DescriptionHistory) != 2 || generatedTerms[0].DescriptionHistory[1].Text != "王都直属で、辺境の村へ派遣された騎士団。" {
-		t.Fatalf("latest term snapshot must retain prior facts: %+v", generatedTerms)
+	if len(state.Terms) != 1 || len(state.Terms[0].DescriptionHistory) != 2 || state.Terms[0].DescriptionHistory[1].Text != "王都直属の騎士団。 辺境の村へ派遣された。" {
+		t.Fatalf("parallel term facts must become cumulative snapshots: %+v", state.Terms)
 	}
 }
 
