@@ -919,10 +919,7 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 		_ = writeStreamEvent(map[string]any{"type": "error", "error": extractionPlaygroundErrorMessage(err)})
 		return
 	}
-	generatedCount := 0
-	if charactersValue, ok := result["characters"].([]characters.Character); ok {
-		generatedCount = len(charactersValue)
-	}
+	generatedCount := len(result.Characters)
 	if !emittedBatchTiming {
 		_ = writeStreamEvent(map[string]any{
 			"type":                    "batchTiming",
@@ -943,24 +940,8 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (s *Server) extractionResult(ctx context.Context, novelID string, upToEpisodeIndex string, options extractionRequestOptions) (map[string]any, error) {
-	result, err := s.extractionRuntime().Result(ctx, novelID, upToEpisodeIndex, options)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"novelId":                   result.NovelID,
-		"novelTitle":                result.NovelTitle,
-		"upToEpisodeIndex":          result.UpToEpisodeIndex,
-		"processedUpToEpisodeIndex": result.ProcessedUpToEpisodeIndex,
-		"profileId":                 result.ProfileID,
-		"profileLabel":              result.ProfileLabel,
-		"generationMode":            result.GenerationMode,
-		"generationStrategy":        result.GenerationStrategy,
-		"modelId":                   result.ModelID,
-		"characters":                result.Characters,
-		"terms":                     result.Terms,
-	}, nil
+func (s *Server) extractionResult(ctx context.Context, novelID string, upToEpisodeIndex string, options extractionRequestOptions) (appextraction.Result, error) {
+	return s.extractionRuntime().Result(ctx, novelID, upToEpisodeIndex, options)
 }
 
 func (s *Server) extractionWorkflow() *appextraction.Workflow {

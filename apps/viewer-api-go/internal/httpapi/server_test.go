@@ -1787,6 +1787,7 @@ func TestMethodAllowHeadersForMultiMethodRoutes(t *testing.T) {
 		{http.MethodPost, "/api/reader/preferences", "GET, PUT"},
 		{http.MethodPut, "/api/bookmarks", "GET, POST"},
 		{http.MethodPost, "/api/library/novels/" + novelID + "/characters?upToEpisodeIndex=1", "GET"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/terms?upToEpisodeIndex=1", "GET"},
 		{http.MethodPut, "/api/library/novels/" + novelID + "/extraction-jobs", "GET, POST"},
 	}
 	for _, tc := range cases {
@@ -1826,6 +1827,10 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=1", nil, http.StatusMethodNotAllowed)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=999", nil, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=0", nil, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms", nil, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex=1", nil, http.StatusMethodNotAllowed)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex=999", nil, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/terms?upToEpisodeIndex=1", nil, http.StatusNotFound)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/extraction-jobs", nil, http.StatusNotFound)
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{}, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
@@ -2087,6 +2092,47 @@ func TestExtractionLookupErrorReturnsBadGateway(t *testing.T) {
 	}
 }
 
+func TestTermsEndpointUsesCharacterCommitFrontierAndDistinguishesEmptyState(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("initialize store: %v", err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	server := handler.(*Server)
+	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
+	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
+	path := "/api/library/novels/" + novelID + "/terms?upToEpisodeIndex=1"
+
+	legacy := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	if legacy["status"] != "not_generated" || legacy["processedUpToEpisodeIndex"] != nil || len(legacy["terms"].([]any)) != 0 {
+		t.Fatalf("character-only state should expose an actionable not_generated terms response: %+v", legacy)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, "1", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save empty generated terms: %v", err)
+	}
+	empty := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	if empty["status"] != "ready" || empty["processedUpToEpisodeIndex"] != "1" || len(empty["terms"].([]any)) != 0 {
+		t.Fatalf("generated empty terms should be ready: %+v", empty)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, "1", []terms.GeneratedTerm{{
+		Term:               "聖剣",
+		CategoryHistory:    []terms.CategoryVersion{{Category: terms.CategoryItem, EpisodeIndex: "1"}},
+		DescriptionHistory: []terms.HistoryVersion{{Text: "王家に伝わる剣。", EpisodeIndex: "1"}},
+	}}, nil); err != nil {
+		t.Fatalf("save generated term: %v", err)
+	}
+	ready := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	items := ready["terms"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("term projection should contain the committed term: %+v", ready)
+	}
+	item := items[0].(map[string]any)
+	if item["term"] != "聖剣" || item["reading"] != nil || item["category"] != terms.CategoryItem || item["description"] != "王家に伝わる剣。" {
+		t.Fatalf("unexpected term projection: %+v", item)
+	}
+}
+
 func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
@@ -2107,6 +2153,12 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 		SummaryHistory:              []characters.GeneratedHistoryVersion{{EpisodeIndex: episodeIndex, Text: "生成済み。"}},
 	}}); err != nil {
 		t.Fatalf("save generated summary: %v", err)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, episodeIndex, []terms.GeneratedTerm{{
+		Term:               "聖剣",
+		DescriptionHistory: []terms.HistoryVersion{{EpisodeIndex: episodeIndex, Text: "王家に伝わる剣。"}},
+	}}, nil); err != nil {
+		t.Fatalf("save generated terms: %v", err)
 	}
 	if err := extractdomain.SaveJob(server.stateDir(), novelID, extractdomain.Job{
 		JobID:                     "completed-clear-test",
@@ -2129,12 +2181,16 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 		t.Fatalf("precondition generated summary should be ready: %+v", before)
 	}
 	cleared := requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/extraction", nil, http.StatusOK)
-	if cleared["characterProfileDeleted"] != true || cleared["characterEventsDeleted"] != true || cleared["extractionJobsDeleted"].(float64) < 1 || cleared["extractionCheckpointsDeleted"] != float64(1) {
+	if cleared["characterProfileDeleted"] != true || cleared["characterEventsDeleted"] != true || cleared["termProfileDeleted"] != true || cleared["extractionJobsDeleted"].(float64) < 1 || cleared["extractionCheckpointsDeleted"] != float64(1) {
 		t.Fatalf("clear response should report deleted generated state: %+v", cleared)
 	}
 	after := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex="+episodeIndex, nil, http.StatusOK)
 	if after["status"] != "not_generated" || len(after["characters"].([]any)) != 0 {
 		t.Fatalf("cleared character summary should become not_generated: %+v", after)
+	}
+	afterTerms := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex="+episodeIndex, nil, http.StatusOK)
+	if afterTerms["status"] != "not_generated" || len(afterTerms["terms"].([]any)) != 0 {
+		t.Fatalf("cleared terms should become not_generated: %+v", afterTerms)
 	}
 	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 0 {
@@ -3098,6 +3154,9 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 	if len(characters) != 1 || characters[0].(map[string]any)["canonicalName"] != "アリス" {
 		t.Fatalf("playground should return generated character profile: %+v", response)
 	}
+	if response["terms"] == nil || len(response["terms"].([]any)) != 0 {
+		t.Fatalf("playground should always return the combined terms result: %+v", response)
+	}
 	if server.extractionCheckpointExists(novelID, "1") {
 		t.Fatal("playground preview should not create a checkpoint")
 	}
@@ -3391,6 +3450,10 @@ func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t 
 	}
 	if events[batchIndex]["batchIndex"] != float64(1) || events[batchIndex]["batchCount"] != float64(1) {
 		t.Fatalf("batch status should include batch metadata: %+v", events[batchIndex])
+	}
+	result := events[resultIndex]["result"].(map[string]any)
+	if result["terms"] == nil || len(result["terms"].([]any)) != 0 {
+		t.Fatalf("stream final result should always include terms: %+v", result)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stream playground preview should not persist reader-facing profiles, stat err=%v", err)

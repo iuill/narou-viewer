@@ -55,6 +55,7 @@ type ClearResponse struct {
 	Message                      string `json:"message"`
 	CharacterProfileDeleted      bool   `json:"characterProfileDeleted"`
 	CharacterEventsDeleted       bool   `json:"characterEventsDeleted"`
+	TermProfileDeleted           bool   `json:"termProfileDeleted"`
 	ExtractionJobsDeleted        int    `json:"extractionJobsDeleted"`
 	ExtractionJobIndexDeleted    bool   `json:"extractionJobIndexDeleted"`
 	ExtractionCheckpointsDeleted int    `json:"extractionCheckpointsDeleted"`
@@ -152,6 +153,7 @@ func (s *Service) Clear(ctx context.Context, novelID string) (ClearResponse, err
 		Message:                      "抽出データをクリアしました。",
 		CharacterProfileDeleted:      result.ProfileDeleted,
 		CharacterEventsDeleted:       result.EventsDeleted,
+		TermProfileDeleted:           result.TermProfileDeleted,
 		ExtractionJobsDeleted:        result.JobsDeleted,
 		ExtractionJobIndexDeleted:    result.JobIndexDeleted,
 		ExtractionCheckpointsDeleted: result.CheckpointsDeleted,
@@ -207,9 +209,9 @@ func normalizeGenerationStrategy(raw *string) (string, error) {
 }
 
 func enqueueResponse(job extractdomain.Job, created bool) EnqueueResponse {
-	message := "キャラクター一覧生成を依頼しました。"
+	message := "人物と用語の抽出を依頼しました。"
 	if !created {
-		message = "この作品では既にキャラクター一覧生成が進行中です。進行中の生成を表示します。"
+		message = "この作品では既に人物と用語の抽出が進行中です。進行中の処理を表示します。"
 	}
 	return EnqueueResponse{
 		JobID:                     job.JobID,

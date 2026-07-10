@@ -21,6 +21,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func (s *Server) handleNovelSubroute(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +64,8 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 	switch suffix {
 	case "characters":
 		s.handleCharacters(w, r, novelID)
+	case "terms":
+		s.handleTerms(w, r, novelID)
 	case "extraction":
 		s.handleExtractionClear(w, r, novelID)
 	case "extraction-jobs":
@@ -240,6 +243,46 @@ func (s *Server) handleCharacters(w http.ResponseWriter, r *http.Request, novelI
 		return
 	}
 	s.handleExtraction(w, r, novelID)
+}
+
+func (s *Server) handleTerms(w http.ResponseWriter, r *http.Request, novelID string) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	upToEpisodeIndex := r.URL.Query().Get("upToEpisodeIndex")
+	if !isDigits(upToEpisodeIndex) {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
+		return
+	}
+	novelFound, episodeFound, err := s.validateNovelEpisode(r.Context(), novelID, upToEpisodeIndex)
+	if err != nil {
+		writeLibraryLookupError(w, r, novelID, upToEpisodeIndex, err)
+		return
+	}
+	if !novelFound {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	if !episodeFound {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
+		return
+	}
+
+	committedFrontier := ""
+	characterSummary, _, err := characters.LoadSummaryForEpisodes(s.stateDir(), novelID, upToEpisodeIndex, s.episodeIndexes(r.Context(), novelID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Character profiles could not be read.")
+		return
+	}
+	if characterSummary.ProcessedUpToEpisodeIndex != nil {
+		committedFrontier = *characterSummary.ProcessedUpToEpisodeIndex
+	}
+	response, err := terms.BuildResponse(s.stateDir(), novelID, upToEpisodeIndex, committedFrontier)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Term profiles could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleExtraction(w http.ResponseWriter, r *http.Request, novelID string) {
