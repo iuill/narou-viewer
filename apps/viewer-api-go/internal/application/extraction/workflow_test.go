@@ -588,6 +588,13 @@ func TestWorkflowGenerateAndSaveRecordsFailedUsage(t *testing.T) {
 	}
 }
 
+func TestLegacyExtractionStateErrorPromptsUserToClearData(t *testing.T) {
+	want := "旧生成データには用語が含まれないため、抽出データをクリアして再生成してください。"
+	if ErrLegacyExtractionStateIncomplete.Error() != want {
+		t.Fatalf("legacy extraction error = %q, want %q", ErrLegacyExtractionStateIncomplete, want)
+	}
+}
+
 func TestWorkflowTermsSaveFailureStopsBeforeCharacterSaveAndKeepsCheckpoint(t *testing.T) {
 	ports := &workflowFakePorts{
 		settings:     ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},

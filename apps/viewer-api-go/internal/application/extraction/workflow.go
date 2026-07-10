@@ -14,7 +14,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
-var ErrLegacyExtractionStateIncomplete = errors.New("existing character-only state is incomplete; clear extraction data and regenerate")
+var ErrLegacyExtractionStateIncomplete = errors.New("旧生成データには用語が含まれないため、抽出データをクリアして再生成してください。")
 
 type Workflow struct {
 	ports WorkflowPorts
