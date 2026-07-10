@@ -14,7 +14,7 @@ type fakeWorkflow struct {
 	err error
 }
 
-func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) error {
+func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
 	progressSink(appextraction.BatchProgress{
 		Phase: "start",
 		Batch: core.Batch{BatchIndex: 1, BatchCount: 2},
@@ -24,8 +24,9 @@ func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToE
 		Batch:                core.Batch{BatchIndex: 1, BatchCount: 2},
 		CompletedBatchCount:  1,
 		MergedCharacterCount: 3,
+		MergedTermCount:      2,
 	})
-	return w.err
+	return appextraction.FinalCounts{CharacterCount: 3, TermCount: 2}, w.err
 }
 
 type fakeJobStore struct {
@@ -91,11 +92,11 @@ func TestProgressHelpers(t *testing.T) {
 	currentBatchIndex := 1
 	batchCount := 2
 	generatedCharacterCount := 3
-	SetExtractionJobProgress(&job, 120, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount)
+	SetExtractionJobProgress(&job, 120, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount, nil)
 	if job.Progress == nil || *job.Progress != 100 || job.ProgressStage == nil || *job.ProgressStage != "batchComplete" {
 		t.Fatalf("progress should be clamped and staged: %+v", job)
 	}
-	SetExtractionJobProgress(&job, 50, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount)
+	SetExtractionJobProgress(&job, 50, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount, nil)
 	if job.Progress == nil || *job.Progress != 100 {
 		t.Fatalf("progress should not move backwards: %+v", job)
 	}

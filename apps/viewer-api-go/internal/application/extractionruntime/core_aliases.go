@@ -4,6 +4,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type extractionChunk = core.Chunk
@@ -38,8 +39,8 @@ func createExtractionBatchesWithBudget(chunks []extractionChunk, budget extracti
 	return core.CreateBatchesWithBudget(chunks, budget)
 }
 
-func buildExtractionPromptWithUnresolved(novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions []characters.GeneratedUnresolvedMention, systemPromptOverride *string) (string, string) {
-	return core.BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, unresolvedMentions, systemPromptOverride)
+func buildExtractionPromptWithUnresolved(novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions []characters.GeneratedUnresolvedMention, systemPromptOverride *string) (string, string) {
+	return core.BuildPromptWithContext(novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolvedMentions, systemPromptOverride)
 }
 
 func normalizeExtractionOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeIndex string) (extractionDelta, error) {

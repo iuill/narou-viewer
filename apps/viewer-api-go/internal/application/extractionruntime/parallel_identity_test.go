@@ -43,7 +43,7 @@ func newExtractionOpenRouterTestServer(t *testing.T, responses ...string) *httpt
 
 func TestGenerateOpenRouterExtractionParallelIdentityRejectsMissingConfig(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil)
+	generated, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
 		t.Fatalf("err = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestGenerateOpenRouterExtractionParallelIdentityRejectsMissingConfig(t *tes
 
 func TestGenerateOpenRouterExtractionParallelIdentityEmptyInput(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1", nil, nil, nil, nil)
+	generated, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1", nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("generateOpenRouterExtractionParallelIdentity returned error: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestGenerateOpenRouterExtractionParallelIdentityEmptyInput(t *testing.T) {
 }
 
 func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"characterId":"char_seed","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
+	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"characterId":"char_seed","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -74,7 +74,7 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 		CanonicalEpisodeIndex:       "1",
 		FirstAppearanceEpisodeIndex: "1",
 	}}
-	generated, state, usage, err := runtime.generateOpenRouterExtractionDiscoveryParallelCorrection(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "base-model", AllowFallbacks: true}, "novel-d", "1", seed, nil, nil, nil)
+	generated, state, usage, err := runtime.generateOpenRouterExtractionDiscoveryParallelCorrection(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "base-model", AllowFallbacks: true}, "novel-d", "1", seed, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("generateOpenRouterExtractionDiscoveryParallelCorrection returned error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 
 func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil)
+	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
 		t.Fatalf("err = %v", err)
 	}
@@ -99,7 +99,7 @@ func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T
 
 func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil)
+	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
 		t.Fatalf("err = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestParallelIdentityRuntimeAndExtractionEmptyInput(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	config := &store.ResolvedAIGenerationConfig{}
 	pending := []characters.GeneratedUnresolvedMention{{Mention: "謎の男", EpisodeIndex: "1"}}
-	batches, err := runtime.parallelIdentityRuntimeBatches(context.Background(), config, "novel-1", "1", nil, pending)
+	batches, err := runtime.parallelIdentityRuntimeBatches(context.Background(), config, "novel-1", "1", nil, nil, nil, pending)
 	if err != nil {
 		t.Fatalf("parallelIdentityRuntimeBatches returned error: %v", err)
 	}
@@ -120,13 +120,13 @@ func TestParallelIdentityRuntimeAndExtractionEmptyInput(t *testing.T) {
 		t.Fatalf("batches = %+v", batches)
 	}
 
-	candidates, usage, unresolved, err := runtime.extractParallelIdentityCandidates(context.Background(), config, "novel-1", "1", nil, func(appextraction.BatchProgress) {
+	candidates, rawTerms, usage, unresolved, err := runtime.extractParallelIdentityCandidates(context.Background(), config, "novel-1", "1", nil, nil, func(appextraction.BatchProgress) {
 		t.Fatal("progress sink should not be called for empty batches")
 	}, pending)
 	if err != nil {
 		t.Fatalf("extractParallelIdentityCandidates returned error: %v", err)
 	}
-	if len(candidates) != 0 || len(usage) != 0 || len(unresolved) != 1 || unresolved[0].Mention != "謎の男" {
+	if len(candidates) != 0 || len(rawTerms) != 0 || len(usage) != 0 || len(unresolved) != 1 || unresolved[0].Mention != "謎の男" {
 		t.Fatalf("candidates=%+v usage=%+v unresolved=%+v", candidates, usage, unresolved)
 	}
 }
@@ -138,13 +138,13 @@ func TestExtractParallelIdentityCandidatesReturnsFirstBatchError(t *testing.T) {
 		BatchIndex: 1,
 		Chunks:     []extractionChunk{{EpisodeIndex: "1", Title: "第一話", Text: "アリスが廊下に立っていた。"}},
 	}
-	candidates, usage, unresolved, err := runtime.extractParallelIdentityCandidates(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-1", "1", []extractionBatch{batch}, func(item appextraction.BatchProgress) {
+	candidates, rawTerms, usage, unresolved, err := runtime.extractParallelIdentityCandidates(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-1", "1", nil, []extractionBatch{batch}, func(item appextraction.BatchProgress) {
 		progress = append(progress, item.Phase)
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "OpenRouter API key and modelId are required") {
 		t.Fatalf("err = %v", err)
 	}
-	if len(candidates) != 0 || len(usage) != 0 || len(unresolved) != 0 {
+	if len(candidates) != 0 || len(rawTerms) != 0 || len(usage) != 0 || len(unresolved) != 0 {
 		t.Fatalf("candidates=%+v usage=%+v unresolved=%+v", candidates, usage, unresolved)
 	}
 	if len(progress) != 2 || progress[0] != "start" || progress[1] != "complete" {
@@ -155,8 +155,8 @@ func TestExtractParallelIdentityCandidatesReturnsFirstBatchError(t *testing.T) {
 func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
-		`{"processedUpToEpisodeIndex":"1","characters":[{"canonicalName":"アリス","summary":"廊下に立っていた人物。"}]}`,
-		`{"processedUpToEpisodeIndex":"2","characters":[{"canonicalName":"ボブ","summary":"庭にいた人物。"}]}`,
+		`{"processedUpToEpisodeIndex":"1","terms":[],"characters":[{"canonicalName":"アリス","summary":"廊下に立っていた人物。"}]}`,
+		`{"processedUpToEpisodeIndex":"2","terms":[],"characters":[{"canonicalName":"ボブ","summary":"庭にいた人物。"}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
@@ -179,11 +179,12 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 			Chunks:         []extractionChunk{{EpisodeIndex: "2", Title: "第二話", Text: "ボブが庭にいた。"}},
 		},
 	}
-	candidates, usage, unresolved, err := runtime.extractParallelIdentityCandidates(
+	candidates, rawTerms, usage, unresolved, err := runtime.extractParallelIdentityCandidates(
 		context.Background(),
 		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true},
 		"novel-1",
 		"2",
+		nil,
 		batches,
 		func(progress appextraction.BatchProgress) {
 			progressEvents = append(progressEvents, progress)
@@ -201,6 +202,9 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 	if len(unresolved) != 0 {
 		t.Fatalf("unresolved = %+v", unresolved)
+	}
+	if len(rawTerms) != 0 {
+		t.Fatalf("rawTerms = %+v", rawTerms)
 	}
 	completedCounts := []int{}
 	for _, progress := range progressEvents {
@@ -690,8 +694,8 @@ func TestCorrectParallelIdentityCharactersKeepsOversizedCharacterUncorrected(t *
 func TestCorrectParallelIdentityCharactersFallsBackToChunks(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
-		`{"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`,
-		`{"characters":[{"characterId":"char_b","canonicalName":"ボブ","aliases":["庭師"],"keep":true,"reason":"別名を補足"}]}`,
+		`{"terms":[],"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`,
+		`{"terms":[],"characters":[{"characterId":"char_b","canonicalName":"ボブ","aliases":["庭師"],"keep":true,"reason":"別名を補足"}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
@@ -715,7 +719,7 @@ func TestCorrectParallelIdentityCharactersFallsBackToChunks(t *testing.T) {
 }
 
 func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"name":"アリス","aliases":["姫"],"episodeIndex":"1","reason":"会話に登場"}]}`)
+	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"name":"アリス","aliases":["姫"],"episodeIndex":"1","reason":"会話に登場"}]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -735,7 +739,7 @@ func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
 }
 
 func TestCorrectParallelIdentityCharactersUsesOpenRouter(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
+	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})

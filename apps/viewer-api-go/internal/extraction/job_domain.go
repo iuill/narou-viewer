@@ -14,6 +14,7 @@ type Job struct {
 	CurrentBatchIndex         *int    `json:"currentBatchIndex,omitempty"`
 	BatchCount                *int    `json:"batchCount,omitempty"`
 	GeneratedCharacterCount   *int    `json:"generatedCharacterCount,omitempty"`
+	GeneratedTermCount        *int    `json:"generatedTermCount,omitempty"`
 	CreatedAt                 string  `json:"createdAt"`
 	StartedAt                 *string `json:"startedAt"`
 	FinishedAt                *string `json:"finishedAt"`
@@ -37,6 +38,7 @@ type jobDocument struct {
 	CurrentBatchIndex         *int    `yaml:"current_batch_index,omitempty"`
 	BatchCount                *int    `yaml:"batch_count,omitempty"`
 	GeneratedCharacterCount   *int    `yaml:"generated_character_count,omitempty"`
+	GeneratedTermCount        *int    `yaml:"generated_term_count,omitempty"`
 	CreatedAt                 string  `yaml:"created_at"`
 	StartedAt                 *string `yaml:"started_at"`
 	FinishedAt                *string `yaml:"finished_at"`

@@ -12,13 +12,16 @@ import (
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
+
+const extractionContractVersion = 1
 
 type generationRunner struct {
 	ports WorkflowPorts
 }
 
-func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	checkpointFingerprint := CheckpointFingerprint(config, CheckpointBatchInputs(batches))
 	checkpoint := r.loadCheckpointForGeneration(novelID, upToEpisodeIndex, checkpointFingerprint)
 	processedBatches := map[int]bool{}
@@ -27,8 +30,10 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 	}
 	hasCheckpointSnapshot := CheckpointHasSnapshot(checkpoint)
 	generated := append([]characters.GeneratedCharacter{}, seed...)
+	generatedTerms := append([]terms.GeneratedTerm{}, seedTerms...)
 	if hasCheckpointSnapshot {
 		generated = append([]characters.GeneratedCharacter{}, checkpoint.Characters...)
+		generatedTerms = append([]terms.GeneratedTerm{}, checkpoint.Terms...)
 	}
 	allocator, err := r.ports.LoadIDAllocator(novelID, generated)
 	if err != nil {
@@ -48,7 +53,7 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 		}
 		remainingChunks := append([]core.Chunk{}, batch.Chunks...)
 		for len(remainingChunks) > 0 {
-			runtimeBatch, nextRemaining, err := r.ports.PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, generated, batch, remainingChunks, pendingUnresolved)
+			runtimeBatch, nextRemaining, err := r.ports.PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, batch, remainingChunks, pendingUnresolved)
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
@@ -56,13 +61,14 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 			if progressSink != nil {
 				progressSink(BatchProgress{Phase: "start", Batch: runtimeBatch})
 			}
-			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, runtimeBatch, pendingUnresolved)
+			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, runtimeBatch, pendingUnresolved)
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
 			usageRequests = append(usageRequests, result.Usage)
 			var changed int
 			generated, changed = core.ApplyDelta(novelID, generated, result.Delta, allocator)
+			generatedTerms = core.FilterAndMergeTermDeltas(generatedTerms, result.Delta.Terms, generated)
 			pendingUnresolved = core.FilterResolvedGeneratedUnresolvedMentions(core.MergeGeneratedUnresolvedMentions(pendingUnresolved, result.Delta.UnresolvedMentions), generated)
 			remainingChunks = nextRemaining
 			if progressSink != nil {
@@ -72,17 +78,20 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 					ElapsedMs:               time.Since(batchStartedAt).Milliseconds(),
 					GeneratedCharacterCount: changed,
 					MergedCharacterCount:    len(generated),
+					GeneratedTermCount:      len(result.Delta.Terms),
+					MergedTermCount:         len(generatedTerms),
 				})
 			}
 		}
 		checkpoint.ProcessedEpisodeIndexes = mergeStringSets(checkpoint.ProcessedEpisodeIndexes, batch.EpisodeIndexes)
 		checkpoint.ProcessedBatchIndexes = appendUniqueInt(checkpoint.ProcessedBatchIndexes, batch.BatchIndex)
 		checkpoint.Characters = generated
+		checkpoint.Terms = generatedTerms
 		checkpoint.PendingUnresolvedMentions = pendingUnresolved
 		checkpoint.IssuedCharacterIDs = allocator.IssuedCharacterIDs()
 		checkpoint.RetiredCharacterIDs = allocator.RetiredCharacterIDs()
 		checkpoint.NextCharacterOrdinal = allocator.NextCharacterOrdinal()
-		checkpoint.SchemaVersion = 1
+		checkpoint.SchemaVersion = 2
 		checkpoint.NovelID = novelID
 		checkpoint.UpToEpisodeIndex = upToEpisodeIndex
 		checkpoint.GenerationFingerprint = checkpointFingerprint
@@ -91,11 +100,14 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 			return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 		}
 	}
-	return generated, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, nil
+	state := generationStateFromAllocator(pendingUnresolved, allocator)
+	state.Terms = generatedTerms
+	return generated, state, usageRequests, nil
 }
 
-func (r generationRunner) GeneratePreview(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (r generationRunner) GeneratePreview(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	generated := append([]characters.GeneratedCharacter{}, seed...)
+	generatedTerms := append([]terms.GeneratedTerm{}, seedTerms...)
 	allocator, err := r.ports.LoadIDAllocator(novelID, generated)
 	if err != nil {
 		return nil, core.GenerationState{}, nil, err
@@ -105,7 +117,7 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 	for _, batch := range batches {
 		remainingChunks := append([]core.Chunk{}, batch.Chunks...)
 		for len(remainingChunks) > 0 {
-			runtimeBatch, nextRemaining, err := r.ports.PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, generated, batch, remainingChunks, pendingUnresolved)
+			runtimeBatch, nextRemaining, err := r.ports.PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, batch, remainingChunks, pendingUnresolved)
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
@@ -113,13 +125,14 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 			if progressSink != nil {
 				progressSink(BatchProgress{Phase: "start", Batch: runtimeBatch})
 			}
-			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, runtimeBatch, pendingUnresolved)
+			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, runtimeBatch, pendingUnresolved)
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
 			usageRequests = append(usageRequests, result.Usage)
 			var changed int
 			generated, changed = core.ApplyDelta(novelID, generated, result.Delta, allocator)
+			generatedTerms = core.FilterAndMergeTermDeltas(generatedTerms, result.Delta.Terms, generated)
 			pendingUnresolved = core.FilterResolvedGeneratedUnresolvedMentions(core.MergeGeneratedUnresolvedMentions(pendingUnresolved, result.Delta.UnresolvedMentions), generated)
 			remainingChunks = nextRemaining
 			if progressSink != nil {
@@ -129,17 +142,21 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 					ElapsedMs:               time.Since(batchStartedAt).Milliseconds(),
 					GeneratedCharacterCount: changed,
 					MergedCharacterCount:    len(generated),
+					GeneratedTermCount:      len(result.Delta.Terms),
+					MergedTermCount:         len(generatedTerms),
 				})
 			}
 		}
 	}
-	return generated, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, nil
+	state := generationStateFromAllocator(pendingUnresolved, allocator)
+	state.Terms = generatedTerms
+	return generated, state, usageRequests, nil
 }
 
 func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) checkpointstore.Checkpoint {
 	checkpoint, err := r.ports.LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
-		checkpoint.SchemaVersion != 1 ||
+		checkpoint.SchemaVersion != 2 ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
@@ -150,17 +167,21 @@ func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisod
 
 func EmptyCheckpoint(novelID string, upToEpisodeIndex string, fingerprint string) checkpointstore.Checkpoint {
 	return checkpointstore.Checkpoint{
-		SchemaVersion:         1,
+		SchemaVersion:         2,
 		NovelID:               novelID,
 		UpToEpisodeIndex:      upToEpisodeIndex,
 		GenerationFingerprint: fingerprint,
 		Characters:            []characters.GeneratedCharacter{},
+		Terms:                 []terms.GeneratedTerm{},
 	}
 }
 
 func NormalizeCheckpoint(checkpoint checkpointstore.Checkpoint) checkpointstore.Checkpoint {
 	if checkpoint.Characters == nil {
 		checkpoint.Characters = []characters.GeneratedCharacter{}
+	}
+	if checkpoint.Terms == nil {
+		checkpoint.Terms = []terms.GeneratedTerm{}
 	}
 	if checkpoint.PendingUnresolvedMentions == nil {
 		checkpoint.PendingUnresolvedMentions = []characters.GeneratedUnresolvedMention{}
@@ -178,6 +199,7 @@ func CheckpointHasSnapshot(checkpoint checkpointstore.Checkpoint) bool {
 	return len(checkpoint.ProcessedBatchIndexes) > 0 ||
 		len(checkpoint.ProcessedEpisodeIndexes) > 0 ||
 		len(checkpoint.Characters) > 0 ||
+		len(checkpoint.Terms) > 0 ||
 		len(checkpoint.PendingUnresolvedMentions) > 0
 }
 
@@ -189,9 +211,10 @@ func CheckpointFingerprint(config *store.ResolvedAIGenerationConfig, extra any) 
 		AllowFallbacks    bool     `json:"allowFallbacks"`
 		RequireParameters bool     `json:"requireParameters"`
 		SystemPrompt      string   `json:"systemPrompt"`
+		ContractVersion   int      `json:"contractVersion"`
 		Extra             any      `json:"extra"`
 	}{
-		Extra: extra,
+		Extra: extra, ContractVersion: extractionContractVersion,
 	}
 	if config != nil {
 		input.ProfileID = config.ProfileID

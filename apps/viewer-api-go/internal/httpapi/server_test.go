@@ -27,6 +27,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/storageusage"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 
 	_ "modernc.org/sqlite"
 )
@@ -2785,7 +2786,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		promptTokens := 13
 		completionTokens := 5
 		if strings.Contains(string(raw), `"response_format"`) {
-			content = `{"characters":[{"canonicalName":"ミラ","summary":"mock OpenRouter summary"}]}`
+			content = `{"terms":[],"characters":[{"canonicalName":"ミラ","summary":"mock OpenRouter summary"}]}`
 			promptTokens = 29
 			completionTokens = 11
 		}
@@ -3044,7 +3045,7 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 			t.Fatalf("unexpected authorization: %q", r.Header.Get("authorization"))
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"アリス\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"OpenRouter summary\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"OpenRouter summary\"}]}"}}],
 			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 		}`))
 	}))
@@ -3120,7 +3121,7 @@ func TestGenerateAndSaveExtractionPreservesOpenRouterTokenUsage(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"OpenRouter summary\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"OpenRouter summary\"}]}"}}],
 			"usage": {"prompt_tokens": 21, "completion_tokens": 8, "total_tokens": 29}
 		}`))
 	}))
@@ -3267,7 +3268,7 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 			t.Fatalf("systemPromptOverride should be forwarded: %+v", messages)
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"セシル\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"一時設定で生成\"}]}"}}]
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"一時設定で生成\"}]}"}}]
 		}`))
 	}))
 	defer provider.Close()
@@ -3324,7 +3325,7 @@ func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t 
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"finish_reason": "stop", "message": {"content": "{\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
+			"choices": [{"finish_reason": "stop", "message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
 			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 		}`))
 	}))
@@ -3507,7 +3508,7 @@ func TestExtractionCheckpointFingerprintCompatibility(t *testing.T) {
 		},
 	}
 	fingerprint := extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches))
-	if fingerprint != "0d86f70e7a4112817e998ca6ce434228b7ea8509" {
+	if fingerprint != "cf8fb823ecd5bc96b2c2606a4cb019dcdee601e5" {
 		t.Fatalf("checkpoint fingerprint should remain compatible, got %s", fingerprint)
 	}
 	batches[0].BatchCount = 99
@@ -4025,7 +4026,7 @@ func TestOpenRouterExtractionUsesModelMaxCompletionTokens(t *testing.T) {
 				t.Fatalf("character summary should use model max completion tokens: %+v", body)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"人物\"}]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"人物\"}]}"}}],
 				"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 			}`))
 		default:
@@ -4095,7 +4096,7 @@ func TestOpenRouterExtractionUsesDeltaCandidatesAndStableIDMerges(t *testing.T) 
 				t.Fatalf("candidate card should preserve stable id and display name: %+v", candidate)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"1\",\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"1\",\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[],\"terms\":[]}"}}],
 				"usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26}
 			}`))
 		default:
@@ -4150,6 +4151,9 @@ func TestExtractionGenerationSeedFiltersAlreadyProcessedEpisodes(t *testing.T) {
 		SummaryHistory:              []characters.GeneratedHistoryVersion{{EpisodeIndex: "2", Text: "既存生成済み。"}},
 	}}); err != nil {
 		t.Fatalf("save existing generated summary: %v", err)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), "novel-1", "2", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save existing generated terms: %v", err)
 	}
 	seed, processed, ok, err := server.loadExtractionGenerationSeed("novel-1", "4")
 	if err != nil || !ok || processed == nil || *processed != "2" || len(seed) != 1 || seed[0].CharacterID != "char_existing" {
@@ -4225,6 +4229,9 @@ func TestExtractionPreviewReusesCoveredGeneratedSummaryWithoutOpenRouter(t *test
 	}}); err != nil {
 		t.Fatalf("save existing generated summary: %v", err)
 	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), "novel-1", "2", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save existing generated terms: %v", err)
+	}
 	preloaded := extractionInputs{
 		Episodes: []characters.HeuristicEpisode{{EpisodeIndex: "1", Text: "一話"}},
 		Batches: []extractionBatch{{
@@ -4261,7 +4268,7 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 		episodeIndex := promptEpisodes[0].(map[string]any)["episodeIndex"].(string)
 		if episodeIndex == "1" {
 			requestedEpisodes = append(requestedEpisodes, "1")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
 			return
 		}
 		requestedEpisodes = append(requestedEpisodes, "2")
@@ -4270,7 +4277,7 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"characters\":[{\"canonicalName\":\"ボブ\",\"summary\":\"二話の人物\"}]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"ボブ\",\"summary\":\"二話の人物\"}]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`))
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -4339,7 +4346,7 @@ func TestOpenRouterExtractionCheckpointSnapshotIsAuthoritative(t *testing.T) {
 		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスだけが残る。"}},
 	}}
 	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:             1,
+		SchemaVersion:             2,
 		NovelID:                   "novel-1",
 		UpToEpisodeIndex:          "1",
 		GenerationFingerprint:     extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches)),
@@ -4371,7 +4378,7 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"新モデル\",\"summary\":\"新しい設定で生成\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新モデル\",\"summary\":\"新しい設定で生成\"}]}"}}],
 			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
 		}`))
 	}))
@@ -4388,7 +4395,7 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "新モデルが登場した。"}},
 	}}
 	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:           1,
+		SchemaVersion:           2,
 		NovelID:                 "novel-1",
 		UpToEpisodeIndex:        "1",
 		GenerationFingerprint:   extractionCheckpointFingerprint(oldConfig, extractionCheckpointBatchInputs(batches)),
@@ -4419,7 +4426,7 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"新本文\",\"summary\":\"現在の本文で生成\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新本文\",\"summary\":\"現在の本文で生成\"}]}"}}],
 			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
 		}`))
 	}))
@@ -4441,7 +4448,7 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 		t.Fatalf("load fixture character summary inputs: %v", err)
 	}
 	if err := server.saveExtractionCheckpoint(novelID, "1", extractionCheckpoint{
-		SchemaVersion:           1,
+		SchemaVersion:           2,
 		NovelID:                 novelID,
 		UpToEpisodeIndex:        "1",
 		GenerationFingerprint:   extractionCheckpointFingerprint(config, map[string]int{"maxChunkChars": maxChunkChars, "maxBatchChars": maxBatchChars}),
@@ -4487,11 +4494,11 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 	if len(checkpoint.Characters) != 0 || checkpoint.NovelID != "novel-1" {
 		t.Fatalf("mismatched checkpoint should reset to an empty checkpoint: %+v", checkpoint)
 	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":2,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":1,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
 		t.Fatalf("write unsupported schema checkpoint: %v", err)
 	}
 	checkpoint = server.loadExtractionCheckpoint("novel-1", "1")
-	if checkpoint.SchemaVersion != 1 || len(checkpoint.Characters) != 0 {
+	if checkpoint.SchemaVersion != 2 || len(checkpoint.Characters) != 0 {
 		t.Fatalf("unsupported schema checkpoint should reset to current empty checkpoint: %+v", checkpoint)
 	}
 
@@ -4504,7 +4511,7 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 		t.Fatalf("mkdir checkpoint path blocker: %v", err)
 	}
 	if err := blockedServer.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:    1,
+		SchemaVersion:    2,
 		NovelID:          "novel-1",
 		UpToEpisodeIndex: "1",
 	}); err == nil {

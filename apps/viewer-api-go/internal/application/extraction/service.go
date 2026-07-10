@@ -8,6 +8,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type Library interface {
@@ -70,7 +71,7 @@ func (s *Service) Result(ctx context.Context, novelID string, upToEpisodeIndex s
 		return Result{}, err
 	}
 
-	summary, err := s.resolveSummary(ctx, novelID, upToEpisodeIndex, episodeIndexes, resolvedProfile, options)
+	summary, projectedTerms, err := s.resolveSummary(ctx, novelID, upToEpisodeIndex, episodeIndexes, resolvedProfile, options)
 	if err != nil {
 		return Result{}, err
 	}
@@ -86,6 +87,7 @@ func (s *Service) Result(ctx context.Context, novelID string, upToEpisodeIndex s
 		GenerationStrategy:        NormalizeGenerationStrategy(options.GenerationStrategy),
 		ModelID:                   profileModelID(profile),
 		Characters:                summary.Characters,
+		Terms:                     projectedTerms,
 	}, nil
 }
 
@@ -129,46 +131,61 @@ func (s *Service) resolveGenerationContext(options RequestOptions) (*ai.Profile,
 	return profile, generationMode, resolvedProfile, nil
 }
 
-func (s *Service) resolveSummary(ctx context.Context, novelID string, upToEpisodeIndex string, episodeIndexes []string, resolvedProfile *store.ResolvedAIGenerationConfig, options RequestOptions) (characters.SummaryResponse, error) {
+func (s *Service) resolveSummary(ctx context.Context, novelID string, upToEpisodeIndex string, episodeIndexes []string, resolvedProfile *store.ResolvedAIGenerationConfig, options RequestOptions) (characters.SummaryResponse, []terms.Term, error) {
 	if s == nil || s.repository == nil {
-		return emptyReadySummary(novelID, upToEpisodeIndex), nil
+		return emptyReadySummary(novelID, upToEpisodeIndex), []terms.Term{}, nil
 	}
 	if options.PreviewOnly {
 		loaded, ok, err := s.repository.LoadForEpisodes(s.stateDir, novelID, upToEpisodeIndex, episodeIndexes)
 		if err != nil {
-			return characters.SummaryResponse{}, err
+			return characters.SummaryResponse{}, nil, err
 		}
 		if ok && loaded.Status == "ready" && !options.ProfileResolution {
-			return loaded, nil
+			projected, err := s.loadProjectedTerms(novelID, upToEpisodeIndex, loaded.ProcessedUpToEpisodeIndex)
+			return loaded, projected, err
 		}
 		if s.generator == nil {
-			return emptyReadySummary(novelID, upToEpisodeIndex), nil
+			return emptyReadySummary(novelID, upToEpisodeIndex), []terms.Term{}, nil
 		}
 		unlock := s.generator.LockTarget(novelID, upToEpisodeIndex)
 		defer unlock()
-		return s.generator.GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedProfile, options.GenerationStrategy, options.BatchProgressSink, episodeIndexes, options.SummaryInputs)
+		preview, err := s.generator.GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedProfile, options.GenerationStrategy, options.BatchProgressSink, episodeIndexes, options.SummaryInputs)
+		return characters.SummaryResponse{Status: "ready", NovelID: preview.NovelID, UpToEpisodeIndex: preview.UpToEpisodeIndex, ProcessedUpToEpisodeIndex: preview.ProcessedUpToEpisodeIndex, Characters: preview.Characters}, preview.Terms, err
 	}
 
 	loaded, ok, err := s.repository.LoadForEpisodes(s.stateDir, novelID, upToEpisodeIndex, episodeIndexes)
 	if err != nil {
-		return characters.SummaryResponse{}, err
+		return characters.SummaryResponse{}, nil, err
 	}
 	if ok && loaded.Status == "ready" && !options.ProfileResolution {
-		return loaded, nil
+		projected, err := s.loadProjectedTerms(novelID, upToEpisodeIndex, loaded.ProcessedUpToEpisodeIndex)
+		return loaded, projected, err
 	}
 	if s.generator != nil {
-		if err := s.generator.GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedProfile, options.GenerationStrategy, options.BatchProgressSink); err != nil {
-			return characters.SummaryResponse{}, err
+		if _, err := s.generator.GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedProfile, options.GenerationStrategy, options.BatchProgressSink); err != nil {
+			return characters.SummaryResponse{}, nil, err
 		}
 	}
 	loaded, ok, err = s.repository.LoadForEpisodes(s.stateDir, novelID, upToEpisodeIndex, episodeIndexes)
 	if err != nil {
-		return characters.SummaryResponse{}, err
+		return characters.SummaryResponse{}, nil, err
 	}
 	if ok {
-		return loaded, nil
+		projected, err := s.loadProjectedTerms(novelID, upToEpisodeIndex, loaded.ProcessedUpToEpisodeIndex)
+		return loaded, projected, err
 	}
-	return emptyReadySummary(novelID, upToEpisodeIndex), nil
+	return emptyReadySummary(novelID, upToEpisodeIndex), []terms.Term{}, nil
+}
+
+func (s *Service) loadProjectedTerms(novelID string, upToEpisodeIndex string, committedFrontier *string) ([]terms.Term, error) {
+	if s == nil || committedFrontier == nil {
+		return []terms.Term{}, nil
+	}
+	response, err := terms.BuildResponse(s.stateDir, novelID, upToEpisodeIndex, *committedFrontier)
+	if err != nil {
+		return nil, err
+	}
+	return response.Terms, nil
 }
 
 func emptyReadySummary(novelID string, upToEpisodeIndex string) characters.SummaryResponse {

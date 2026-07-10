@@ -519,7 +519,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	    "summaryHistory":[{"episodeIndex":"5","text":"一行を導く。"}]
 	  }],
 	  "mergeProposals":[{"sourceCharacterId":"char_dup","targetCharacterId":"char_existing","confidence":0.99,"reason":"本文で同一人物と明示"}],
-	  "unresolvedMentions":[{"mention":"先生","episodeIndex":"5","reason":"複数候補あり"}]
+	  "unresolvedMentions":[{"mention":"先生","episodeIndex":"5","reason":"複数候補あり"}],
+	  "terms":[]
 	}`)
 	normalized, err := normalizeExtractionOpenRouterResponse(delta, "novel-1", "5")
 	if err != nil {
@@ -554,7 +555,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	    "appearanceHistory":[{"episodeIndex":"1","text":"銀髪"}],
 	    "personalityHistory":[{"episodeIndex":"2","text":"冷静"}],
 	    "summaryHistory":[{"episodeIndex":"3","text":"仲間。"}]
-	  }]
+	  }],
+	  "terms":[]
 	}`)
 	normalized, err = normalizeExtractionOpenRouterResponse(rich, "novel-1", "3")
 	if err != nil {
@@ -564,7 +566,7 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 		t.Fatalf("unexpected rich normalization: %+v", normalized)
 	}
 
-	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}]}`)
+	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}],"terms":[]}`)
 	normalized, err = normalizeExtractionOpenRouterResponse(legacy, "novel-1", "4")
 	if err != nil {
 		t.Fatalf("legacy response should normalize: %v", err)

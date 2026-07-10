@@ -173,7 +173,7 @@ func stringValue(value *string) string {
 }
 
 func setCharacterJobProgress(job *extractdomain.Job, progress int, stage string, currentBatchIndex *int, batchCount *int, generatedCharacterCount *int) {
-	extractionruntime.SetExtractionJobProgress(job, progress, stage, currentBatchIndex, batchCount, generatedCharacterCount)
+	extractionruntime.SetExtractionJobProgress(job, progress, stage, currentBatchIndex, batchCount, generatedCharacterCount, nil)
 }
 
 func characterJobBatchProgressPercent(completedBatches int, batchCount int) int {

@@ -9,6 +9,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type fakeLibrary struct {
@@ -104,7 +105,7 @@ func (f *fakeGenerator) LockTarget(novelID string, upToEpisodeIndex string) func
 	return func() {}
 }
 
-func (f *fakeGenerator) GenerateAndSave(_ context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress)) error {
+func (f *fakeGenerator) GenerateAndSave(_ context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress)) (FinalCounts, error) {
 	f.generateSaveCount++
 	f.generateSaveCall = fakeGeneratorGenerateSaveCall{
 		novelID:          novelID,
@@ -113,10 +114,10 @@ func (f *fakeGenerator) GenerateAndSave(_ context.Context, novelID string, upToE
 		strategy:         strategy,
 		hasProgressSink:  progressSink != nil,
 	}
-	return nil
+	return FinalCounts{}, nil
 }
 
-func (f *fakeGenerator) GeneratePreview(_ context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress), episodeIndexes []string, inputs *Inputs) (characters.SummaryResponse, error) {
+func (f *fakeGenerator) GeneratePreview(_ context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress), episodeIndexes []string, inputs *Inputs) (Result, error) {
 	f.previewCount++
 	f.previewCall = fakeGeneratorPreviewCall{
 		novelID:          novelID,
@@ -127,7 +128,7 @@ func (f *fakeGenerator) GeneratePreview(_ context.Context, novelID string, upToE
 		episodeIndexes:   append([]string{}, episodeIndexes...),
 		inputs:           inputs,
 	}
-	return f.preview, nil
+	return Result{NovelID: f.preview.NovelID, UpToEpisodeIndex: f.preview.UpToEpisodeIndex, ProcessedUpToEpisodeIndex: f.preview.ProcessedUpToEpisodeIndex, Characters: f.preview.Characters, Terms: []terms.Term{}}, nil
 }
 
 func readySummary(novelID string, upToEpisodeIndex string, names ...string) characters.SummaryResponse {

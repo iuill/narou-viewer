@@ -8,6 +8,7 @@ import (
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type RequestOptions struct {
@@ -29,6 +30,8 @@ type BatchProgress struct {
 	ElapsedMs               int64
 	GeneratedCharacterCount int
 	MergedCharacterCount    int
+	GeneratedTermCount      int
+	MergedTermCount         int
 }
 
 type Inputs struct {
@@ -80,6 +83,12 @@ type Result struct {
 	GenerationStrategy        string                 `json:"generationStrategy"`
 	ModelID                   *string                `json:"modelId"`
 	Characters                []characters.Character `json:"characters"`
+	Terms                     []terms.Term           `json:"terms"`
+}
+
+type FinalCounts struct {
+	CharacterCount int
+	TermCount      int
 }
 
 type SettingsProvider interface {
@@ -88,8 +97,8 @@ type SettingsProvider interface {
 
 type Generator interface {
 	LockTarget(novelID string, upToEpisodeIndex string) func()
-	GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress)) error
-	GeneratePreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress), episodeIndexes []string, preloaded *Inputs) (characters.SummaryResponse, error)
+	GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress)) (FinalCounts, error)
+	GeneratePreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(BatchProgress), episodeIndexes []string, preloaded *Inputs) (Result, error)
 }
 
 type WorkflowPorts interface {
@@ -102,19 +111,22 @@ type WorkflowPorts interface {
 	LoadInputs(ctx context.Context, novelID string, upToEpisodeIndex string, maxChunkChars int, maxBatchChars int, afterEpisodeIndex string) (Inputs, error)
 	LoadGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error)
 	LoadGeneratedCharactersBeforeEpisode(novelID string, episodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error)
+	LoadGeneratedTermsAtOrBefore(novelID string, committedFrontier string) ([]terms.GeneratedTerm, *string, bool, error)
+	LoadGeneratedTermsBeforeEpisode(novelID string, episodeIndex string) ([]terms.GeneratedTerm, *string, bool, error)
 	ReprocessFromEpisode(ctx context.Context, novelID string, processedEpisodeIndex *string, requestedUpToEpisodeIndex string) (string, error)
 	MaterializeGeneratedSummary(novelID string) error
 	LoadPendingUnresolved(novelID string, reprocessFromEpisodeIndex string) ([]characters.GeneratedUnresolvedMention, error)
 	RebatchInputs(ctx context.Context, inputs Inputs, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) Inputs
 	LoadIDAllocator(novelID string, seed []characters.GeneratedCharacter) (*characters.GeneratedCharacterIDAllocator, error)
-	PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template core.Batch, chunks []core.Chunk, unresolvedMentions []characters.GeneratedUnresolvedMention) (core.Batch, []core.Chunk, error)
-	GenerateBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch core.Batch, unresolvedMentions []characters.GeneratedUnresolvedMention) (BatchResult, error)
-	GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []core.Batch, progressSink func(BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error)
-	GenerateDiscoveryParallelCorrection(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []core.Batch, progressSink func(BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error)
+	PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template core.Batch, chunks []core.Chunk, unresolvedMentions []characters.GeneratedUnresolvedMention) (core.Batch, []core.Chunk, error)
+	GenerateBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch core.Batch, unresolvedMentions []characters.GeneratedUnresolvedMention) (BatchResult, error)
+	GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error)
+	GenerateDiscoveryParallelCorrection(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error)
 	LoadCheckpoint(novelID string, upToEpisodeIndex string) (checkpointstore.Checkpoint, error)
 	SaveCheckpoint(novelID string, upToEpisodeIndex string, checkpoint checkpointstore.Checkpoint) error
 	DeleteCheckpoint(novelID string, upToEpisodeIndex string) error
 	SaveGeneratedSummary(novelID string, upToEpisodeIndex string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, options characters.SaveGeneratedSummaryOptions) error
+	SaveGeneratedTerms(novelID string, upToEpisodeIndex string, generated []terms.GeneratedTerm, replaceFromEpisodeIndex string) error
 	BuildGeneratedPreview(novelID string, upToEpisodeIndex string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, episodeIndexes []string, options characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error)
 	SaveHeuristicSummary(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode) error
 	BuildHeuristicPreview(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode, episodeIndexes []string) (characters.SummaryResponse, error)

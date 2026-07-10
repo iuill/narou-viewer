@@ -10,6 +10,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type extractionBatchResult struct {
@@ -17,13 +18,13 @@ type extractionBatchResult struct {
 	Usage ai.UsageRequest
 }
 
-func (r *Runtime) nextRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template extractionBatch, chunks []extractionChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
+func (r *Runtime) nextRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
 	return core.PlanRuntimeBatch(template, chunks, func(batch extractionBatch) (bool, error) {
-		return r.batchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, unresolvedMentions...)
+		return r.batchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolvedMentions...)
 	})
 }
 
-func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
+func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
 	if config == nil {
 		return true, nil
 	}
@@ -32,14 +33,10 @@ func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAI
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
-	r.log("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
+	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending)
+	r.log("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "knownTerms", len(knownTerms), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
-	responseFormat := extractionOpenRouterResponseFormat()
-	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userPrompt},
-	}, nil, responseFormat)
+	promptTokens := prepared.PromptTokens
 	r.log("context_fit_token_estimate", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens)
 	stageStartedAt = time.Now()
 	maxTokens, err := resolveOpenRouterMaxOutputTokens(ctx, config.APIKey, config.ModelID, config.ProviderOrder, extractionDefaultMaxTokens, promptTokens)
@@ -57,21 +54,17 @@ func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAI
 	return false, err
 }
 
-func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatchResult, error) {
+func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatchResult, error) {
 	temperature := 0.2
 	stageStartedAt := time.Now()
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
-	r.log("batch_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
+	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending)
+	r.log("batch_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "knownTerms", len(knownTerms), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
-	responseFormat := extractionOpenRouterResponseFormat()
-	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userPrompt},
-	}, nil, responseFormat)
+	promptTokens := prepared.PromptTokens
 	r.log("batch_token_estimate", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "promptTokens", promptTokens)
 	stageStartedAt = time.Now()
 	maxTokens, err := resolveOpenRouterMaxOutputTokens(ctx, config.APIKey, config.ModelID, config.ProviderOrder, extractionDefaultMaxTokens, promptTokens)
@@ -95,11 +88,8 @@ func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.Res
 		RequireParameters: config.RequireParameters,
 		Temperature:       &temperature,
 		MaxTokens:         maxTokens,
-		ResponseFormat:    responseFormat,
-	}, []ai.ChatMessage{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userPrompt},
-	})
+		ResponseFormat:    prepared.ResponseFormat,
+	}, prepared.Messages)
 	status = "ok"
 	if err != nil {
 		status = "error"
@@ -129,6 +119,27 @@ func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.Res
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
+}
+
+type preparedExtractionRequest struct {
+	Messages       []ai.ChatMessage
+	ResponseFormat map[string]any
+	PromptTokens   int
+}
+
+func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolved []characters.GeneratedUnresolvedMention) preparedExtractionRequest {
+	var systemPromptOverride *string
+	if config != nil {
+		systemPromptOverride = config.SystemPrompt
+	}
+	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolved, systemPromptOverride)
+	messages := []ai.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}}
+	responseFormat := extractionOpenRouterResponseFormat()
+	return preparedExtractionRequest{
+		Messages:       messages,
+		ResponseFormat: responseFormat,
+		PromptTokens:   estimateOpenRouterChatRequestTokens(messages, nil, responseFormat),
+	}
 }
 
 func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRequest {
@@ -221,6 +232,42 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"summaryHistory":              map[string]any{"type": "array", "items": historyVersionSchema},
 		},
 	}
+	termVersionEpisode := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"text", "episodeIndex"},
+		"properties": map[string]any{
+			"text":         map[string]any{"type": "string"},
+			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+		},
+	}
+	termCategory := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"value", "episodeIndex"},
+		"properties": map[string]any{
+			"value": map[string]any{
+				"type": "string",
+				"enum": []any{"organization", "place", "item", "skill", "race", "event", "other"},
+			},
+			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+		},
+	}
+	termSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"term", "reading", "category", "descriptionHistory"},
+		"properties": map[string]any{
+			"term":     map[string]any{"type": "string"},
+			"reading":  map[string]any{"anyOf": []any{map[string]any{"type": "null"}, termVersionEpisode}},
+			"category": termCategory,
+			"descriptionHistory": map[string]any{
+				"type":     "array",
+				"minItems": 1,
+				"items":    historyVersionSchema,
+			},
+		},
+	}
 	return map[string]any{
 		"type": "json_schema",
 		"json_schema": map[string]any{
@@ -229,7 +276,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"schema": map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
-				"required":             []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions"},
+				"required":             []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions", "terms"},
 				"properties": map[string]any{
 					"processedUpToEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
 					"newCharacters": map[string]any{
@@ -267,8 +314,16 @@ func extractionOpenRouterResponseFormat() map[string]any {
 							},
 						},
 					},
+					"terms": map[string]any{
+						"type":  "array",
+						"items": termSchema,
+					},
 				},
 			},
 		},
 	}
+}
+
+func ExtractionOpenRouterResponseFormat() map[string]any {
+	return extractionOpenRouterResponseFormat()
 }

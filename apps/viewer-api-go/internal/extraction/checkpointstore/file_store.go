@@ -9,6 +9,7 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type Checkpoint struct {
@@ -19,6 +20,7 @@ type Checkpoint struct {
 	ProcessedEpisodeIndexes   []string                                 `json:"processedEpisodeIndexes"`
 	ProcessedBatchIndexes     []int                                    `json:"processedBatchIndexes,omitempty"`
 	Characters                []characters.GeneratedCharacter          `json:"characters"`
+	Terms                     []terms.GeneratedTerm                    `json:"terms"`
 	PendingUnresolvedMentions []characters.GeneratedUnresolvedMention  `json:"pendingUnresolvedMentions,omitempty"`
 	IssuedCharacterIDs        []string                                 `json:"issuedCharacterIds,omitempty"`
 	RetiredCharacterIDs       []characters.GeneratedRetiredCharacterID `json:"retiredCharacterIds,omitempty"`

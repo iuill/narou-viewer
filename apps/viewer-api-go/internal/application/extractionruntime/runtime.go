@@ -22,6 +22,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type Library interface {
@@ -164,16 +165,16 @@ func (r *Runtime) ActiveLockCount() int {
 	return len(r.generationTargets)
 }
 
-func (r *Runtime) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) error {
+func (r *Runtime) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
 	if r == nil {
-		return nil
+		return appextraction.FinalCounts{}, nil
 	}
 	return r.Workflow().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, strategy, progressSink)
 }
 
-func (r *Runtime) GeneratePreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress), episodeIndexes []string, preloaded *appextraction.Inputs) (characters.SummaryResponse, error) {
+func (r *Runtime) GeneratePreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress), episodeIndexes []string, preloaded *appextraction.Inputs) (appextraction.Result, error) {
 	if r == nil {
-		return characters.SummaryResponse{}, nil
+		return appextraction.Result{}, nil
 	}
 	return r.Workflow().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, strategy, progressSink, episodeIndexes, preloaded)
 }
@@ -278,6 +279,14 @@ func (r *Runtime) LoadGeneratedCharactersBeforeEpisode(novelID string, episodeIn
 	return characters.LoadGeneratedCharactersBeforeEpisode(r.stateDir, novelID, episodeIndex)
 }
 
+func (r *Runtime) LoadGeneratedTermsAtOrBefore(novelID string, committedFrontier string) ([]terms.GeneratedTerm, *string, bool, error) {
+	return terms.LoadGeneratedTermsAtOrBefore(r.stateDir, novelID, committedFrontier)
+}
+
+func (r *Runtime) LoadGeneratedTermsBeforeEpisode(novelID string, episodeIndex string) ([]terms.GeneratedTerm, *string, bool, error) {
+	return terms.LoadGeneratedTermsBeforeEpisode(r.stateDir, novelID, episodeIndex)
+}
+
 func (r *Runtime) ReprocessFromEpisode(ctx context.Context, novelID string, processedEpisodeIndex *string, requestedUpToEpisodeIndex string) (string, error) {
 	if r == nil || r.library == nil || processedEpisodeIndex == nil || strings.TrimSpace(*processedEpisodeIndex) == "" {
 		return "", nil
@@ -367,9 +376,9 @@ func (r *Runtime) LoadIDAllocator(novelID string, seed []characters.GeneratedCha
 	return characters.LoadGeneratedCharacterIDAllocator(r.stateDir, novelID, seed)
 }
 
-func (r *Runtime) PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, template extractionBatch, chunks []extractionChunk, unresolvedMentions []characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
+func (r *Runtime) PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions []characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
 	startedAt := time.Now()
-	runtimeBatch, remaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, template, chunks, unresolvedMentions)
+	runtimeBatch, remaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, unresolvedMentions)
 	status := "ok"
 	if err != nil {
 		status = "error"
@@ -378,15 +387,23 @@ func (r *Runtime) PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAI
 	return runtimeBatch, remaining, err
 }
 
-func (r *Runtime) GenerateBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions []characters.GeneratedUnresolvedMention) (appextraction.BatchResult, error) {
+func (r *Runtime) GenerateBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions []characters.GeneratedUnresolvedMention) (appextraction.BatchResult, error) {
 	startedAt := time.Now()
-	result, err := r.generateOpenRouterBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, unresolvedMentions)
+	result, err := r.generateOpenRouterBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolvedMentions)
 	status := "ok"
 	if err != nil {
 		status = "error"
 	}
 	r.log("generate_batch", startedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "batchCount", batch.BatchCount, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(unresolvedMentions), "inputTokens", result.Usage.InputTokens, "outputTokens", result.Usage.OutputTokens, "totalTokens", result.Usage.TotalTokens)
 	return appextraction.BatchResult{Delta: result.Delta, Usage: result.Usage}, err
+}
+
+func (r *Runtime) SaveGeneratedTerms(novelID string, upToEpisodeIndex string, generated []terms.GeneratedTerm, replaceFromEpisodeIndex string) error {
+	var replaceFrom *string
+	if strings.TrimSpace(replaceFromEpisodeIndex) != "" {
+		replaceFrom = &replaceFromEpisodeIndex
+	}
+	return terms.SaveGeneratedTerms(r.stateDir, novelID, upToEpisodeIndex, generated, replaceFrom)
 }
 
 func (r *Runtime) LoadCheckpoint(novelID string, upToEpisodeIndex string) (checkpointstore.Checkpoint, error) {

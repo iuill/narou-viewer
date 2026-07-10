@@ -8,6 +8,7 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func TestExtractionLimitsPreferNewEnvironmentAndFallbackToLegacy(t *testing.T) {
@@ -342,7 +343,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	    "summaryHistory":[{"episodeIndex":"5","text":"一行を導く。"}]
 	  }],
 	  "mergeProposals":[{"sourceCharacterId":"char_dup","targetCharacterId":"char_existing","confidence":0.99,"reason":"本文で同一人物と明示"}],
-	  "unresolvedMentions":[{"mention":"先生","episodeIndex":"5","reason":"複数候補あり"}]
+	  "unresolvedMentions":[{"mention":"先生","episodeIndex":"5","reason":"複数候補あり"}],
+	  "terms":[]
 	}`)
 	normalized, err := NormalizeOpenRouterResponse(delta, "novel-1", "5")
 	if err != nil {
@@ -380,7 +382,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	    "appearanceHistory":[{"episodeIndex":"1","text":"銀髪"}],
 	    "personalityHistory":[{"episodeIndex":"2","text":"冷静"}],
 	    "summaryHistory":[{"episodeIndex":"3","text":"仲間。"}]
-	  }]
+	  }],
+	  "terms":[]
 	}`)
 	normalized, err = NormalizeOpenRouterResponse(rich, "novel-1", "3")
 	if err != nil {
@@ -390,7 +393,7 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 		t.Fatalf("unexpected rich normalization: %+v", normalized)
 	}
 
-	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}]}`)
+	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}],"terms":[]}`)
 	normalized, err = NormalizeOpenRouterResponse(legacy, "novel-1", "4")
 	if err != nil {
 		t.Fatalf("legacy response should normalize: %v", err)
@@ -414,7 +417,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 		"unresolvedMentions":[
 			{"mention":" 謎の影 ","episodeIndex":"bad","reason":"候補なし"},
 			{"mention":"","episodeIndex":"7"}
-		]
+		],
+		"terms":[]
 	}`), "novel-1", "7")
 	if err != nil {
 		t.Fatalf("response with normalized merge proposal should parse: %v", err)
@@ -424,6 +428,68 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	}
 	if len(withInvalidMerge.UnresolvedMentions) != 1 || withInvalidMerge.UnresolvedMentions[0].EpisodeIndex != "7" {
 		t.Fatalf("unresolved mentions should fall back to processed episode: %+v", withInvalidMerge.UnresolvedMentions)
+	}
+}
+
+func TestExtractionTermsContractAndNormalization(t *testing.T) {
+	for _, raw := range []string{
+		`{"characters":[]}`,
+		`{"characters":[],"terms":null}`,
+		`{"characters":[],"terms":{}}`,
+		`{"characters":[],"terms":[{"term":"聖剣","reading":42,"category":{"value":"item","episodeIndex":"1"},"descriptionHistory":[{"text":"剣。","episodeIndex":"1"}]}]}`,
+	} {
+		if _, err := NormalizeOpenRouterResponse([]byte(raw), "novel-1", "1"); err == nil {
+			t.Fatalf("malformed terms payload should fail: %s", raw)
+		}
+	}
+	if delta, err := NormalizeOpenRouterResponse([]byte(`{"characters":[],"terms":[]}`), "novel-1", "1"); err != nil || delta.Terms == nil || len(delta.Terms) != 0 {
+		t.Fatalf("empty terms must be valid and normalized to an empty slice: delta=%+v err=%v", delta, err)
+	}
+
+	delta, err := NormalizeOpenRouterResponse([]byte(`{
+		"processedUpToEpisodeIndex":"3",
+		"characters":[],
+		"terms":[{
+			"term":" 聖剣 ",
+			"reading":{"text":"せいけん","episodeIndex":"3"},
+			"category":{"value":"unknown","episodeIndex":"3"},
+			"descriptionHistory":[{"text":"王家に伝わる剣。","episodeIndex":"3"}]
+		}]
+	}`), "novel-1", "3")
+	if err != nil || len(delta.Terms) != 1 {
+		t.Fatalf("valid term should normalize: delta=%+v err=%v", delta, err)
+	}
+	term := delta.Terms[0]
+	if term.Term != "聖剣" || term.ReadingHistory[0].Text != "せいけん" || term.CategoryHistory[0].Category != terms.CategoryOther {
+		t.Fatalf("unexpected normalized term: %+v", term)
+	}
+}
+
+func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
+	if got := RenderExtractionInlineTokens([]library.ReaderInline{{Type: "ruby", Text: "聖剣", Ruby: "せいけん"}}); got != "聖剣《せいけん》" {
+		t.Fatalf("ruby prompt rendering = %q", got)
+	}
+
+	known := make([]terms.GeneratedTerm, 0, 20)
+	for index := 1; index <= 20; index++ {
+		known = append(known, terms.GeneratedTerm{
+			Term:               "用語" + strconv.Itoa(index),
+			CategoryHistory:    []terms.CategoryVersion{{Category: terms.CategoryItem, EpisodeIndex: strconv.Itoa(index)}},
+			DescriptionHistory: []terms.HistoryVersion{{Text: "説明", EpisodeIndex: strconv.Itoa(index)}},
+		})
+	}
+	cards := TermCandidateCards(known, Batch{Chunks: []Chunk{{Text: "用語1が登場する。"}}})
+	if len(cards) != 16 || cards[0]["term"] != "用語1" {
+		t.Fatalf("known term cards should prioritize exact text matches and cap at 16: %+v", cards)
+	}
+
+	incoming := []terms.GeneratedTerm{
+		{Term: "アリス", DescriptionHistory: []terms.HistoryVersion{{Text: "人物名", EpisodeIndex: "1"}}},
+		{Term: "聖剣", DescriptionHistory: []terms.HistoryVersion{{Text: "武器", EpisodeIndex: "1"}}},
+	}
+	filtered := FilterAndMergeTermDeltas(nil, incoming, []characters.GeneratedCharacter{{CanonicalName: "アリス"}})
+	if len(filtered) != 1 || filtered[0].Term != "聖剣" {
+		t.Fatalf("character names must be removed from term deltas: %+v", filtered)
 	}
 }
 

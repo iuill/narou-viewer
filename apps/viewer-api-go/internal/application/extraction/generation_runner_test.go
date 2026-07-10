@@ -29,7 +29,7 @@ func TestGenerationRunnerResumesOnlyUnprocessedBatchesFromCheckpoint(t *testing.
 	batches := runnerBatches("1", "2")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           1,
+			SchemaVersion:           2,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "2",
 			GenerationFingerprint:   CheckpointFingerprint(config, CheckpointBatchInputs(batches)),
@@ -39,7 +39,7 @@ func TestGenerationRunnerResumesOnlyUnprocessedBatchesFromCheckpoint(t *testing.
 		},
 	}
 
-	generated, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", nil, batches, nil, nil)
+	generated, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", nil, nil, batches, nil, nil)
 	if err != nil {
 		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 	batches := runnerBatches("1")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           1,
+			SchemaVersion:           2,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "1",
 			GenerationFingerprint:   "stale",
@@ -78,7 +78,7 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 		},
 	}
 
-	generated, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, batches, nil, nil)
+	generated, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, nil, batches, nil, nil)
 	if err != nil {
 		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestGenerationRunnerKeepsCompletedCheckpointWhenLaterBatchFails(t *testing.
 		generateErrAfter: 1,
 	}
 
-	_, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", nil, runnerBatches("1", "2"), nil, nil)
+	_, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", nil, nil, runnerBatches("1", "2"), nil, nil)
 	if err == nil {
 		t.Fatal("RunOpenRouterWithCheckpoint should return provider error")
 	}
@@ -114,7 +114,7 @@ func TestGenerationRunnerPreviewDoesNotSaveCheckpointAndEmitsProgress(t *testing
 	ports := &workflowFakePorts{}
 	progress := []BatchProgress{}
 
-	_, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterPreview(context.Background(), config, "novel-a", "1", nil, runnerBatches("1"), func(value BatchProgress) {
+	_, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterPreview(context.Background(), config, "novel-a", "1", nil, nil, runnerBatches("1"), func(value BatchProgress) {
 		progress = append(progress, value)
 	}, nil)
 	if err != nil {
@@ -133,10 +133,10 @@ func TestGenerationRunnerPreviewDoesNotSaveCheckpointAndEmitsProgress(t *testing
 
 func TestGenerationRunnerReturnsAllocatorAndPlanningErrors(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
-	if _, _, _, err := NewWorkflow(&workflowFakePorts{allocatorErr: errors.New("allocator failed")}).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, runnerBatches("1"), nil, nil); err == nil {
+	if _, _, _, err := NewWorkflow(&workflowFakePorts{allocatorErr: errors.New("allocator failed")}).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, nil, runnerBatches("1"), nil, nil); err == nil {
 		t.Fatal("checkpoint runner should return allocator errors")
 	}
-	if _, _, _, err := NewWorkflow(&workflowFakePorts{planErr: errors.New("planning failed")}).RunOpenRouterPreview(context.Background(), config, "novel-a", "1", nil, runnerBatches("1"), nil, nil); err == nil {
+	if _, _, _, err := NewWorkflow(&workflowFakePorts{planErr: errors.New("planning failed")}).RunOpenRouterPreview(context.Background(), config, "novel-a", "1", nil, nil, runnerBatches("1"), nil, nil); err == nil {
 		t.Fatal("preview runner should return planning errors")
 	}
 }
@@ -170,10 +170,10 @@ func TestGenerationRunnerSmallHelpers(t *testing.T) {
 }
 
 func TestWorkflowNilRunnerEntryPointsReturnEmptyResults(t *testing.T) {
-	if generated, state, usage, err := (*Workflow)(nil).RunOpenRouterWithCheckpoint(context.Background(), nil, "novel-a", "1", nil, nil, nil, nil); err != nil || generated != nil || len(state.UnresolvedMentions) != 0 || usage != nil {
+	if generated, state, usage, err := (*Workflow)(nil).RunOpenRouterWithCheckpoint(context.Background(), nil, "novel-a", "1", nil, nil, nil, nil, nil); err != nil || generated != nil || len(state.UnresolvedMentions) != 0 || usage != nil {
 		t.Fatalf("nil checkpoint runner result = generated:%+v state:%+v usage:%+v err:%v", generated, state, usage, err)
 	}
-	if generated, state, usage, err := (*Workflow)(nil).RunOpenRouterPreview(context.Background(), nil, "novel-a", "1", nil, nil, nil, nil); err != nil || generated != nil || len(state.UnresolvedMentions) != 0 || usage != nil {
+	if generated, state, usage, err := (*Workflow)(nil).RunOpenRouterPreview(context.Background(), nil, "novel-a", "1", nil, nil, nil, nil, nil); err != nil || generated != nil || len(state.UnresolvedMentions) != 0 || usage != nil {
 		t.Fatalf("nil preview runner result = generated:%+v state:%+v usage:%+v err:%v", generated, state, usage, err)
 	}
 }

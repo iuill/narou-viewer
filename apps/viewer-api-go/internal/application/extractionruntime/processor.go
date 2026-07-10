@@ -11,7 +11,7 @@ import (
 )
 
 type Workflow interface {
-	GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) error
+	GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error)
 }
 
 type JobStore interface {
@@ -68,7 +68,7 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		job.StartedAt = &now
 		job.FinishedAt = nil
 		job.ErrorMessage = nil
-		SetExtractionJobProgress(&job, 0, "preparing", nil, nil, nil)
+		SetExtractionJobProgress(&job, 0, "preparing", nil, nil, nil, nil)
 		saveStartedAt := time.Now()
 		if err := p.store.Save(novelID, job); err != nil {
 			p.log("job_save", saveStartedAt, "status", "error", "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
@@ -86,13 +86,13 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		}
 		switch progress.Phase {
 		case "start":
-			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.Batch.BatchIndex-1, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil)
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.Batch.BatchIndex-1, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil, nil)
 		case "complete":
 			completedBatches := progress.Batch.BatchIndex
 			if progress.CompletedBatchCount > 0 {
 				completedBatches = progress.CompletedBatchCount
 			}
-			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batchComplete", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, &progress.MergedCharacterCount)
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batchComplete", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, &progress.MergedCharacterCount, &progress.MergedTermCount)
 		default:
 			return
 		}
@@ -104,16 +104,17 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		}
 		p.log("job_save", saveStartedAt, "status", status, "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
 	}
-	if err := p.workflow.GenerateAndSave(ctx, novelID, job.RequestedUpToEpisodeIndex, nil, job.GenerationStrategy, progressSink); err != nil {
+	counts, generationErr := p.workflow.GenerateAndSave(ctx, novelID, job.RequestedUpToEpisodeIndex, nil, job.GenerationStrategy, progressSink)
+	if generationErr != nil {
 		if ctx.Err() != nil {
 			return false
 		}
 		finishedAt := ai.NowISO()
-		message := err.Error()
+		message := generationErr.Error()
 		job.Status = "failed"
 		job.FinishedAt = &finishedAt
 		job.ErrorMessage = &message
-		SetExtractionJobProgress(&job, ValueOrDefaultInt(job.Progress, 0), "failed", job.CurrentBatchIndex, job.BatchCount, job.GeneratedCharacterCount)
+		SetExtractionJobProgress(&job, ValueOrDefaultInt(job.Progress, 0), "failed", job.CurrentBatchIndex, job.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
 		saveStartedAt := time.Now()
 		err := p.store.Save(novelID, job)
 		status := "ok"
@@ -128,7 +129,7 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 	job.Status = "completed"
 	job.FinishedAt = &finishedAt
 	job.ErrorMessage = nil
-	SetExtractionJobProgress(&job, 100, "completed", job.CurrentBatchIndex, job.BatchCount, job.GeneratedCharacterCount)
+	SetExtractionJobProgress(&job, 100, "completed", job.CurrentBatchIndex, job.BatchCount, &counts.CharacterCount, &counts.TermCount)
 	saveStartedAt := time.Now()
 	err := p.store.Save(novelID, job)
 	status := "ok"
@@ -145,7 +146,7 @@ func (p *Processor) log(stage string, startedAt time.Time, fields ...any) {
 	}
 }
 
-func SetExtractionJobProgress(job *extractdomain.Job, progress int, stage string, currentBatchIndex *int, batchCount *int, generatedCharacterCount *int) {
+func SetExtractionJobProgress(job *extractdomain.Job, progress int, stage string, currentBatchIndex *int, batchCount *int, generatedCharacterCount *int, generatedTermCount *int) {
 	if progress < 0 {
 		progress = 0
 	}
@@ -160,6 +161,7 @@ func SetExtractionJobProgress(job *extractdomain.Job, progress int, stage string
 	job.CurrentBatchIndex = currentBatchIndex
 	job.BatchCount = batchCount
 	job.GeneratedCharacterCount = generatedCharacterCount
+	job.GeneratedTermCount = generatedTermCount
 }
 
 func ExtractionJobBatchProgressPercent(completedBatches int, batchCount int) int {

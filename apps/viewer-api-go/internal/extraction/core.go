@@ -15,6 +15,7 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 const (
@@ -59,6 +60,7 @@ type Delta struct {
 	MergeProposals     []MergeProposal
 	UnresolvedMentions []UnresolvedMention
 	LegacyCharacters   []characters.GeneratedCharacter
+	Terms              []terms.GeneratedTerm
 }
 
 type MergeProposal struct {
@@ -79,6 +81,7 @@ type GenerationState struct {
 	IssuedCharacterIDs  []string
 	RetiredCharacterIDs []characters.GeneratedRetiredCharacterID
 	NextOrdinal         int
+	Terms               []terms.GeneratedTerm
 }
 
 const MergeAutoApplyConfidence = 0.75
@@ -133,6 +136,27 @@ func RenderInlineTokens(tokens []library.ReaderInline) string {
 	return strings.Join(parts, "")
 }
 
+func RenderExtractionInlineTokens(tokens []library.ReaderInline) string {
+	parts := []string{}
+	for _, token := range tokens {
+		switch token.Type {
+		case "text", "tcy":
+			parts = append(parts, token.Text)
+		case "ruby":
+			if strings.TrimSpace(token.Ruby) != "" {
+				parts = append(parts, token.Text+"《"+token.Ruby+"》")
+			} else {
+				parts = append(parts, token.Text)
+			}
+		case "lineBreak":
+			parts = append(parts, "\n")
+		case "link":
+			parts = append(parts, RenderExtractionInlineTokens(token.Children))
+		}
+	}
+	return strings.Join(parts, "")
+}
+
 func RenderBlock(block library.ReaderBlock) string {
 	switch block.Type {
 	case "meta", "title":
@@ -167,6 +191,23 @@ func ExtractEpisodeText(episode EpisodeInput) string {
 		rendered := RenderBlock(block)
 		if strings.TrimSpace(rendered) != "" {
 			parts = append(parts, rendered)
+		}
+	}
+	text := normalizeSummaryWhitespace(strings.Join(parts, " "))
+	if text != "" {
+		return text
+	}
+	return stripSummaryHTML(episode.HTML)
+}
+
+func ExtractEpisodePromptText(episode EpisodeInput) string {
+	parts := []string{}
+	for _, block := range episode.ReaderDocument.Blocks {
+		switch block.Type {
+		case "paragraph":
+			parts = append(parts, RenderExtractionInlineTokens(block.Inlines))
+		case "html", "image":
+			parts = append(parts, RenderBlock(block))
 		}
 	}
 	text := normalizeSummaryWhitespace(strings.Join(parts, " "))
@@ -258,7 +299,7 @@ func splitRunesEvery(text string, maxChars int) []string {
 func CreateChunks(episodes []EpisodeInput, maxChunkChars int) []Chunk {
 	chunks := []Chunk{}
 	for _, episode := range episodes {
-		text := ExtractEpisodeText(episode)
+		text := ExtractEpisodePromptText(episode)
 		chunks = append(chunks, CreateChunksFromText(episode, text, maxChunkChars)...)
 	}
 	return chunks
@@ -531,7 +572,7 @@ func TokensFromChars(chars int) int {
 
 func BuildDefaultSystemPrompt() string {
 	return strings.Join([]string{
-		"あなたは日本語の普通の物語小説から、キャラクター情報の差分だけを抽出する専用アシスタントです。",
+		"あなたは日本語の普通の物語小説から、キャラクター情報と作品固有の用語情報の差分を同時抽出する専用アシスタントです。",
 		"本文に明示された事実だけを使い、推測や補完はしないでください。",
 		"出力は必ず JSON 形式の差分更新だけにしてください。",
 		"最優先方針: 抽出対象は「人として登場する個人キャラクター」だけです。",
@@ -547,6 +588,10 @@ func BuildDefaultSystemPrompt() string {
 		"summaryHistory には、その時点で新しく分かった人物像、立場、関係性、主要な行動を 1〜2 文で短く要約してください。",
 		"各履歴項目は episodeIndex と text を必ず持ちます。",
 		"同じ内容を重複して入れないでください。",
+		"terms には人物名を含めず、組織・場所・物品・技能・種族・出来事などの作品固有語だけを入れてください。",
+		"term の category は organization / place / item / skill / race / event / other のいずれかです。",
+		"reading は本文中の明示的なルビ、または表記自体が読みとして明示された場合だけ記録し、読みを推測しないでください。不明なら null にしてください。",
+		"term の descriptionHistory は差分断片ではなく、その話時点までの既知情報をまとめた自己完結型 snapshot にしてください。未来話の情報を混ぜないでください。",
 	}, " ")
 }
 
@@ -558,17 +603,23 @@ func ResolveSystemPrompt(systemPromptOverride *string) string {
 }
 
 func BuildPrompt(novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch Batch, systemPromptOverride *string) (string, string) {
-	return BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, nil, systemPromptOverride)
+	return BuildPromptWithContext(novelID, upToEpisodeIndex, knownCharacters, nil, batch, nil, systemPromptOverride)
 }
 
 func BuildPromptWithUnresolved(novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch Batch, unresolvedMentions []characters.GeneratedUnresolvedMention, systemPromptOverride *string) (string, string) {
+	return BuildPromptWithContext(novelID, upToEpisodeIndex, knownCharacters, nil, batch, unresolvedMentions, systemPromptOverride)
+}
+
+func BuildPromptWithContext(novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch Batch, unresolvedMentions []characters.GeneratedUnresolvedMention, systemPromptOverride *string) (string, string) {
 	candidateCharacters := CandidateCards(knownCharacters, batch)
+	candidateTerms := TermCandidateCards(knownTerms, batch)
 	payload := map[string]any{
 		"novelId":             novelID,
 		"upToEpisodeIndex":    upToEpisodeIndex,
 		"candidateCharacters": candidateCharacters,
+		"knownTerms":          candidateTerms,
 		"episodes":            chunkPromptPayload(batch.Chunks),
-		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
+		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions, terms. terms must always be present; use [] when there is no term delta. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
 	}
 	if len(candidateCharacters) == 0 {
 		payload["generationTask"] = "initialCharacterExtraction"
@@ -579,6 +630,65 @@ func BuildPromptWithUnresolved(novelID string, upToEpisodeIndex string, knownCha
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	return ResolveSystemPrompt(systemPromptOverride), string(raw)
+}
+
+func TermCandidateCards(values []terms.GeneratedTerm, batch Batch) []map[string]any {
+	type scoredTerm struct {
+		value terms.GeneratedTerm
+		score int
+	}
+	batchText := batchTextForCandidateSearch(batch)
+	scored := make([]scoredTerm, 0, len(values))
+	for _, value := range values {
+		term := strings.TrimSpace(value.Term)
+		if term == "" || len(value.DescriptionHistory) == 0 {
+			continue
+		}
+		score := latestTermEpisode(value)
+		if strings.Contains(batchText, term) {
+			score += 1_000_000
+		}
+		scored = append(scored, scoredTerm{value: value, score: score})
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].value.Term < scored[j].value.Term
+	})
+	if len(scored) > 16 {
+		scored = scored[:16]
+	}
+	result := make([]map[string]any, 0, len(scored))
+	for _, candidate := range scored {
+		value := candidate.value
+		card := map[string]any{
+			"term":               strings.TrimSpace(value.Term),
+			"category":           terms.CategoryOther,
+			"latestDescription":  value.DescriptionHistory[len(value.DescriptionHistory)-1].Text,
+			"latestEpisodeIndex": value.DescriptionHistory[len(value.DescriptionHistory)-1].EpisodeIndex,
+		}
+		if len(value.ReadingHistory) > 0 {
+			card["reading"] = value.ReadingHistory[len(value.ReadingHistory)-1].Text
+		} else {
+			card["reading"] = nil
+		}
+		if len(value.CategoryHistory) > 0 {
+			card["category"] = terms.NormalizeCategory(value.CategoryHistory[len(value.CategoryHistory)-1].Category)
+		}
+		result = append(result, card)
+	}
+	return result
+}
+
+func latestTermEpisode(value terms.GeneratedTerm) int {
+	latest := 0
+	for _, history := range value.DescriptionHistory {
+		if episode, err := strconv.Atoi(history.EpisodeIndex); err == nil && episode > latest {
+			latest = episode
+		}
+	}
+	return latest
 }
 
 func unresolvedMentionPromptPayload(values []characters.GeneratedUnresolvedMention) []map[string]any {
@@ -814,12 +924,20 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		CharacterUpdates          []json.RawMessage   `json:"characterUpdates"`
 		MergeProposals            []MergeProposal     `json:"mergeProposals"`
 		UnresolvedMentions        []UnresolvedMention `json:"unresolvedMentions"`
+		Terms                     json.RawMessage     `json:"terms"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Delta{}, errors.New("OpenRouter response was not valid JSON.")
 	}
 	if payload.Characters == nil && payload.NewCharacters == nil && payload.CharacterUpdates == nil {
 		return Delta{}, errors.New("OpenRouter response did not match the expected character summary schema.")
+	}
+	if payload.Terms == nil || string(payload.Terms) == "null" {
+		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema: terms is required.")
+	}
+	var rawTerms []json.RawMessage
+	if err := json.Unmarshal(payload.Terms, &rawTerms); err != nil {
+		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema: terms must be an array.")
 	}
 	if !isDigitsString(payload.ProcessedUpToEpisodeIndex) {
 		payload.ProcessedUpToEpisodeIndex = fallbackEpisodeIndex
@@ -828,6 +946,16 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		MergeProposals:     normalizeMergeProposals(payload.MergeProposals),
 		UnresolvedMentions: NormalizeUnresolvedMentions(payload.UnresolvedMentions, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex),
 	}
+	for _, rawTerm := range rawTerms {
+		term, keep, err := normalizeOpenRouterTerm(rawTerm, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
+		if err != nil {
+			return Delta{}, err
+		}
+		if keep {
+			delta.Terms = append(delta.Terms, term)
+		}
+	}
+	delta.Terms = terms.ApplyTermDelta(nil, delta.Terms)
 	seenIDs := map[string]bool{}
 	for _, rawItem := range payload.Characters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
@@ -860,6 +988,82 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	SortGeneratedCharacters(delta.NewCharacters)
 	SortGeneratedCharacters(delta.CharacterUpdates)
 	return delta, nil
+}
+
+func normalizeOpenRouterTerm(raw json.RawMessage, episodeIndexes ...string) (terms.GeneratedTerm, bool, error) {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return terms.GeneratedTerm{}, false, extractionTermContractError()
+	}
+	for _, key := range []string{"term", "reading", "category", "descriptionHistory"} {
+		if _, ok := item[key]; !ok {
+			return terms.GeneratedTerm{}, false, extractionTermContractError()
+		}
+	}
+	var termText string
+	if err := json.Unmarshal(item["term"], &termText); err != nil {
+		return terms.GeneratedTerm{}, false, extractionTermContractError()
+	}
+	termText = strings.TrimSpace(termText)
+	readingHistory := []terms.TextVersion{}
+	if string(item["reading"]) != "null" {
+		value, err := decodeTermVersionObject(item["reading"], "text", episodeIndexes...)
+		if err != nil {
+			return terms.GeneratedTerm{}, false, err
+		}
+		if strings.TrimSpace(value["text"]) != "" {
+			readingHistory = append(readingHistory, terms.TextVersion{Text: strings.TrimSpace(value["text"]), EpisodeIndex: value["episodeIndex"]})
+		}
+	}
+	categoryValue, err := decodeTermVersionObject(item["category"], "value", episodeIndexes...)
+	if err != nil {
+		return terms.GeneratedTerm{}, false, err
+	}
+	categoryHistory := []terms.CategoryVersion{{
+		Category:     terms.NormalizeCategory(strings.TrimSpace(categoryValue["value"])),
+		EpisodeIndex: categoryValue["episodeIndex"],
+	}}
+	var rawDescriptions []json.RawMessage
+	if err := json.Unmarshal(item["descriptionHistory"], &rawDescriptions); err != nil || len(rawDescriptions) == 0 {
+		return terms.GeneratedTerm{}, false, extractionTermContractError()
+	}
+	descriptions := []terms.HistoryVersion{}
+	for _, rawDescription := range rawDescriptions {
+		value, err := decodeTermVersionObject(rawDescription, "text", episodeIndexes...)
+		if err != nil {
+			return terms.GeneratedTerm{}, false, err
+		}
+		if strings.TrimSpace(value["text"]) != "" {
+			descriptions = append(descriptions, terms.HistoryVersion{Text: strings.TrimSpace(value["text"]), EpisodeIndex: value["episodeIndex"]})
+		}
+	}
+	if termText == "" || len(descriptions) == 0 {
+		return terms.GeneratedTerm{}, false, nil
+	}
+	return terms.GeneratedTerm{Term: termText, ReadingHistory: readingHistory, CategoryHistory: categoryHistory, DescriptionHistory: descriptions}, true, nil
+}
+
+func decodeTermVersionObject(raw json.RawMessage, valueKey string, episodeIndexes ...string) (map[string]string, error) {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil {
+		return nil, extractionTermContractError()
+	}
+	var value string
+	var episodeIndex string
+	if json.Unmarshal(item[valueKey], &value) != nil || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil {
+		return nil, extractionTermContractError()
+	}
+	if !isDigitsString(episodeIndex) {
+		episodeIndex = firstDigitsSummaryString(episodeIndexes...)
+	}
+	if !isDigitsString(episodeIndex) {
+		return nil, extractionTermContractError()
+	}
+	return map[string]string{valueKey: value, "episodeIndex": episodeIndex}, nil
+}
+
+func extractionTermContractError() error {
+	return errors.New("OpenRouter response did not match the expected extraction term schema.")
 }
 
 func normalizeMergeProposals(values []MergeProposal) []MergeProposal {
@@ -1296,6 +1500,43 @@ func ApplyDelta(novelID string, existing []characters.GeneratedCharacter, delta 
 	generated, changed = ApplyMergeProposals(generated, delta.MergeProposals, changed, allocator)
 	SortGeneratedCharacters(generated)
 	return generated, changed
+}
+
+func CharacterNameSet(generated []characters.GeneratedCharacter) map[string]bool {
+	result := map[string]bool{}
+	for _, character := range generated {
+		for _, value := range []string{character.CanonicalName, valueOrEmptyString(character.FullName)} {
+			if value = strings.TrimSpace(value); value != "" {
+				result[value] = true
+			}
+		}
+		for _, versions := range [][]characters.GeneratedTextVersion{character.NameHistory, character.FullNameHistory, character.Aliases} {
+			for _, version := range versions {
+				if value := strings.TrimSpace(version.Text); value != "" {
+					result[value] = true
+				}
+			}
+		}
+	}
+	return result
+}
+
+func FilterAndMergeTermDeltas(existing []terms.GeneratedTerm, incoming []terms.GeneratedTerm, generatedCharacters []characters.GeneratedCharacter) []terms.GeneratedTerm {
+	names := CharacterNameSet(generatedCharacters)
+	filtered := make([]terms.GeneratedTerm, 0, len(incoming))
+	for _, term := range incoming {
+		if !names[strings.TrimSpace(term.Term)] {
+			filtered = append(filtered, term)
+		}
+	}
+	return terms.ApplyTermDelta(existing, filtered)
+}
+
+func valueOrEmptyString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func assignGeneratedCharactersForDelta(novelID string, existing []characters.GeneratedCharacter, incoming []characters.GeneratedCharacter, allocator *characters.GeneratedCharacterIDAllocator) []characters.GeneratedCharacter {

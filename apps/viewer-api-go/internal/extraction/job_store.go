@@ -200,6 +200,7 @@ func (d jobDocument) toJob() Job {
 		CurrentBatchIndex:         d.CurrentBatchIndex,
 		BatchCount:                d.BatchCount,
 		GeneratedCharacterCount:   d.GeneratedCharacterCount,
+		GeneratedTermCount:        d.GeneratedTermCount,
 		CreatedAt:                 d.CreatedAt,
 		StartedAt:                 d.StartedAt,
 		FinishedAt:                d.FinishedAt,
@@ -258,6 +259,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 		job.CurrentBatchIndex = nil
 		job.BatchCount = nil
 		job.GeneratedCharacterCount = nil
+		job.GeneratedTermCount = nil
 		if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
 			return recovered, err
 		}
@@ -284,6 +286,7 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		CurrentBatchIndex:         job.CurrentBatchIndex,
 		BatchCount:                job.BatchCount,
 		GeneratedCharacterCount:   job.GeneratedCharacterCount,
+		GeneratedTermCount:        job.GeneratedTermCount,
 		CreatedAt:                 job.CreatedAt,
 		StartedAt:                 job.StartedAt,
 		FinishedAt:                job.FinishedAt,

@@ -42,6 +42,38 @@ func TestExtractionTimingLogEnvironmentFallback(t *testing.T) {
 	}
 }
 
+func TestExtractionOpenRouterResponseFormatRequiresStrictTerms(t *testing.T) {
+	format := ExtractionOpenRouterResponseFormat()
+	jsonSchema := format["json_schema"].(map[string]any)
+	schema := jsonSchema["schema"].(map[string]any)
+	required := schema["required"].([]any)
+	foundTerms := false
+	for _, value := range required {
+		if value == "terms" {
+			foundTerms = true
+		}
+	}
+	if !foundTerms {
+		t.Fatalf("root response schema must require terms: %+v", required)
+	}
+	properties := schema["properties"].(map[string]any)
+	termItems := properties["terms"].(map[string]any)["items"].(map[string]any)
+	termProperties := termItems["properties"].(map[string]any)
+	reading := termProperties["reading"].(map[string]any)
+	if len(reading["anyOf"].([]any)) != 2 {
+		t.Fatalf("term reading must support an explicit null: %+v", reading)
+	}
+	descriptions := termProperties["descriptionHistory"].(map[string]any)
+	if descriptions["minItems"] != 1 {
+		t.Fatalf("term descriptionHistory must require at least one snapshot: %+v", descriptions)
+	}
+	category := termProperties["category"].(map[string]any)
+	categoryValue := category["properties"].(map[string]any)["value"].(map[string]any)
+	if values := categoryValue["enum"].([]any); len(values) != 7 || values[6] != "other" {
+		t.Fatalf("term category enum is incomplete: %+v", values)
+	}
+}
+
 func TestRuntimeGeneratedStateHelpers(t *testing.T) {
 	stateDir := t.TempDir()
 	runtime := NewRuntime(RuntimeDependencies{StateDir: stateDir})

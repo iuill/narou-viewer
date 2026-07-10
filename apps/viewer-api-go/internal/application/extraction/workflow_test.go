@@ -10,6 +10,7 @@ import (
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type workflowFakePorts struct {
@@ -19,6 +20,7 @@ type workflowFakePorts struct {
 	rebatchOutput  *Inputs
 	loadErr        error
 	seed           []characters.GeneratedCharacter
+	seedTerms      []terms.GeneratedTerm
 	processedIndex *string
 	hasExisting    bool
 	reprocessFrom  string
@@ -27,6 +29,7 @@ type workflowFakePorts struct {
 	materialized      bool
 	saveHeuristic     bool
 	saveGenerated     bool
+	saveTerms         bool
 	removedCheckpoint bool
 	builtGenerated    bool
 	loadedPreview     bool
@@ -86,6 +89,14 @@ func (p *workflowFakePorts) LoadGeneratedCharactersBeforeEpisode(string, string)
 	return p.seed, p.processedIndex, p.hasExisting, nil
 }
 
+func (p *workflowFakePorts) LoadGeneratedTermsAtOrBefore(string, string) ([]terms.GeneratedTerm, *string, bool, error) {
+	return p.seedTerms, p.processedIndex, p.hasExisting || p.processedIndex != nil, nil
+}
+
+func (p *workflowFakePorts) LoadGeneratedTermsBeforeEpisode(string, string) ([]terms.GeneratedTerm, *string, bool, error) {
+	return p.seedTerms, p.processedIndex, p.hasExisting || p.processedIndex != nil, nil
+}
+
 func (p *workflowFakePorts) ReprocessFromEpisode(context.Context, string, *string, string) (string, error) {
 	return p.reprocessFrom, nil
 }
@@ -114,14 +125,14 @@ func (p *workflowFakePorts) LoadIDAllocator(novelID string, seed []characters.Ge
 	return characters.NewGeneratedCharacterIDAllocator(novelID, seed), nil
 }
 
-func (p *workflowFakePorts) PlanRuntimeBatch(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, _ []characters.GeneratedCharacter, template core.Batch, chunks []core.Chunk, _ []characters.GeneratedUnresolvedMention) (core.Batch, []core.Chunk, error) {
+func (p *workflowFakePorts) PlanRuntimeBatch(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, _ []characters.GeneratedCharacter, _ []terms.GeneratedTerm, template core.Batch, chunks []core.Chunk, _ []characters.GeneratedUnresolvedMention) (core.Batch, []core.Chunk, error) {
 	if p.planErr != nil {
 		return core.Batch{}, nil, p.planErr
 	}
 	return core.RuntimeBatch(template, chunks), nil, nil
 }
 
-func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGenerationConfig, string, string, []characters.GeneratedCharacter, core.Batch, []characters.GeneratedUnresolvedMention) (BatchResult, error) {
+func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGenerationConfig, string, string, []characters.GeneratedCharacter, []terms.GeneratedTerm, core.Batch, []characters.GeneratedUnresolvedMention) (BatchResult, error) {
 	if p.generateErr != nil && (p.generateErrAfter == 0 || p.generateCalls >= p.generateErrAfter) {
 		return BatchResult{Usage: ai.UsageRequest{RequestIndex: 0, Kind: "extraction_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13}}, p.generateErr
 	}
@@ -132,24 +143,24 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 	}, nil
 }
 
-func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
 	if p.generateErr != nil {
 		return nil, core.GenerationState{}, nil, p.generateErr
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_parallel", CanonicalName: "Parallel", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
-	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_parallel_identity", InputTokens: 12, OutputTokens: 4, TotalTokens: 16}}, nil
+	return generated, core.GenerationState{Terms: seedTerms}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_parallel_identity", InputTokens: 12, OutputTokens: 4, TotalTokens: 16}}, nil
 }
 
-func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
 	if p.generateErr != nil {
 		return nil, core.GenerationState{}, nil, p.generateErr
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_discovery", CanonicalName: "Discovery", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
-	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_discovery_parallel_correction", InputTokens: 16, OutputTokens: 5, TotalTokens: 21}}, nil
+	return generated, core.GenerationState{Terms: seedTerms}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_discovery_parallel_correction", InputTokens: 16, OutputTokens: 5, TotalTokens: 21}}, nil
 }
 
 func (p *workflowFakePorts) LoadCheckpoint(string, string) (checkpointstore.Checkpoint, error) {
@@ -173,6 +184,12 @@ func (p *workflowFakePorts) DeleteCheckpoint(string, string) error {
 func (p *workflowFakePorts) SaveGeneratedSummary(_ string, _ string, _ []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ characters.SaveGeneratedSummaryOptions) error {
 	p.saveGenerated = true
 	p.generatedEpisodes = append([]characters.HeuristicEpisode{}, episodes...)
+	return nil
+}
+
+func (p *workflowFakePorts) SaveGeneratedTerms(_ string, _ string, generated []terms.GeneratedTerm, _ string) error {
+	p.saveTerms = true
+	p.seedTerms = append([]terms.GeneratedTerm{}, generated...)
 	return nil
 }
 
@@ -239,7 +256,7 @@ func TestWorkflowGenerateAndSaveOpenRouterRecordsUsageAndSaves(t *testing.T) {
 		inputs:   workflowInputs(),
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
 	if err != nil {
 		t.Fatalf("GenerateAndSave returned error: %v", err)
 	}
@@ -265,7 +282,7 @@ func TestWorkflowGenerateAndSaveParallelIdentityUsesStrategy(t *testing.T) {
 		inputs:   workflowInputs(),
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, GenerationStrategyParallelIdentity, nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, GenerationStrategyParallelIdentity, nil)
 	if err != nil {
 		t.Fatalf("GenerateAndSave returned error: %v", err)
 	}
@@ -290,7 +307,7 @@ func TestWorkflowGenerateAndSaveHeuristicSavesWithoutUsage(t *testing.T) {
 		inputs:   workflowInputs(),
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
 	if err != nil {
 		t.Fatalf("GenerateAndSave returned error: %v", err)
 	}
@@ -377,7 +394,7 @@ func TestWorkflowGeneratePreviewOpenRouterFiltersPreloadedInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratePreview returned error: %v", err)
 	}
-	if summary.Status != "ready" || !ports.builtGenerated {
+	if summary.GenerationMode != "openrouter" || !ports.builtGenerated {
 		t.Fatalf("summary = %+v builtGenerated=%v, want ready generated preview", summary, ports.builtGenerated)
 	}
 	if len(ports.generatedEpisodes) != 1 || ports.generatedEpisodes[0].EpisodeIndex != "2" {
@@ -405,7 +422,7 @@ func TestWorkflowGeneratePreviewExistingSummaryLoadsPreviewWithoutUsage(t *testi
 	if err != nil {
 		t.Fatalf("GeneratePreview returned error: %v", err)
 	}
-	if summary.Status != "ready" || !ports.materialized || !ports.loadedPreview {
+	if summary.GenerationMode != "openrouter" || !ports.materialized || !ports.loadedPreview {
 		t.Fatalf("summary=%+v materialized=%v loadedPreview=%v, want loaded preview", summary, ports.materialized, ports.loadedPreview)
 	}
 	if len(ports.recordedUsage) != 0 {
@@ -421,7 +438,7 @@ func TestWorkflowGeneratePreviewHeuristicUsesPreloadedInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GeneratePreview returned error: %v", err)
 	}
-	if summary.Status != "ready" {
+	if summary.GenerationMode != "heuristic" {
 		t.Fatalf("summary = %+v, want ready", summary)
 	}
 	if len(ports.heuristicEpisodes) != 2 {
@@ -461,7 +478,7 @@ func TestWorkflowOpenRouterMissingProfileRecordsFailedUsage(t *testing.T) {
 		inputs:   workflowInputs(),
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
 	if err == nil {
 		t.Fatal("GenerateAndSave should fail when profile is missing")
 	}
@@ -473,7 +490,7 @@ func TestWorkflowOpenRouterMissingProfileRecordsFailedUsage(t *testing.T) {
 func TestWorkflowDisabledModeReturnsUnavailableError(t *testing.T) {
 	ports := &workflowFakePorts{settings: ai.SettingsResponse{EffectiveGenerationMode: "disabled"}}
 
-	if err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil); err == nil {
+	if _, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil); err == nil {
 		t.Fatal("GenerateAndSave should fail in disabled mode")
 	}
 	if _, err := NewWorkflow(ports).GeneratePreview(context.Background(), "novel-a", "1", nil, "", nil, []string{"1"}, nil); err == nil {
@@ -536,7 +553,7 @@ func TestWorkflowGenerateAndSaveSkipsUsageWhenExistingSummaryCoversRequest(t *te
 		hasExisting:    true,
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
 	if err != nil {
 		t.Fatalf("GenerateAndSave returned error: %v", err)
 	}
@@ -556,7 +573,7 @@ func TestWorkflowGenerateAndSaveRecordsFailedUsage(t *testing.T) {
 		generateErr: errors.New("provider failed"),
 	}
 
-	err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
 	if err == nil {
 		t.Fatal("GenerateAndSave should return provider error")
 	}

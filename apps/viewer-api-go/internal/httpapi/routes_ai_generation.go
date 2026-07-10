@@ -15,6 +15,7 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
@@ -958,6 +959,7 @@ func (s *Server) extractionResult(ctx context.Context, novelID string, upToEpiso
 		"generationStrategy":        result.GenerationStrategy,
 		"modelId":                   result.ModelID,
 		"characters":                result.Characters,
+		"terms":                     result.Terms,
 	}, nil
 }
 
@@ -966,11 +968,13 @@ func (s *Server) extractionWorkflow() *appextraction.Workflow {
 }
 
 func (s *Server) generateAndSaveExtraction(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(extractionBatchProgress)) error {
-	return s.extractionRuntime().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink)
+	_, err := s.extractionRuntime().GenerateAndSave(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink)
+	return err
 }
 
 func (s *Server) generateExtractionPreview(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, progressSink func(extractionBatchProgress), episodeIndexes []string, preloaded *extractionInputs) (summary characters.SummaryResponse, err error) {
-	return s.extractionRuntime().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink, episodeIndexes, preloaded)
+	result, err := s.extractionRuntime().GeneratePreview(ctx, novelID, upToEpisodeIndex, resolvedOverride, "", progressSink, episodeIndexes, preloaded)
+	return characters.SummaryResponse{Status: "ready", NovelID: result.NovelID, UpToEpisodeIndex: result.UpToEpisodeIndex, ProcessedUpToEpisodeIndex: result.ProcessedUpToEpisodeIndex, Characters: result.Characters}, err
 }
 
 func extractionPlaygroundErrorMessage(err error) string {
@@ -1083,7 +1087,7 @@ func (s *Server) generateOpenRouterExtractionWithCheckpoint(ctx context.Context,
 	if err != nil {
 		return nil, extractionGenerationState{}, nil, err
 	}
-	return s.extractionRuntime().Workflow().RunOpenRouterWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+	return s.extractionRuntime().Workflow().RunOpenRouterWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, nil, batches, progressSink, pendingUnresolved)
 }
 
 func (s *Server) generateOpenRouterExtraction(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, batches []extractionBatch, progressSink func(extractionBatchProgress), initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
@@ -1091,7 +1095,7 @@ func (s *Server) generateOpenRouterExtraction(ctx context.Context, config *store
 	if err != nil {
 		return nil, extractionGenerationState{}, nil, err
 	}
-	return s.extractionRuntime().Workflow().RunOpenRouterPreview(ctx, config, novelID, upToEpisodeIndex, seed, batches, progressSink, pendingUnresolved)
+	return s.extractionRuntime().Workflow().RunOpenRouterPreview(ctx, config, novelID, upToEpisodeIndex, seed, nil, batches, progressSink, pendingUnresolved)
 }
 
 func (s *Server) extractionInitialUnresolved(novelID string, initialUnresolved ...[]characters.GeneratedUnresolvedMention) ([]characters.GeneratedUnresolvedMention, error) {
@@ -1181,7 +1185,7 @@ func (s *Server) loadExtractionCheckpoint(novelID string, upToEpisodeIndex strin
 func (s *Server) loadExtractionCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) extractionCheckpoint {
 	checkpoint, err := s.extractionRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
-		checkpoint.SchemaVersion != 1 ||
+		checkpoint.SchemaVersion != 2 ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
@@ -1384,7 +1388,7 @@ func (s *Server) nextExtractionRuntimeBatch(ctx context.Context, config *store.R
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	return s.extractionRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, template, chunks, pending)
+	return s.extractionRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, nil, template, chunks, pending)
 }
 
 func (s *Server) extractionRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch) ([]extractionBatch, error) {
@@ -1438,7 +1442,7 @@ func (s *Server) generateOpenRouterExtractionBatch(ctx context.Context, config *
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	result, err := s.extractionRuntime().GenerateBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, batch, pending)
+	result, err := s.extractionRuntime().GenerateBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, nil, batch, pending)
 	if err != nil {
 		return extractionBatchResult{}, err
 	}
@@ -1446,132 +1450,7 @@ func (s *Server) generateOpenRouterExtractionBatch(ctx context.Context, config *
 }
 
 func extractionOpenRouterResponseFormat() map[string]any {
-	textVersionSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"text", "episodeIndex"},
-		"properties": map[string]any{
-			"text":         map[string]any{"type": "string"},
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-		},
-	}
-	historyVersionSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"episodeIndex", "text"},
-		"properties": map[string]any{
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-			"text":         map[string]any{"type": "string"},
-		},
-	}
-	characterDeltaSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required": []any{
-			"canonicalName",
-			"fullName",
-			"fullNameHistory",
-			"gender",
-			"genderHistory",
-			"firstAppearanceEpisodeIndex",
-			"aliases",
-			"appearanceHistory",
-			"personalityHistory",
-			"summaryHistory",
-		},
-		"properties": map[string]any{
-			"canonicalName":               textVersionSchema,
-			"fullName":                    map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
-			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
-			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
-			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
-			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
-			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
-			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},
-			"summaryHistory":              map[string]any{"type": "array", "items": historyVersionSchema},
-		},
-	}
-	characterUpdateSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required": []any{
-			"characterId",
-			"canonicalName",
-			"fullName",
-			"fullNameHistory",
-			"gender",
-			"genderHistory",
-			"firstAppearanceEpisodeIndex",
-			"aliases",
-			"appearanceHistory",
-			"personalityHistory",
-			"summaryHistory",
-		},
-		"properties": map[string]any{
-			"characterId":                 map[string]any{"type": "string"},
-			"canonicalName":               map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
-			"fullName":                    map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
-			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
-			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
-			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
-			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
-			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
-			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},
-			"summaryHistory":              map[string]any{"type": "array", "items": historyVersionSchema},
-		},
-	}
-	return map[string]any{
-		"type": "json_schema",
-		"json_schema": map[string]any{
-			"name":   "extraction_delta_result",
-			"strict": true,
-			"schema": map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"required":             []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions"},
-				"properties": map[string]any{
-					"processedUpToEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-					"newCharacters": map[string]any{
-						"type":  "array",
-						"items": characterDeltaSchema,
-					},
-					"characterUpdates": map[string]any{
-						"type":  "array",
-						"items": characterUpdateSchema,
-					},
-					"mergeProposals": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type":                 "object",
-							"additionalProperties": false,
-							"required":             []any{"sourceCharacterId", "targetCharacterId", "confidence", "reason"},
-							"properties": map[string]any{
-								"sourceCharacterId": map[string]any{"type": "string"},
-								"targetCharacterId": map[string]any{"type": "string"},
-								"confidence":        map[string]any{"type": "number"},
-								"reason":            map[string]any{"type": "string"},
-							},
-						},
-					},
-					"unresolvedMentions": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type":                 "object",
-							"additionalProperties": false,
-							"required":             []any{"mention", "episodeIndex", "reason"},
-							"properties": map[string]any{
-								"mention":      map[string]any{"type": "string"},
-								"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
-								"reason":       map[string]any{"type": "string"},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	return extractionruntime.ExtractionOpenRouterResponseFormat()
 }
 
 func extractionBatchTimingEvent(progress extractionBatchProgress) map[string]any {
