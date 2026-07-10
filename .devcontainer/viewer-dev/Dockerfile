@@ -1,7 +1,7 @@
 FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
 
 ENV TZ=Asia/Tokyo
-ARG GO_VERSION=1.25.11
+ARG GO_VERSION=1.25.12
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

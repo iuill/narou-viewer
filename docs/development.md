@@ -9,7 +9,7 @@
    - 2 つ目以降の worktree では `.devcontainer/.env.example` を `.devcontainer/.env` にコピーし、ホスト側公開ポートを重複しない値へ変更してください。通常の単一 Dev Container では `.devcontainer/.env` は不要です。
 2. `Dev Containers: Reopen in Container` を実行します。
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
-   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.25.11 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
+   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.25.12 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) も `bun add -g` で固定版インストールされます。coding agent 向けのブラウザ操作 CLI として `@playwright/cli` (`playwright-cli`) も固定版インストールされ、Go LSP の `gopls` も導入されます。
    - コンテナ起動時に `.github/skills` が `.agents/skills` へのシンボリックリンクとして自動作成され、`GitHub Copilot CLI` など `.github/skills` を参照する環境から project skills として見える形になります。
 3. コンテナ起動後、次を実行します。
@@ -85,7 +85,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - 一方で、`tsc` / `vite` / `vitest` / `playwright` は引き続き Node エコシステムのツールとして扱います。Bun 管理の workspace から呼び出しますが、「Node 完全排除」は現時点の目標にしません。
 - そのため、日常運用では「Bun を標準導線にする」「Node 依存ツールは Bun から起動する」を両立させます。
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
-- Dev Container は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.25.11 (`GOTOOLCHAIN=local`) を有効化しています。CI も同じ考え方で運用します。
+- Dev Container は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.25.12 (`GOTOOLCHAIN=local`) を有効化しています。CI も同じ考え方で運用します。
 - CI では `bun run audit:dependencies` で high severity の依存脆弱性も常時監査します。
 - 依存差分のレビューは GitHub Actions の `Dependency Review` workflow を使い、`pull_request` のみで実行します。これは push ごとの再検査ではなく、「その PR が新たに持ち込む依存変更」を確認するためです。
 - 既知の悪性版や脆弱性通知は Dependabot alerts と CI の dependency audit で補完します。
