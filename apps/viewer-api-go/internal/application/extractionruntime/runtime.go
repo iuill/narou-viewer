@@ -122,6 +122,7 @@ func (r *Runtime) ProcessJob(ctx context.Context, novelID string, job extractdom
 	processor := NewProcessor(Dependencies{
 		StateDir: r.stateDir,
 		Workflow: r.Workflow(),
+		Settings: r.settings,
 		Logger:   r.logger,
 	})
 	return processor.Process(ctx, novelID, job)

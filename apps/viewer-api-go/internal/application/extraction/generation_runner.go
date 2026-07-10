@@ -15,14 +15,18 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
-const extractionContractVersion = 1
+const extractionContractVersion = 2
 
 type generationRunner struct {
 	ports WorkflowPorts
 }
 
 func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
-	checkpointFingerprint := CheckpointFingerprint(config, CheckpointBatchInputs(batches))
+	allocator, err := r.ports.LoadIDAllocator(novelID, seed)
+	if err != nil {
+		return nil, core.GenerationState{}, nil, err
+	}
+	checkpointFingerprint := CheckpointFingerprint(config, CheckpointGenerationInputs(seed, seedTerms, batches, initialUnresolved, allocator))
 	checkpoint := r.loadCheckpointForGeneration(novelID, upToEpisodeIndex, checkpointFingerprint)
 	processedBatches := map[int]bool{}
 	for _, batchIndex := range checkpoint.ProcessedBatchIndexes {
@@ -34,10 +38,6 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 	if hasCheckpointSnapshot {
 		generated = append([]characters.GeneratedCharacter{}, checkpoint.Characters...)
 		generatedTerms = append([]terms.GeneratedTerm{}, checkpoint.Terms...)
-	}
-	allocator, err := r.ports.LoadIDAllocator(novelID, generated)
-	if err != nil {
-		return nil, core.GenerationState{}, nil, err
 	}
 	if hasCheckpointSnapshot {
 		allocator.ApplyState(checkpoint.NextCharacterOrdinal, checkpoint.IssuedCharacterIDs, checkpoint.RetiredCharacterIDs)
@@ -91,7 +91,7 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 		checkpoint.IssuedCharacterIDs = allocator.IssuedCharacterIDs()
 		checkpoint.RetiredCharacterIDs = allocator.RetiredCharacterIDs()
 		checkpoint.NextCharacterOrdinal = allocator.NextCharacterOrdinal()
-		checkpoint.SchemaVersion = 2
+		checkpoint.SchemaVersion = 3
 		checkpoint.NovelID = novelID
 		checkpoint.UpToEpisodeIndex = upToEpisodeIndex
 		checkpoint.GenerationFingerprint = checkpointFingerprint
@@ -156,7 +156,7 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) checkpointstore.Checkpoint {
 	checkpoint, err := r.ports.LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
-		checkpoint.SchemaVersion != 2 ||
+		checkpoint.SchemaVersion != 3 ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
@@ -167,7 +167,7 @@ func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisod
 
 func EmptyCheckpoint(novelID string, upToEpisodeIndex string, fingerprint string) checkpointstore.Checkpoint {
 	return checkpointstore.Checkpoint{
-		SchemaVersion:         2,
+		SchemaVersion:         3,
 		NovelID:               novelID,
 		UpToEpisodeIndex:      upToEpisodeIndex,
 		GenerationFingerprint: fingerprint,
@@ -240,6 +240,21 @@ func CheckpointBatchInputs(batches []core.Batch) []map[string]any {
 		inputs = append(inputs, CheckpointBatchInput(batch))
 	}
 	return inputs
+}
+
+func CheckpointGenerationInputs(seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, initialUnresolved []characters.GeneratedUnresolvedMention, allocator *characters.GeneratedCharacterIDAllocator) map[string]any {
+	input := map[string]any{
+		"batches":            CheckpointBatchInputs(batches),
+		"seedCharacters":     seed,
+		"seedTerms":          seedTerms,
+		"unresolvedMentions": initialUnresolved,
+	}
+	if allocator != nil {
+		input["nextCharacterOrdinal"] = allocator.NextCharacterOrdinal()
+		input["issuedCharacterIds"] = allocator.IssuedCharacterIDs()
+		input["retiredCharacterIds"] = allocator.RetiredCharacterIDs()
+	}
+	return input
 }
 
 func CheckpointBatchInput(batch core.Batch) map[string]any {

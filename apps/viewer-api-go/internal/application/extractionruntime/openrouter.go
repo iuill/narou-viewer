@@ -55,13 +55,17 @@ func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAI
 }
 
 func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatchResult, error) {
+	return r.generateOpenRouterBatchForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "", unresolvedMentions...)
+}
+
+func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, focus string, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatchResult, error) {
 	temperature := 0.2
 	stageStartedAt := time.Now()
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending)
+	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending, focus)
 	r.log("batch_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "knownTerms", len(knownTerms), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
 	promptTokens := prepared.PromptTokens
@@ -99,7 +103,11 @@ func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.Res
 		return extractionBatchResult{}, err
 	}
 	stageStartedAt = time.Now()
-	delta, err := normalizeExtractionOpenRouterResponse([]byte(result.Answer), novelID, upToEpisodeIndex)
+	fallbackEpisodeIndex := upToEpisodeIndex
+	if len(batch.EpisodeIndexes) > 0 {
+		fallbackEpisodeIndex = batch.EpisodeIndexes[len(batch.EpisodeIndexes)-1]
+	}
+	delta, err := normalizeExtractionOpenRouterResponseForEpisodes([]byte(result.Answer), novelID, fallbackEpisodeIndex, batch.EpisodeIndexes)
 	status = "ok"
 	if err != nil {
 		status = "error"
@@ -127,12 +135,20 @@ type preparedExtractionRequest struct {
 	PromptTokens   int
 }
 
-func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolved []characters.GeneratedUnresolvedMention) preparedExtractionRequest {
+func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolved []characters.GeneratedUnresolvedMention, focus ...string) preparedExtractionRequest {
 	var systemPromptOverride *string
 	if config != nil {
 		systemPromptOverride = config.SystemPrompt
 	}
 	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolved, systemPromptOverride)
+	if len(focus) > 0 {
+		switch focus[0] {
+		case "characters":
+			systemPrompt += "\nThis is the character pass. Extract character deltas and unresolved mentions only; always return terms as an empty array."
+		case "terms":
+			systemPrompt += "\nThis is the chronological term pass. Extract terms only; always return newCharacters, characterUpdates, mergeProposals, and unresolvedMentions as empty arrays."
+		}
+	}
 	messages := []ai.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}}
 	responseFormat := extractionOpenRouterResponseFormat()
 	return preparedExtractionRequest{

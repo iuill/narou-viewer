@@ -17,6 +17,7 @@ export type ReaderAiAssistantMessage = {
   createdAt: string;
   id: string;
   role: "user" | "assistant";
+  spoilerBoundaryEpisodeIndex?: string;
   text: string;
   turnId: string;
 };
@@ -127,13 +128,12 @@ export function ReaderAiAssistantPanel({
       return;
     }
 
-    const keepDraft = readerContextRef.current.novelId === novelId;
+    const isSameNovel = readerContextRef.current.novelId === novelId;
     readerContextRef.current = { currentEpisodeIndex, novelId };
     cancelActiveRequest({ removeTurn: true });
-    updateAssistantState((current) => ({
-      ...createEmptyReaderAiAssistantState(current.includeCurrentEpisode),
-      draft: keepDraft ? current.draft : ""
-    }));
+    if (!isSameNovel) {
+      updateAssistantState((current) => createEmptyReaderAiAssistantState(current.includeCurrentEpisode));
+    }
   }, [cancelActiveRequest, currentEpisodeIndex, novelId, updateAssistantState]);
 
   useEffect(
@@ -197,6 +197,7 @@ export function ReaderAiAssistantPanel({
       createdAt: new Date().toISOString(),
       id: crypto.randomUUID(),
       role: "user",
+      spoilerBoundaryEpisodeIndex,
       text: trimmed,
       turnId: requestId
     };
@@ -275,6 +276,7 @@ export function ReaderAiAssistantPanel({
           id: `assistant-${Date.now()}`,
           createdAt: new Date().toISOString(),
           role: "assistant",
+          spoilerBoundaryEpisodeIndex,
           text: finalResult.answer,
           turnId: requestId
         }
@@ -320,7 +322,13 @@ export function ReaderAiAssistantPanel({
         includeCurrentEpisode,
         spoilerBoundaryEpisodeIndex
       },
-      messages: messages.map(({ createdAt, role, text, turnId }) => ({ createdAt, role, text, turnId })),
+      messages: messages.map(({ createdAt, role, spoilerBoundaryEpisodeIndex: messageBoundary, text, turnId }) => ({
+        createdAt,
+        role,
+        spoilerBoundaryEpisodeIndex: messageBoundary,
+        text,
+        turnId
+      })),
       timeline: buildReaderAiTimeline(messages, progressEvents),
       progressEvents,
       lastResponse,
@@ -344,8 +352,10 @@ export function ReaderAiAssistantPanel({
   function handleIncludeCurrentEpisodeChange(include: boolean) {
     cancelActiveRequest({ removeTurn: true });
     updateAssistantState((current) => ({
-      ...createEmptyReaderAiAssistantState(include),
-      draft: current.draft
+      ...current,
+      error: null,
+      includeCurrentEpisode: include,
+      isSubmitting: false
     }));
   }
 
@@ -361,7 +371,7 @@ export function ReaderAiAssistantPanel({
         disabledReason
           ? disabledReason
           : spoilerBoundaryEpisodeIndex
-            ? `第${formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex)}話までの情報だけを使います。`
+            ? `新しい質問では第${formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex)}話までを参照します。`
             : boundaryUnavailableReason ?? "本文を開くと利用できます。"
       }
       onClose={onClose}
@@ -369,7 +379,7 @@ export function ReaderAiAssistantPanel({
     >
       <div className="reader-ai-panel-body">
         <div className="reader-panel-chip-row">
-          <span className="reader-panel-chip">ネタバレ境界 第{spoilerBoundaryEpisodeIndex ? formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex) : "?"}話</span>
+          <span className="reader-panel-chip">新規参照上限 第{spoilerBoundaryEpisodeIndex ? formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex) : "?"}話</span>
           <span className="reader-panel-chip">{disabledReason ? "LLM未設定" : lastResponse ? "AI応答" : "待機中"}</span>
         </div>
 
@@ -427,7 +437,11 @@ export function ReaderAiAssistantPanel({
               {turn.messages
                 .filter((message) => message.role === "user")
                 .map((message) => (
-                  <ReaderAiMessageArticle key={message.id} message={message} />
+                  <ReaderAiMessageArticle
+                    formatEpisodeOrderLabel={formatEpisodeOrderLabel}
+                    key={message.id}
+                    message={message}
+                  />
                 ))}
               {turn.progressEvents.length > 0 ? (
                 <ReaderAiProgressLog
@@ -438,7 +452,11 @@ export function ReaderAiAssistantPanel({
               {turn.messages
                 .filter((message) => message.role === "assistant")
                 .map((message) => (
-                  <ReaderAiMessageArticle key={message.id} message={message} />
+                  <ReaderAiMessageArticle
+                    formatEpisodeOrderLabel={formatEpisodeOrderLabel}
+                    key={message.id}
+                    message={message}
+                  />
                 ))}
             </section>
           ))}
@@ -475,7 +493,13 @@ export function isReaderAiSubmitShortcut(event: Pick<KeyboardEvent<HTMLTextAreaE
   return event.ctrlKey && event.key === "Enter";
 }
 
-function ReaderAiMessageArticle({ message }: { message: ReaderAiAssistantMessage }) {
+function ReaderAiMessageArticle({
+  formatEpisodeOrderLabel,
+  message
+}: {
+  formatEpisodeOrderLabel: (episodeIndex: string) => string;
+  message: ReaderAiAssistantMessage;
+}) {
   return (
     <article className={`reader-ai-message reader-ai-message--${message.role}`}>
       <p className="reader-panel-section-label">
@@ -483,7 +507,12 @@ function ReaderAiMessageArticle({ message }: { message: ReaderAiAssistantMessage
           <ReaderAiMessageIcon role={message.role} />
           <span>{message.role === "user" ? "あなた" : "読書AI"}</span>
         </span>
-        <time dateTime={message.createdAt}>{formatLogTime(message.createdAt)}</time>
+        <span className="reader-ai-message-meta">
+          {message.spoilerBoundaryEpisodeIndex ? (
+            <span>参照上限 第{formatEpisodeOrderLabel(message.spoilerBoundaryEpisodeIndex)}話</span>
+          ) : null}
+          <time dateTime={message.createdAt}>{formatLogTime(message.createdAt)}</time>
+        </span>
       </p>
       {message.role === "assistant" ? <ReaderAiAssistantText text={message.text} /> : <p>{message.text}</p>}
     </article>

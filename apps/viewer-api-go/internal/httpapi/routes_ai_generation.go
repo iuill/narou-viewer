@@ -1155,7 +1155,7 @@ func (s *Server) loadExtractionCheckpoint(novelID string, upToEpisodeIndex strin
 func (s *Server) loadExtractionCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) extractionCheckpoint {
 	checkpoint, err := s.extractionRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
-		checkpoint.SchemaVersion != 2 ||
+		checkpoint.SchemaVersion != 3 ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {

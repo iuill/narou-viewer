@@ -2172,7 +2172,7 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
-	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":2,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":3,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 
@@ -3578,13 +3578,19 @@ func TestExtractionCheckpointFingerprintCompatibility(t *testing.T) {
 		},
 	}
 	fingerprint := extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches))
-	if fingerprint != "cf8fb823ecd5bc96b2c2606a4cb019dcdee601e5" {
+	if fingerprint != "76b40f87eebc8e6cc6e09eaaf412f18ba24007b3" {
 		t.Fatalf("checkpoint fingerprint should remain compatible, got %s", fingerprint)
 	}
 	batches[0].BatchCount = 99
 	if changed := extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches)); changed != fingerprint {
 		t.Fatalf("checkpoint fingerprint should ignore batch count: before=%s after=%s", fingerprint, changed)
 	}
+}
+
+func extractionGenerationFingerprint(config *store.ResolvedAIGenerationConfig, novelID string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, unresolved []characters.GeneratedUnresolvedMention) string {
+	allocator := characters.NewGeneratedCharacterIDAllocator(novelID, seed)
+	inputs := appextraction.CheckpointGenerationInputs(seed, seedTerms, batches, unresolved, allocator)
+	return extractionCheckpointFingerprint(config, inputs)
 }
 
 func TestCharacterJobProgressHelpers(t *testing.T) {
@@ -4166,7 +4172,7 @@ func TestOpenRouterExtractionUsesDeltaCandidatesAndStableIDMerges(t *testing.T) 
 				t.Fatalf("candidate card should preserve stable id and display name: %+v", candidate)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"1\",\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[],\"terms\":[]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[],\"terms\":[]}"}}],
 				"usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26}
 			}`))
 		default:
@@ -4409,6 +4415,10 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 func TestOpenRouterExtractionCheckpointSnapshotIsAuthoritative(t *testing.T) {
 	server := &Server{dataDir: t.TempDir()}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/auto"}
+	seed := []characters.GeneratedCharacter{
+		{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+		{CharacterID: "char_b", CanonicalName: "ボブ", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+	}
 	batches := []extractionBatch{{
 		BatchIndex:     1,
 		BatchCount:     1,
@@ -4416,20 +4426,16 @@ func TestOpenRouterExtractionCheckpointSnapshotIsAuthoritative(t *testing.T) {
 		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスだけが残る。"}},
 	}}
 	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:             2,
+		SchemaVersion:             3,
 		NovelID:                   "novel-1",
 		UpToEpisodeIndex:          "1",
-		GenerationFingerprint:     extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches)),
+		GenerationFingerprint:     extractionGenerationFingerprint(config, "novel-1", seed, nil, batches, nil),
 		ProcessedEpisodeIndexes:   []string{"1"},
 		ProcessedBatchIndexes:     []int{1},
 		Characters:                []characters.GeneratedCharacter{{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},
 		PendingUnresolvedMentions: []characters.GeneratedUnresolvedMention{{Mention: "黒衣の男", EpisodeIndex: "1"}},
 	}); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
-	}
-	seed := []characters.GeneratedCharacter{
-		{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
-		{CharacterID: "char_b", CanonicalName: "ボブ", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
 	}
 	generated, generationState, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, "novel-1", "1", seed, batches, nil)
 	if err != nil {
@@ -4465,10 +4471,10 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "新モデルが登場した。"}},
 	}}
 	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:           2,
+		SchemaVersion:           3,
 		NovelID:                 "novel-1",
 		UpToEpisodeIndex:        "1",
-		GenerationFingerprint:   extractionCheckpointFingerprint(oldConfig, extractionCheckpointBatchInputs(batches)),
+		GenerationFingerprint:   extractionGenerationFingerprint(oldConfig, "novel-1", nil, nil, batches, nil),
 		ProcessedEpisodeIndexes: []string{"1"},
 		ProcessedBatchIndexes:   []int{1},
 		Characters:              []characters.GeneratedCharacter{{CanonicalName: "旧モデル"}},
@@ -4518,7 +4524,7 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 		t.Fatalf("load fixture character summary inputs: %v", err)
 	}
 	if err := server.saveExtractionCheckpoint(novelID, "1", extractionCheckpoint{
-		SchemaVersion:           2,
+		SchemaVersion:           3,
 		NovelID:                 novelID,
 		UpToEpisodeIndex:        "1",
 		GenerationFingerprint:   extractionCheckpointFingerprint(config, map[string]int{"maxChunkChars": maxChunkChars, "maxBatchChars": maxBatchChars}),
@@ -4568,7 +4574,7 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 		t.Fatalf("write unsupported schema checkpoint: %v", err)
 	}
 	checkpoint = server.loadExtractionCheckpoint("novel-1", "1")
-	if checkpoint.SchemaVersion != 2 || len(checkpoint.Characters) != 0 {
+	if checkpoint.SchemaVersion != 3 || len(checkpoint.Characters) != 0 {
 		t.Fatalf("unsupported schema checkpoint should reset to current empty checkpoint: %+v", checkpoint)
 	}
 
@@ -4581,7 +4587,7 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 		t.Fatalf("mkdir checkpoint path blocker: %v", err)
 	}
 	if err := blockedServer.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
-		SchemaVersion:    2,
+		SchemaVersion:    3,
 		NovelID:          "novel-1",
 		UpToEpisodeIndex: "1",
 	}); err == nil {

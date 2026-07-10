@@ -465,6 +465,69 @@ func TestExtractionTermsContractAndNormalization(t *testing.T) {
 	}
 }
 
+func TestExtractionResponseRejectsEpisodeIndexesOutsideCurrentBatch(t *testing.T) {
+	for label, raw := range map[string]string{
+		"term": `{
+			"processedUpToEpisodeIndex":"20",
+			"characters":[],
+			"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"正体。","episodeIndex":"1"}]}]
+		}`,
+		"character": `{
+			"processedUpToEpisodeIndex":"20",
+			"characters":[{"canonicalName":{"text":"黒騎士","episodeIndex":"1"},"firstAppearanceEpisodeIndex":"20","summaryHistory":[{"text":"人物。","episodeIndex":"20"}]}],
+			"terms":[]
+		}`,
+		"unresolved": `{
+			"processedUpToEpisodeIndex":"20",
+			"characters":[],
+			"unresolvedMentions":[{"mention":"謎の声","episodeIndex":"1"}],
+			"terms":[]
+		}`,
+	} {
+		t.Run(label, func(t *testing.T) {
+			if _, err := NormalizeOpenRouterResponseForEpisodes([]byte(raw), "novel-1", "20", []string{"20"}); err == nil || !strings.Contains(err.Error(), "outside the current extraction batch") {
+				t.Fatalf("out-of-batch episodeIndex should fail: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDeltaEpisodeIndexesAcceptsCompleteInBatchDelta(t *testing.T) {
+	textVersions := []characters.GeneratedTextVersion{{Text: "情報", EpisodeIndex: "5"}}
+	historyVersions := []characters.GeneratedHistoryVersion{{Text: "説明", EpisodeIndex: "5"}}
+	character := characters.GeneratedCharacter{
+		CanonicalEpisodeIndex:       "5",
+		FirstAppearanceEpisodeIndex: "5",
+		FullNameEpisodeIndex:        "5",
+		GenderEpisodeIndex:          "5",
+		NameHistory:                 textVersions,
+		FullNameHistory:             textVersions,
+		GenderHistory:               textVersions,
+		Aliases:                     textVersions,
+		AppearanceHistory:           historyVersions,
+		PersonalityHistory:          historyVersions,
+		SummaryHistory:              historyVersions,
+	}
+	delta := Delta{
+		LegacyCharacters:   []characters.GeneratedCharacter{character},
+		NewCharacters:      []characters.GeneratedCharacter{character},
+		CharacterUpdates:   []characters.GeneratedCharacter{character},
+		UnresolvedMentions: []UnresolvedMention{{Mention: "影", EpisodeIndex: "5"}},
+		Terms: []terms.GeneratedTerm{{
+			Term:               "王都",
+			ReadingHistory:     []terms.TextVersion{{Text: "おうと", EpisodeIndex: "5"}},
+			CategoryHistory:    []terms.CategoryVersion{{Category: "place", EpisodeIndex: "5"}},
+			DescriptionHistory: []terms.HistoryVersion{{Text: "都。", EpisodeIndex: "5"}},
+		}},
+	}
+	if err := ValidateDeltaEpisodeIndexes(delta, []string{"5"}); err != nil {
+		t.Fatalf("complete in-batch delta should be accepted: %v", err)
+	}
+	if err := ValidateDeltaEpisodeIndexes(delta, nil); err != nil {
+		t.Fatalf("empty allowlist should preserve compatibility: %v", err)
+	}
+}
+
 func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 	if got := RenderExtractionInlineTokens([]library.ReaderInline{{Type: "ruby", Text: "聖剣", Ruby: "せいけん"}}); got != "聖剣《せいけん》" {
 		t.Fatalf("ruby prompt rendering = %q", got)
@@ -494,6 +557,17 @@ func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 	}})
 	if len(filtered) != 1 || filtered[0].Term != "聖剣" {
 		t.Fatalf("character names must be removed from term deltas: %+v", filtered)
+	}
+	existing := []terms.GeneratedTerm{
+		{Term: "黒騎士", DescriptionHistory: []terms.HistoryVersion{{Text: "正体不明の存在。", EpisodeIndex: "1"}}},
+		{Term: "王都", DescriptionHistory: []terms.HistoryVersion{{Text: "王国の首都。", EpisodeIndex: "1"}}},
+	}
+	filtered = FilterAndMergeTermDeltas(existing, nil, []characters.GeneratedCharacter{{
+		CanonicalName: "騎士団長",
+		Aliases:       []characters.GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "2"}},
+	}})
+	if len(filtered) != 1 || filtered[0].Term != "王都" {
+		t.Fatalf("existing terms that later resolve to a character must be removed: %+v", filtered)
 	}
 }
 

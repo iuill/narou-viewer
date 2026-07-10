@@ -5,10 +5,34 @@ import (
 	"errors"
 	"testing"
 
+	"narou-viewer/apps/viewer-api-go/internal/ai"
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
+
+type fakeExecutionSettings struct {
+	response ai.SettingsResponse
+	config   *store.ResolvedAIGenerationConfig
+	err      error
+}
+
+func (s fakeExecutionSettings) GetAIGenerationSettings() (ai.SettingsResponse, error) {
+	return s.response, s.err
+}
+
+func (s fakeExecutionSettings) ResolveActiveAIGenerationConfig() (*store.ResolvedAIGenerationConfig, error) {
+	return s.config, s.err
+}
+
+type captureWorkflow struct {
+	resolvedOverride *store.ResolvedAIGenerationConfig
+}
+
+func (w *captureWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, resolvedOverride *store.ResolvedAIGenerationConfig, _ string, _ func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
+	w.resolvedOverride = resolvedOverride
+	return appextraction.FinalCounts{}, nil
+}
 
 type fakeWorkflow struct {
 	err error
@@ -60,6 +84,95 @@ func TestProcessorMarksFailedJob(t *testing.T) {
 	last := store.jobs[len(store.jobs)-1]
 	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "generation failed" {
 		t.Fatalf("job should be failed with error message: %+v", last)
+	}
+}
+
+func TestProcessorUpdatesJobMetadataToResolvedExecutionProfile(t *testing.T) {
+	workflow := &captureWorkflow{}
+	jobStore := &fakeJobStore{}
+	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-b", ProfileLabel: "Profile B", ModelID: "model-b"}
+	processor := NewProcessor(Dependencies{
+		Workflow: workflow,
+		JobStore: jobStore,
+		Settings: fakeExecutionSettings{
+			response: ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},
+			config:   config,
+		},
+	})
+	profileA := "profile-a"
+	modelA := "model-a"
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "2", ProfileID: &profileA, ModelID: &modelA}) {
+		t.Fatal("processor should complete with the resolved execution profile")
+	}
+	last := jobStore.jobs[len(jobStore.jobs)-1]
+	if last.ProfileID == nil || *last.ProfileID != "profile-b" || last.ModelID == nil || *last.ModelID != "model-b" || last.GenerationMode != "openrouter" {
+		t.Fatalf("job metadata must reflect the executed profile: %+v", last)
+	}
+	if workflow.resolvedOverride != config {
+		t.Fatalf("workflow should execute the exact resolved config: %+v", workflow.resolvedOverride)
+	}
+}
+
+func TestProcessorUpdatesJobMetadataToHeuristicExecution(t *testing.T) {
+	workflow := &captureWorkflow{}
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{
+		Workflow: workflow,
+		JobStore: jobStore,
+		Settings: fakeExecutionSettings{response: ai.SettingsResponse{EffectiveGenerationMode: "heuristic"}},
+	})
+	profileID := "stale-profile"
+	profileLabel := "Stale Profile"
+	modelID := "stale-model"
+	job := core.Job{
+		Status:                    "queued",
+		RequestedUpToEpisodeIndex: "2",
+		GenerationMode:            "openrouter",
+		ProfileID:                 &profileID,
+		ProfileLabel:              &profileLabel,
+		ModelID:                   &modelID,
+	}
+	if !processor.Process(t.Context(), "novel", job) {
+		t.Fatal("processor should complete with heuristic execution settings")
+	}
+	last := jobStore.jobs[len(jobStore.jobs)-1]
+	if last.GenerationMode != "heuristic" || last.ProfileID != nil || last.ProfileLabel != nil || last.ModelID != nil {
+		t.Fatalf("heuristic metadata should clear stale OpenRouter fields: %+v", last)
+	}
+	if workflow.resolvedOverride != nil {
+		t.Fatalf("heuristic execution should not pin an OpenRouter config: %+v", workflow.resolvedOverride)
+	}
+}
+
+func TestProcessorMarksJobFailedWhenExecutionSettingsCannotBeResolved(t *testing.T) {
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{
+		Workflow: &captureWorkflow{},
+		JobStore: jobStore,
+		Settings: fakeExecutionSettings{err: errors.New("settings unavailable")},
+	})
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "2"}) {
+		t.Fatal("processor should persist the settings resolution failure")
+	}
+	last := jobStore.jobs[len(jobStore.jobs)-1]
+	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "settings unavailable" || last.StartedAt == nil || last.FinishedAt == nil {
+		t.Fatalf("settings resolution failure should be recorded on the job: %+v", last)
+	}
+}
+
+func TestProcessorRejectsMissingOpenRouterExecutionProfile(t *testing.T) {
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{
+		Workflow: &captureWorkflow{},
+		JobStore: jobStore,
+		Settings: fakeExecutionSettings{response: ai.SettingsResponse{EffectiveGenerationMode: "openrouter"}},
+	})
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "2"}) {
+		t.Fatal("processor should persist the missing profile failure")
+	}
+	last := jobStore.jobs[len(jobStore.jobs)-1]
+	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "AI generation profile was not found." {
+		t.Fatalf("missing OpenRouter profile should fail before generation: %+v", last)
 	}
 }
 

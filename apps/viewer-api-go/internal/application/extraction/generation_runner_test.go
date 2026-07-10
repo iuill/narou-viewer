@@ -24,15 +24,20 @@ func runnerBatches(indexes ...string) []core.Batch {
 	return batches
 }
 
+func runnerCheckpointFingerprint(config *store.ResolvedAIGenerationConfig, novelID string, seed []characters.GeneratedCharacter, batches []core.Batch) string {
+	allocator := characters.NewGeneratedCharacterIDAllocator(novelID, seed)
+	return CheckpointFingerprint(config, CheckpointGenerationInputs(seed, nil, batches, nil, allocator))
+}
+
 func TestGenerationRunnerResumesOnlyUnprocessedBatchesFromCheckpoint(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
 	batches := runnerBatches("1", "2")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           2,
+			SchemaVersion:           3,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "2",
-			GenerationFingerprint:   CheckpointFingerprint(config, CheckpointBatchInputs(batches)),
+			GenerationFingerprint:   runnerCheckpointFingerprint(config, "novel-a", nil, batches),
 			ProcessedEpisodeIndexes: []string{"1"},
 			ProcessedBatchIndexes:   []int{1},
 			Characters:              []characters.GeneratedCharacter{{CharacterID: "char_a", CanonicalName: "既存", CanonicalEpisodeIndex: "1"}},
@@ -68,7 +73,7 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 	batches := runnerBatches("1")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           2,
+			SchemaVersion:           3,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "1",
 			GenerationFingerprint:   "stale",
@@ -87,6 +92,32 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 	}
 	if len(generated) != 1 || generated[0].CanonicalName == "古い" {
 		t.Fatalf("mismatched checkpoint snapshot should not be reused: %+v", generated)
+	}
+}
+
+func TestGenerationRunnerIgnoresCheckpointWhenPersistentSeedChanges(t *testing.T) {
+	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
+	batches := runnerBatches("2")
+	oldSeed := []characters.GeneratedCharacter{{CharacterID: "char_old", CanonicalName: "古い人物", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}}
+	newSeed := []characters.GeneratedCharacter{{CharacterID: "char_new", CanonicalName: "更新後の人物", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}}
+	ports := &workflowFakePorts{
+		checkpoint: checkpointstore.Checkpoint{
+			SchemaVersion:           3,
+			NovelID:                 "novel-a",
+			UpToEpisodeIndex:        "2",
+			GenerationFingerprint:   runnerCheckpointFingerprint(config, "novel-a", oldSeed, batches),
+			ProcessedEpisodeIndexes: []string{"2"},
+			ProcessedBatchIndexes:   []int{1},
+			Characters:              oldSeed,
+		},
+	}
+
+	generated, _, _, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", newSeed, nil, batches, nil, nil)
+	if err != nil {
+		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
+	}
+	if ports.generateCalls != 1 || !generatedContainsName(generated, "更新後の人物") || generatedContainsName(generated, "古い人物") {
+		t.Fatalf("changed seed must invalidate stale checkpoint: calls=%d generated=%+v", ports.generateCalls, generated)
 	}
 }
 

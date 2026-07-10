@@ -217,6 +217,59 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 }
 
+func TestExtractTermsChronologicallyCarriesPriorSnapshotIntoNextBatch(t *testing.T) {
+	requestIndex := 0
+	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if requestIndex == 1 {
+			raw, _ := json.Marshal(request["messages"])
+			if !strings.Contains(string(raw), "王都直属の騎士団") {
+				t.Fatalf("second batch should receive the first snapshot as knownTerms: %s", raw)
+			}
+		}
+		responses := []string{
+			`{"processedUpToEpisodeIndex":"1","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都直属の騎士団。","episodeIndex":"1"}]}]}`,
+			`{"processedUpToEpisodeIndex":"2","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"王都直属で、辺境の村へ派遣された騎士団。","episodeIndex":"2"}]}]}`,
+		}
+		content := responses[requestIndex]
+		requestIndex++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": content}}},
+			"usage":   map[string]any{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+		})
+	}))
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "白銀騎士団は王都直属の騎士団。"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "白銀騎士団が辺境の村へ派遣された。"}}},
+	}
+	generatedTerms, usage, err := runtime.extractTermsChronologically(
+		context.Background(),
+		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true},
+		"novel-1",
+		"2",
+		nil,
+		nil,
+		batches,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("extractTermsChronologically returned error: %v", err)
+	}
+	if requestIndex != 2 || len(usage) != 2 || usage[1].Kind != "extraction_terms_chronological" {
+		t.Fatalf("requests=%d usage=%+v", requestIndex, usage)
+	}
+	if len(generatedTerms) != 1 || len(generatedTerms[0].DescriptionHistory) != 2 || generatedTerms[0].DescriptionHistory[1].Text != "王都直属で、辺境の村へ派遣された騎士団。" {
+		t.Fatalf("latest term snapshot must retain prior facts: %+v", generatedTerms)
+	}
+}
+
 func TestRunParallelIdentityLLMJobsLimitsConcurrencyAndStaggersStarts(t *testing.T) {
 	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "2")
 	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "20")

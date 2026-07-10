@@ -94,7 +94,7 @@ describe("ReaderAiAssistantPanel", () => {
       const checkbox = container.querySelector('input[type="checkbox"]');
       expect(checkbox).toBeInstanceOf(dom.window.HTMLInputElement);
       expect((checkbox as HTMLInputElement).checked).toBe(false);
-      expect(container.textContent).toContain("ネタバレ境界 第1話");
+      expect(container.textContent).toContain("新規参照上限 第1話");
       expect(container.textContent).toContain("直近5話の流れを要約して");
       expect(container.textContent).toContain("前話で何があった？");
       expect(container.textContent).toContain("Ctrl+Enter");
@@ -244,7 +244,7 @@ describe("ReaderAiAssistantPanel", () => {
     const { container, root, dom } = await renderPanel(createProps());
 
     try {
-      expect(container.textContent).toContain("ネタバレ境界 第1話");
+      expect(container.textContent).toContain("新規参照上限 第1話");
 
       const promptButton = Array.from(container.querySelectorAll("button")).find(
         (button) => button.textContent === "直近5話の流れを要約して"
@@ -597,6 +597,101 @@ describe("ReaderAiAssistantPanel", () => {
       await act(async () => {
         root.unmount();
       });
+    }
+  });
+
+  it("preserves completed conversation when moving within the same novel", async () => {
+    let assistantState = {
+      ...createEmptyReaderAiAssistantState(),
+      messages: [
+        {
+          createdAt: "2026-05-10T00:00:00.000Z",
+          id: "user-1",
+          role: "user" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "ここまでの流れは？",
+          turnId: "turn-1"
+        },
+        {
+          createdAt: "2026-05-10T00:00:01.000Z",
+          id: "assistant-1",
+          role: "assistant" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "第1話までの流れです。",
+          turnId: "turn-1"
+        }
+      ]
+    };
+    const onAssistantStateChange = vi.fn((updater: (current: typeof assistantState) => typeof assistantState) => {
+      assistantState = updater(assistantState);
+    });
+    const { container, root } = await renderPanel(
+      createProps({
+        assistantState,
+        onAssistantStateChange
+      })
+    );
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(
+            ReaderAiAssistantPanel,
+            createProps({
+              assistantState,
+              currentEpisodeIndex: "3",
+              previousEpisodeIndex: "2",
+              onAssistantStateChange
+            })
+          )
+        );
+      });
+
+      expect(assistantState.messages).toHaveLength(2);
+      expect(container.textContent).toContain("第1話までの流れです。");
+      expect(container.textContent).toContain("参照上限 第1話");
+      expect(container.textContent).toContain("新規参照上限 第2話");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("preserves conversation when changing the new-reference boundary", async () => {
+    let assistantState = {
+      ...createEmptyReaderAiAssistantState(),
+      messages: [
+        {
+          createdAt: "2026-05-10T00:00:00.000Z",
+          id: "assistant-1",
+          role: "assistant" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "残す回答",
+          turnId: "turn-1"
+        }
+      ]
+    };
+    const onAssistantStateChange = vi.fn((updater: (current: typeof assistantState) => typeof assistantState) => {
+      assistantState = updater(assistantState);
+    });
+    const { container, root, dom } = await renderPanel(
+      createProps({
+        assistantState,
+        onAssistantStateChange
+      })
+    );
+
+    try {
+      const checkbox = container.querySelector('input[type="checkbox"]');
+      if (!(checkbox instanceof dom.window.HTMLInputElement)) {
+        throw new Error("boundary checkbox not found");
+      }
+      await act(async () => checkbox.click());
+
+      expect(assistantState.includeCurrentEpisode).toBe(true);
+      expect(assistantState.messages).toHaveLength(1);
+      expect(assistantState.messages[0]?.text).toBe("残す回答");
+    } finally {
+      await act(async () => root.unmount());
     }
   });
 

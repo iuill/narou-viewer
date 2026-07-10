@@ -990,6 +990,110 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	return delta, nil
 }
 
+func NormalizeOpenRouterResponseForEpisodes(raw []byte, novelID string, fallbackEpisodeIndex string, allowedEpisodeIndexes []string) (Delta, error) {
+	delta, err := NormalizeOpenRouterResponse(raw, novelID, fallbackEpisodeIndex)
+	if err != nil {
+		return Delta{}, err
+	}
+	if err := ValidateDeltaEpisodeIndexes(delta, allowedEpisodeIndexes); err != nil {
+		return Delta{}, err
+	}
+	return delta, nil
+}
+
+func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) error {
+	allowed := map[string]bool{}
+	for _, episodeIndex := range allowedEpisodeIndexes {
+		episodeIndex = strings.TrimSpace(episodeIndex)
+		if episodeIndex != "" {
+			allowed[episodeIndex] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return nil
+	}
+	validate := func(episodeIndex string) bool {
+		episodeIndex = strings.TrimSpace(episodeIndex)
+		return episodeIndex == "" || allowed[episodeIndex]
+	}
+	validateTextVersions := func(values []characters.GeneratedTextVersion) bool {
+		for _, value := range values {
+			if !validate(value.EpisodeIndex) {
+				return false
+			}
+		}
+		return true
+	}
+	validateHistoryVersions := func(values []characters.GeneratedHistoryVersion) bool {
+		for _, value := range values {
+			if !validate(value.EpisodeIndex) {
+				return false
+			}
+		}
+		return true
+	}
+	validateCharacter := func(character characters.GeneratedCharacter) bool {
+		if !validate(character.CanonicalEpisodeIndex) || !validate(character.FirstAppearanceEpisodeIndex) ||
+			!validate(character.FullNameEpisodeIndex) || !validate(character.GenderEpisodeIndex) {
+			return false
+		}
+		for _, values := range [][]characters.GeneratedTextVersion{
+			character.NameHistory,
+			character.FullNameHistory,
+			character.GenderHistory,
+			character.Aliases,
+		} {
+			if !validateTextVersions(values) {
+				return false
+			}
+		}
+		for _, values := range [][]characters.GeneratedHistoryVersion{
+			character.AppearanceHistory,
+			character.PersonalityHistory,
+			character.SummaryHistory,
+		} {
+			if !validateHistoryVersions(values) {
+				return false
+			}
+		}
+		return true
+	}
+	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters, delta.CharacterUpdates} {
+		for _, character := range values {
+			if !validateCharacter(character) {
+				return extractionEpisodeBoundaryError()
+			}
+		}
+	}
+	for _, mention := range delta.UnresolvedMentions {
+		if !validate(mention.EpisodeIndex) {
+			return extractionEpisodeBoundaryError()
+		}
+	}
+	for _, term := range delta.Terms {
+		for _, value := range term.ReadingHistory {
+			if !validate(value.EpisodeIndex) {
+				return extractionEpisodeBoundaryError()
+			}
+		}
+		for _, value := range term.CategoryHistory {
+			if !validate(value.EpisodeIndex) {
+				return extractionEpisodeBoundaryError()
+			}
+		}
+		for _, value := range term.DescriptionHistory {
+			if !validate(value.EpisodeIndex) {
+				return extractionEpisodeBoundaryError()
+			}
+		}
+	}
+	return nil
+}
+
+func extractionEpisodeBoundaryError() error {
+	return errors.New("OpenRouter response contained an episodeIndex outside the current extraction batch.")
+}
+
 func normalizeOpenRouterTerm(raw json.RawMessage, episodeIndexes ...string) (terms.GeneratedTerm, bool, error) {
 	var item map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &item); err != nil {
@@ -1523,13 +1627,14 @@ func CharacterNameSet(generated []characters.GeneratedCharacter) map[string]bool
 
 func FilterAndMergeTermDeltas(existing []terms.GeneratedTerm, incoming []terms.GeneratedTerm, generatedCharacters []characters.GeneratedCharacter) []terms.GeneratedTerm {
 	names := CharacterNameSet(generatedCharacters)
-	filtered := make([]terms.GeneratedTerm, 0, len(incoming))
-	for _, term := range incoming {
+	merged := terms.ApplyTermDelta(existing, incoming)
+	filtered := make([]terms.GeneratedTerm, 0, len(merged))
+	for _, term := range merged {
 		if !names[strings.TrimSpace(term.Term)] {
 			filtered = append(filtered, term)
 		}
 	}
-	return terms.ApplyTermDelta(existing, filtered)
+	return filtered
 }
 
 func valueOrEmptyString(value *string) string {

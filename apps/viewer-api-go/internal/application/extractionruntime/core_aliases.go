@@ -47,6 +47,10 @@ func normalizeExtractionOpenRouterResponse(raw []byte, novelID string, fallbackE
 	return core.NormalizeOpenRouterResponse(raw, novelID, fallbackEpisodeIndex)
 }
 
+func normalizeExtractionOpenRouterResponseForEpisodes(raw []byte, novelID string, fallbackEpisodeIndex string, allowedEpisodeIndexes []string) (extractionDelta, error) {
+	return core.NormalizeOpenRouterResponseForEpisodes(raw, novelID, fallbackEpisodeIndex, allowedEpisodeIndexes)
+}
+
 func applyExtractionDelta(novelID string, existing []characters.GeneratedCharacter, delta extractionDelta, allocator *characters.GeneratedCharacterIDAllocator) ([]characters.GeneratedCharacter, int) {
 	return core.ApplyDelta(novelID, existing, delta, allocator)
 }

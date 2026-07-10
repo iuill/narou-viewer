@@ -2,6 +2,7 @@ package extractionruntime
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -18,18 +19,25 @@ type JobStore interface {
 	Save(novelID string, job extractdomain.Job) error
 }
 
+type ExecutionSettings interface {
+	GetAIGenerationSettings() (ai.SettingsResponse, error)
+	ResolveActiveAIGenerationConfig() (*store.ResolvedAIGenerationConfig, error)
+}
+
 type Logger func(stage string, startedAt time.Time, fields ...any)
 
 type Dependencies struct {
 	StateDir string
 	Workflow Workflow
 	JobStore JobStore
+	Settings ExecutionSettings
 	Logger   Logger
 }
 
 type Processor struct {
 	workflow Workflow
 	store    JobStore
+	settings ExecutionSettings
 	logger   Logger
 }
 
@@ -49,6 +57,7 @@ func NewProcessor(deps Dependencies) *Processor {
 	return &Processor{
 		workflow: deps.Workflow,
 		store:    jobStore,
+		settings: deps.Settings,
 		logger:   deps.Logger,
 	}
 }
@@ -61,6 +70,17 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 	defer p.log("job_process", jobStartedAt, "novelId", novelID, "jobId", job.JobID, "upToEpisodeIndex", job.RequestedUpToEpisodeIndex, "status", job.Status)
 	if ctx.Err() != nil || p == nil || p.workflow == nil || p.store == nil {
 		return false
+	}
+	resolvedOverride, resolveErr := p.resolveExecutionContext(&job)
+	if resolveErr != nil {
+		finishedAt := ai.NowISO()
+		message := resolveErr.Error()
+		job.Status = "failed"
+		job.StartedAt = &finishedAt
+		job.FinishedAt = &finishedAt
+		job.ErrorMessage = &message
+		SetExtractionJobProgress(&job, 0, "failed", nil, nil, nil, nil)
+		return p.store.Save(novelID, job) == nil
 	}
 	now := ai.NowISO()
 	if job.StartedAt == nil || job.Status == "queued" {
@@ -104,7 +124,7 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		}
 		p.log("job_save", saveStartedAt, "status", status, "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
 	}
-	counts, generationErr := p.workflow.GenerateAndSave(ctx, novelID, job.RequestedUpToEpisodeIndex, nil, job.GenerationStrategy, progressSink)
+	counts, generationErr := p.workflow.GenerateAndSave(ctx, novelID, job.RequestedUpToEpisodeIndex, resolvedOverride, job.GenerationStrategy, progressSink)
 	if generationErr != nil {
 		if ctx.Err() != nil {
 			return false
@@ -138,6 +158,38 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 	}
 	p.log("job_save", saveStartedAt, "status", status, "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
 	return err == nil
+}
+
+func (p *Processor) resolveExecutionContext(job *extractdomain.Job) (*store.ResolvedAIGenerationConfig, error) {
+	if p == nil || p.settings == nil {
+		return nil, nil
+	}
+	settings, err := p.settings.GetAIGenerationSettings()
+	if err != nil {
+		return nil, err
+	}
+	job.GenerationMode = settings.EffectiveGenerationMode
+	if settings.EffectiveGenerationMode != "openrouter" {
+		job.ProfileID = nil
+		job.ProfileLabel = nil
+		job.ModelID = nil
+		return nil, nil
+	}
+	config, err := p.settings.ResolveActiveAIGenerationConfig()
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		return nil, errors.New("AI generation profile was not found.")
+	}
+	job.ProfileID = stringPointer(config.ProfileID)
+	job.ProfileLabel = stringPointer(config.ProfileLabel)
+	job.ModelID = stringPointer(config.ModelID)
+	return config, nil
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func (p *Processor) log(stage string, startedAt time.Time, fields ...any) {
