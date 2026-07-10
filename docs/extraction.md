@@ -14,9 +14,9 @@
 
 ## pipeline と保存
 
-- serial、parallel identity、discovery + parallel correction の3戦略が、detail extraction 1 response から人物と用語を同時生成する。生成方式は人物・用語を含む抽出ジョブ全体へ適用する。
+- serial、parallel identity、discovery + parallel correction の3戦略が、detail extraction 1 response から人物と用語を同時生成する。抽出方式は人物・用語を含む抽出ジョブ全体へ適用する。
 - parallel identity と discovery + parallel correction の detail extraction は、各本文バッチを人物用・用語用に二重送信せず、1回の並列リクエストで人物差分と用語の事実差分を同時抽出する。
-- 並列バッチの用語説明は、そのバッチで新しく判明した事実差分として受け取り、本文を再送しない決定的な時系列 reducer で、各話時点までの自己完結型 snapshot に累積する。
+- 並列バッチの用語説明は、そのバッチで新しく判明した事実差分として受け取り、`description_facts` に話単位で保存する。表示時だけ境界以下の事実を合成し、中間話ごとの累積 snapshot を重複保存しない。後続プロンプトへ渡す説明は長さを制限する。
 - serial は従来どおり直前までの用語 snapshot を次バッチへ渡し、LLM response 自体に自己完結型 snapshot を返させる。
 - response の `terms` は必須で、欠落または `null` は job failure とする。
 - 保存順は term profile、character events/profile の順。character frontier を commit marker とし、両方の保存後だけ checkpoint を削除する。

@@ -19,12 +19,20 @@ type extractionBatchResult struct {
 }
 
 func (r *Runtime) nextRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
+	return r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, "", unresolvedMentions...)
+}
+
+func (r *Runtime) nextRuntimeBatchForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, focus string, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
 	return core.PlanRuntimeBatch(template, chunks, func(batch extractionBatch) (bool, error) {
-		return r.batchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolvedMentions...)
+		return r.batchFitsContextForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, focus, unresolvedMentions...)
 	})
 }
 
 func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
+	return r.batchFitsContextForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "", unresolvedMentions...)
+}
+
+func (r *Runtime) batchFitsContextForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, focus string, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
 	if config == nil {
 		return true, nil
 	}
@@ -33,7 +41,7 @@ func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAI
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending)
+	prepared := prepareExtractionRequest(config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, pending, focus)
 	r.log("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "knownTerms", len(knownTerms), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
 	promptTokens := prepared.PromptTokens
@@ -236,7 +244,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
 			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
 			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
-			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"firstAppearanceEpisodeIndex": map[string]any{"anyOf": []any{map[string]any{"type": "null"}, map[string]any{"type": "string", "pattern": "^\\d+$"}}},
 			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
 			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
 			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},

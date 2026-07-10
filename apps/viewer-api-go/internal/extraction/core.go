@@ -535,9 +535,10 @@ func SplitOversizedChunkBatch(batch Batch, fits BatchFitFunc) ([]Batch, error) {
 }
 
 const (
-	defaultPromptReserveTokens = 2048
-	defaultMinBatchTokens      = 512
-	defaultMaxCompletionTokens = 12000
+	defaultPromptReserveTokens       = 2048
+	defaultMinBatchTokens            = 512
+	defaultMaxCompletionTokens       = 12000
+	termCandidateDescriptionMaxRunes = 1200
 )
 
 func ResolveBatchBudget(fallbackChars int, contextLength int, maxCompletionTokens int) BatchBudget {
@@ -578,6 +579,7 @@ func BuildDefaultSystemPrompt() string {
 		"最優先方針: 抽出対象は「人として登場する個人キャラクター」だけです。",
 		"入力の candidateCharacters は今回の本文に関係しそうな既存人物候補だけです。",
 		"既存人物候補に紐づく新情報は characterUpdates に characterId を指定して入れてください。",
+		"characterUpdates は今回の episodes で新しく判明した差分だけを書き、過去の名前・別名・履歴を再出力しないでください。firstAppearanceEpisodeIndex は null にしてください。",
 		"候補にない新人物は newCharacters に入れてください。candidateCharacters が空の場合は、本文に明示的に登場する人物をすべて newCharacters に入れてください。",
 		"既存全キャラクターを再出力しないでください。ただし初回抽出で candidateCharacters が空の場合、検出した人物を省略しないでください。",
 		"aliases は本人を指す固有名・通称・表記揺れだけにしてください。「先生」「隊長」「伯母さん」「鍵の人」のような役職・関係・説明だけの語は aliases に入れず、必要なら summaryHistory に書いてください。",
@@ -641,7 +643,7 @@ func TermCandidateCards(values []terms.GeneratedTerm, batch Batch) []map[string]
 	scored := make([]scoredTerm, 0, len(values))
 	for _, value := range values {
 		term := strings.TrimSpace(value.Term)
-		if term == "" || len(value.DescriptionHistory) == 0 {
+		if term == "" || (len(value.DescriptionHistory) == 0 && len(value.DescriptionFacts) == 0) {
 			continue
 		}
 		score := latestTermEpisode(value)
@@ -662,11 +664,15 @@ func TermCandidateCards(values []terms.GeneratedTerm, batch Batch) []map[string]
 	result := make([]map[string]any, 0, len(scored))
 	for _, candidate := range scored {
 		value := candidate.value
+		projected := terms.ProjectTerms([]terms.GeneratedTerm{value}, latestTermEpisodeIndex(value))
+		if len(projected) == 0 {
+			continue
+		}
 		card := map[string]any{
 			"term":               strings.TrimSpace(value.Term),
-			"category":           terms.CategoryOther,
-			"latestDescription":  value.DescriptionHistory[len(value.DescriptionHistory)-1].Text,
-			"latestEpisodeIndex": value.DescriptionHistory[len(value.DescriptionHistory)-1].EpisodeIndex,
+			"category":           projected[0].Category,
+			"latestDescription":  truncateTermCandidateDescription(projected[0].Description),
+			"latestEpisodeIndex": latestTermEpisodeIndex(value),
 		}
 		if len(value.ReadingHistory) > 0 {
 			card["reading"] = value.ReadingHistory[len(value.ReadingHistory)-1].Text
@@ -681,11 +687,38 @@ func TermCandidateCards(values []terms.GeneratedTerm, batch Batch) []map[string]
 	return result
 }
 
+func truncateTermCandidateDescription(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= termCandidateDescriptionMaxRunes {
+		return string(runes)
+	}
+	head := termCandidateDescriptionMaxRunes / 2
+	tail := termCandidateDescriptionMaxRunes - head
+	return string(runes[:head]) + " … " + string(runes[len(runes)-tail:])
+}
+
 func latestTermEpisode(value terms.GeneratedTerm) int {
 	latest := 0
 	for _, history := range value.DescriptionHistory {
 		if episode, err := strconv.Atoi(history.EpisodeIndex); err == nil && episode > latest {
 			latest = episode
+		}
+	}
+	for _, history := range value.DescriptionFacts {
+		if episode, err := strconv.Atoi(history.EpisodeIndex); err == nil && episode > latest {
+			latest = episode
+		}
+	}
+	return latest
+}
+
+func latestTermEpisodeIndex(value terms.GeneratedTerm) string {
+	latest := ""
+	for _, histories := range [][]terms.HistoryVersion{value.DescriptionHistory, value.DescriptionFacts} {
+		for _, history := range histories {
+			if latest == "" || CompareEpisodeString(history.EpisodeIndex, latest) > 0 {
+				latest = history.EpisodeIndex
+			}
 		}
 	}
 	return latest
@@ -955,7 +988,7 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 			delta.Terms = append(delta.Terms, term)
 		}
 	}
-	delta.Terms = terms.ApplyTermDelta(nil, delta.Terms)
+	delta.Terms = terms.CombineTermFacts(delta.Terms)
 	seenIDs := map[string]bool{}
 	for _, rawItem := range payload.Characters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
@@ -1058,11 +1091,20 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 		}
 		return true
 	}
-	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters, delta.CharacterUpdates} {
+	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters} {
 		for _, character := range values {
 			if !validateCharacter(character) {
 				return extractionEpisodeBoundaryError()
 			}
+		}
+	}
+	for _, character := range delta.CharacterUpdates {
+		// Updates are true deltas. They may identify a persisted character whose
+		// first appearance predates this batch, but every newly supplied value
+		// must still belong to the current batch.
+		character.FirstAppearanceEpisodeIndex = ""
+		if !validateCharacter(character) {
+			return extractionEpisodeBoundaryError()
 		}
 	}
 	for _, mention := range delta.UnresolvedMentions {
@@ -1639,7 +1681,7 @@ func FilterAndMergeTermDeltas(existing []terms.GeneratedTerm, incoming []terms.G
 
 func FilterAndMergeParallelTermFacts(existing []terms.GeneratedTerm, incoming []terms.GeneratedTerm, generatedCharacters []characters.GeneratedCharacter) []terms.GeneratedTerm {
 	names := CharacterNameSet(generatedCharacters)
-	merged := terms.BuildCumulativeSnapshots(existing, incoming)
+	merged := terms.ApplyParallelTermFacts(existing, incoming)
 	filtered := make([]terms.GeneratedTerm, 0, len(merged))
 	for _, term := range merged {
 		if !names[strings.TrimSpace(term.Term)] {

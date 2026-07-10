@@ -245,7 +245,7 @@ export function AiSettingsView({
             <div className="panel-header compact library-queue-header">
               <div>
                 <h3>抽出モデル</h3>
-                <p>名前発見 + 並列抽出 + 補正で使う補助モデルを指定します。</p>
+                <p>事前発見 + 並列抽出 + 補正で使う補助モデルを指定します。</p>
               </div>
             </div>
             <label className="download-form-field">

@@ -30,6 +30,7 @@ type GeneratedTerm struct {
 	ReadingHistory     []TextVersion     `json:"readingHistory" yaml:"reading_history"`
 	CategoryHistory    []CategoryVersion `json:"categoryHistory" yaml:"category_history"`
 	DescriptionHistory []HistoryVersion  `json:"descriptionHistory" yaml:"description_history"`
+	DescriptionFacts   []HistoryVersion  `json:"descriptionFacts" yaml:"description_facts"`
 }
 
 type Term struct {

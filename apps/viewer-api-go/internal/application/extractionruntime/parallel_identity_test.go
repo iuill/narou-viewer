@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func newExtractionOpenRouterTestServer(t *testing.T, responses ...string) *httptest.Server {
@@ -222,6 +224,58 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 }
 
+func TestExtractParallelIdentityCandidatesDoesNotSendFutureCandidatesToEarlierBatch(t *testing.T) {
+	requestBodies := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request: %v", err)
+		}
+		requestBodies = append(requestBodies, string(body))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": `{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`}}},
+			"usage":   map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "1")
+	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "0")
+
+	known := []characters.GeneratedCharacter{
+		{CharacterID: "char_early", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", NameHistory: []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "1"}}, SummaryHistory: []characters.GeneratedHistoryVersion{{Text: "旅人。", EpisodeIndex: "1"}}},
+		{CharacterID: "char_future", CanonicalName: "王女セリア", CanonicalEpisodeIndex: "20", FirstAppearanceEpisodeIndex: "20", NameHistory: []characters.GeneratedTextVersion{{Text: "王女セリア", EpisodeIndex: "20"}}, SummaryHistory: []characters.GeneratedHistoryVersion{{Text: "正体を明かした王女。", EpisodeIndex: "20"}}},
+	}
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "アリスが歩いた。"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "王女セリアが名乗った。"}}},
+	}
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	_, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnown(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "test-model"}, "novel-1", "20", known, nil, batches, nil, nil)
+	if err != nil {
+		t.Fatalf("extract candidates: %v", err)
+	}
+	if len(requestBodies) != 2 {
+		t.Fatalf("request count = %d", len(requestBodies))
+	}
+	if strings.Contains(requestBodies[0], "王女セリア") || strings.Contains(requestBodies[0], "正体を明かした王女") {
+		t.Fatalf("future candidate leaked into episode 1 request: %s", requestBodies[0])
+	}
+	if !strings.Contains(requestBodies[1], "王女セリア") {
+		t.Fatalf("episode 20 candidate missing from its request: %s", requestBodies[1])
+	}
+}
+
+func TestParallelEntitiesContextFitUsesFocusedPreparedPrompt(t *testing.T) {
+	config := &store.ResolvedAIGenerationConfig{}
+	batch := extractionBatch{EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文"}}}
+	plain := prepareExtractionRequest(config, "novel-1", "1", nil, nil, batch, nil)
+	focused := prepareExtractionRequest(config, "novel-1", "1", nil, nil, batch, nil, "parallel_entities")
+	if focused.PromptTokens <= plain.PromptTokens || !strings.Contains(fmt.Sprint(focused.Messages[0].Content), "人物と用語を同じレスポンス") {
+		t.Fatalf("focused planner prompt must match parallel request: plain=%d focused=%d prompt=%q", plain.PromptTokens, focused.PromptTokens, focused.Messages[0].Content)
+	}
+}
+
 func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 	requestIndex := 0
 	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,8 +325,9 @@ func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 	if requestIndex != 2 || len(usage) != 2 {
 		t.Fatalf("requests=%d usage=%+v", requestIndex, usage)
 	}
-	if len(state.Terms) != 1 || len(state.Terms[0].DescriptionHistory) != 2 || state.Terms[0].DescriptionHistory[1].Text != "王都直属の騎士団。 辺境の村へ派遣された。" {
-		t.Fatalf("parallel term facts must become cumulative snapshots: %+v", state.Terms)
+	projected := terms.ProjectTerms(state.Terms, "2")
+	if len(state.Terms) != 1 || len(state.Terms[0].DescriptionFacts) != 2 || len(state.Terms[0].DescriptionHistory) != 0 || len(projected) != 1 || projected[0].Description != "王都直属の騎士団。 辺境の村へ派遣された。" {
+		t.Fatalf("parallel term facts must stay compact and project cumulatively: state=%+v projected=%+v", state.Terms, projected)
 	}
 }
 

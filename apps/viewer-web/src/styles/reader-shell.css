@@ -8,6 +8,10 @@
   --reader-shell-bg-top: #f8f3eb;
   --reader-shell-bg-bottom: #efe5d6;
   --reader-shell-overlay: rgba(157, 75, 47, 0.18);
+  --accent: #9d4b2f;
+  --accent-strong: #6e2811;
+  --accent-soft: rgba(157, 75, 47, 0.12);
+  --reader-on-accent: #fffaf2;
   --reader-surface: rgba(255, 250, 242, 0.88);
   --reader-panel-surface: rgba(255, 250, 242, 0.96);
   --reader-surface-border: rgba(84, 58, 22, 0.16);

@@ -70,7 +70,7 @@ func TestApplyTermDeltaUsesExactTrimmedIdentityAndIncomingWinsSameEpisode(t *tes
 	}
 }
 
-func TestBuildCumulativeSnapshotsFoldsParallelFactsInEpisodeOrder(t *testing.T) {
+func TestApplyParallelTermFactsStoresFactsAndProjectsCumulativeDescription(t *testing.T) {
 	existing := []GeneratedTerm{{
 		Term:               "白銀騎士団",
 		DescriptionHistory: []HistoryVersion{{Text: "王都直属の騎士団。", EpisodeIndex: "1"}},
@@ -80,45 +80,32 @@ func TestBuildCumulativeSnapshotsFoldsParallelFactsInEpisodeOrder(t *testing.T) 
 		{Term: "白銀騎士団", DescriptionHistory: []HistoryVersion{{Text: "辺境の村へ派遣された。", EpisodeIndex: "2"}}},
 	}
 
-	merged := BuildCumulativeSnapshots(existing, incoming)
-	if len(merged) != 1 || len(merged[0].DescriptionHistory) != 3 {
-		t.Fatalf("unexpected cumulative snapshots: %+v", merged)
+	merged := ApplyParallelTermFacts(existing, incoming)
+	if len(merged) != 1 || len(merged[0].DescriptionHistory) != 1 || len(merged[0].DescriptionFacts) != 2 {
+		t.Fatalf("parallel facts should be stored without repeated snapshots: %+v", merged)
 	}
-	if got := merged[0].DescriptionHistory[1].Text; got != "王都直属の騎士団。 辺境の村へ派遣された。" {
-		t.Fatalf("episode 2 snapshot = %q", got)
+	if got := ProjectTerms(merged, "2")[0].Description; got != "王都直属の騎士団。 辺境の村へ派遣された。" {
+		t.Fatalf("episode 2 projection = %q", got)
 	}
-	if got := merged[0].DescriptionHistory[2].Text; got != "王都直属の騎士団。 辺境の村へ派遣された。 団長はアリス。" {
-		t.Fatalf("episode 10 snapshot = %q", got)
-	}
-}
-
-func TestBuildCumulativeSnapshotsAcceptsAlreadyCumulativeDescriptions(t *testing.T) {
-	merged := BuildCumulativeSnapshots(nil, []GeneratedTerm{{
-		Term: "白銀騎士団",
-		DescriptionHistory: []HistoryVersion{
-			{Text: "王都直属の騎士団。", EpisodeIndex: "1"},
-			{Text: "王都直属の騎士団。辺境へ派遣された。", EpisodeIndex: "2"},
-		},
-	}})
-	if got := merged[0].DescriptionHistory[1].Text; got != "王都直属の騎士団。辺境へ派遣された。" {
-		t.Fatalf("already cumulative snapshot should not be duplicated: %q", got)
+	if got := ProjectTerms(merged, "10")[0].Description; got != "王都直属の騎士団。 辺境の村へ派遣された。 団長はアリス。" {
+		t.Fatalf("episode 10 projection = %q", got)
 	}
 }
 
-func TestBuildCumulativeSnapshotsKeepsFactsFromSplitChunksInSameEpisode(t *testing.T) {
-	merged := BuildCumulativeSnapshots(nil, []GeneratedTerm{
+func TestApplyParallelTermFactsKeepsFactsFromSplitChunksInSameEpisode(t *testing.T) {
+	merged := ApplyParallelTermFacts(nil, []GeneratedTerm{
 		{Term: "魔導院", DescriptionHistory: []HistoryVersion{{Text: "王都にある。", EpisodeIndex: "5"}}},
 		{Term: "魔導院", DescriptionHistory: []HistoryVersion{{Text: "魔術師を育成する。", EpisodeIndex: "5"}}},
 	})
-	if len(merged) != 1 || len(merged[0].DescriptionHistory) != 1 {
-		t.Fatalf("same-episode facts should share one snapshot: %+v", merged)
+	if len(merged) != 1 || len(merged[0].DescriptionFacts) != 1 || len(merged[0].DescriptionHistory) != 0 {
+		t.Fatalf("same-episode facts should share one compact fact record: %+v", merged)
 	}
-	if got := merged[0].DescriptionHistory[0].Text; got != "王都にある。 魔術師を育成する。" {
-		t.Fatalf("same-episode snapshot = %q", got)
+	if got := merged[0].DescriptionFacts[0].Text; got != "王都にある。 魔術師を育成する。" {
+		t.Fatalf("same-episode fact = %q", got)
 	}
 }
 
-func TestBuildCumulativeSnapshotsPreservesExistingRewordedSnapshots(t *testing.T) {
+func TestApplyParallelTermFactsPreservesExistingRewordedSnapshots(t *testing.T) {
 	existing := []GeneratedTerm{{
 		Term: "白銀騎士団",
 		DescriptionHistory: []HistoryVersion{
@@ -126,14 +113,14 @@ func TestBuildCumulativeSnapshotsPreservesExistingRewordedSnapshots(t *testing.T
 			{Text: "王都直属で辺境防衛も担う騎士団。", EpisodeIndex: "2"},
 		},
 	}}
-	merged := BuildCumulativeSnapshots(existing, []GeneratedTerm{{
+	merged := ApplyParallelTermFacts(existing, []GeneratedTerm{{
 		Term:               "白銀騎士団",
 		DescriptionHistory: []HistoryVersion{{Text: "団長はアリス。", EpisodeIndex: "3"}},
 	}})
 	if got := merged[0].DescriptionHistory[1].Text; got != "王都直属で辺境防衛も担う騎士団。" {
 		t.Fatalf("existing snapshot must not be recomposed: %q", got)
 	}
-	if got := merged[0].DescriptionHistory[2].Text; got != "王都直属で辺境防衛も担う騎士団。 団長はアリス。" {
+	if got := ProjectTerms(merged, "3")[0].Description; got != "王都直属で辺境防衛も担う騎士団。 団長はアリス。" {
 		t.Fatalf("new fact should extend latest existing snapshot: %q", got)
 	}
 }

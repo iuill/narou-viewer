@@ -97,7 +97,8 @@ func LoadGeneratedTermsBeforeEpisode(stateDir string, novelID string, episodeInd
 		term.ReadingHistory = filterTextVersions(term.ReadingHistory, func(index string) bool { return compareEpisode(index, episodeIndex) < 0 })
 		term.CategoryHistory = filterCategoryVersions(term.CategoryHistory, func(index string) bool { return compareEpisode(index, episodeIndex) < 0 })
 		term.DescriptionHistory = filterHistoryVersions(term.DescriptionHistory, func(index string) bool { return compareEpisode(index, episodeIndex) < 0 })
-		if len(term.DescriptionHistory) > 0 {
+		term.DescriptionFacts = filterHistoryVersions(term.DescriptionFacts, func(index string) bool { return compareEpisode(index, episodeIndex) < 0 })
+		if len(term.DescriptionHistory) > 0 || len(term.DescriptionFacts) > 0 {
 			result = append(result, term)
 		}
 	}
@@ -121,18 +122,19 @@ func ApplyTermDelta(existing []GeneratedTerm, incoming []GeneratedTerm) []Genera
 		current.ReadingHistory = mergeTextVersions(current.ReadingHistory, candidate.ReadingHistory)
 		current.CategoryHistory = mergeCategoryVersions(current.CategoryHistory, candidate.CategoryHistory)
 		current.DescriptionHistory = mergeHistoryVersions(current.DescriptionHistory, candidate.DescriptionHistory)
+		current.DescriptionFacts = mergeFactVersions(current.DescriptionFacts, candidate.DescriptionFacts)
 		byTerm[key] = current
 	}
 	result := make([]GeneratedTerm, 0, len(byTerm))
 	for _, key := range order {
 		term := byTerm[key]
-		if len(term.DescriptionHistory) > 0 {
+		if len(term.DescriptionHistory) > 0 || len(term.DescriptionFacts) > 0 {
 			result = append(result, term)
 		}
 	}
 	sort.SliceStable(result, func(i, j int) bool {
-		left := result[i].DescriptionHistory[0].EpisodeIndex
-		right := result[j].DescriptionHistory[0].EpisodeIndex
+		left := firstDescriptionEpisode(result[i])
+		right := firstDescriptionEpisode(result[j])
 		if compared := compareEpisode(left, right); compared != 0 {
 			return compared < 0
 		}
@@ -141,36 +143,19 @@ func ApplyTermDelta(existing []GeneratedTerm, incoming []GeneratedTerm) []Genera
 	return result
 }
 
-// BuildCumulativeSnapshots folds episode-local description facts into the
-// self-contained snapshots expected by projection and display code. It is used
-// after parallel extraction, where later batches cannot see earlier results.
-func BuildCumulativeSnapshots(existing []GeneratedTerm, incoming []GeneratedTerm) []GeneratedTerm {
-	facts := aggregateTermFacts(incoming)
-	incomingEpisodes := map[string]map[string]bool{}
-	for _, term := range facts {
-		key := strings.TrimSpace(term.Term)
-		incomingEpisodes[key] = map[string]bool{}
-		for _, history := range term.DescriptionHistory {
-			incomingEpisodes[key][strings.TrimSpace(history.EpisodeIndex)] = true
-		}
+// ApplyParallelTermFacts stores episode-local facts without expanding every
+// intermediate cumulative snapshot. Projection composes only the requested
+// boundary's display text.
+func ApplyParallelTermFacts(existing []GeneratedTerm, incoming []GeneratedTerm) []GeneratedTerm {
+	facts := CombineTermFacts(incoming)
+	for index := range facts {
+		facts[index].DescriptionFacts = facts[index].DescriptionHistory
+		facts[index].DescriptionHistory = nil
 	}
-	merged := ApplyTermDelta(existing, facts)
-	for termIndex := range merged {
-		previous := ""
-		for historyIndex := range merged[termIndex].DescriptionHistory {
-			current := strings.TrimSpace(merged[termIndex].DescriptionHistory[historyIndex].Text)
-			episodeIndex := strings.TrimSpace(merged[termIndex].DescriptionHistory[historyIndex].EpisodeIndex)
-			if incomingEpisodes[merged[termIndex].Term][episodeIndex] {
-				current = mergeDescriptionSnapshot(previous, current)
-			}
-			merged[termIndex].DescriptionHistory[historyIndex].Text = current
-			previous = merged[termIndex].DescriptionHistory[historyIndex].Text
-		}
-	}
-	return merged
+	return ApplyTermDelta(existing, facts)
 }
 
-func aggregateTermFacts(incoming []GeneratedTerm) []GeneratedTerm {
+func CombineTermFacts(incoming []GeneratedTerm) []GeneratedTerm {
 	byTerm := map[string]GeneratedTerm{}
 	order := []string{}
 	for _, candidate := range incoming {
@@ -236,7 +221,8 @@ func ReplaceFromEpisodeIndex(generated []GeneratedTerm, fromEpisodeIndex string)
 		term.ReadingHistory = filterTextVersions(term.ReadingHistory, func(index string) bool { return compareEpisode(index, fromEpisodeIndex) < 0 })
 		term.CategoryHistory = filterCategoryVersions(term.CategoryHistory, func(index string) bool { return compareEpisode(index, fromEpisodeIndex) < 0 })
 		term.DescriptionHistory = filterHistoryVersions(term.DescriptionHistory, func(index string) bool { return compareEpisode(index, fromEpisodeIndex) < 0 })
-		if len(term.DescriptionHistory) > 0 {
+		term.DescriptionFacts = filterHistoryVersions(term.DescriptionFacts, func(index string) bool { return compareEpisode(index, fromEpisodeIndex) < 0 })
+		if len(term.DescriptionHistory) > 0 || len(term.DescriptionFacts) > 0 {
 			result = append(result, term)
 		}
 	}
@@ -251,10 +237,22 @@ func ProjectTerms(generated []GeneratedTerm, boundary string) []Term {
 	projected := make([]projectedTerm, 0, len(generated))
 	for _, generatedTerm := range generated {
 		descriptions := filterHistoryVersions(generatedTerm.DescriptionHistory, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
-		if len(descriptions) == 0 {
+		facts := filterHistoryVersions(generatedTerm.DescriptionFacts, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
+		if len(descriptions) == 0 && len(facts) == 0 {
 			continue
 		}
-		term := Term{Term: strings.TrimSpace(generatedTerm.Term), Category: CategoryOther, Description: descriptions[len(descriptions)-1].Text}
+		description := ""
+		baseEpisode := ""
+		if len(descriptions) > 0 {
+			description = descriptions[len(descriptions)-1].Text
+			baseEpisode = descriptions[len(descriptions)-1].EpisodeIndex
+		}
+		for _, fact := range facts {
+			if baseEpisode == "" || compareEpisode(fact.EpisodeIndex, baseEpisode) > 0 {
+				description = mergeDescriptionSnapshot(description, fact.Text)
+			}
+		}
+		term := Term{Term: strings.TrimSpace(generatedTerm.Term), Category: CategoryOther, Description: description}
 		readings := filterTextVersions(generatedTerm.ReadingHistory, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
 		if len(readings) > 0 {
 			reading := readings[len(readings)-1].Text
@@ -264,7 +262,7 @@ func ProjectTerms(generated []GeneratedTerm, boundary string) []Term {
 		if len(categories) > 0 {
 			term.Category = NormalizeCategory(categories[len(categories)-1].Category)
 		}
-		projected = append(projected, projectedTerm{term: term, firstIndex: descriptions[0].EpisodeIndex})
+		projected = append(projected, projectedTerm{term: term, firstIndex: firstDescriptionEpisode(generatedTerm)})
 	}
 	sort.SliceStable(projected, func(i, j int) bool {
 		if compared := compareEpisode(projected[i].firstIndex, projected[j].firstIndex); compared != 0 {
@@ -306,7 +304,8 @@ func truncateAfter(generated []GeneratedTerm, boundary string) []GeneratedTerm {
 		term.ReadingHistory = filterTextVersions(term.ReadingHistory, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
 		term.CategoryHistory = filterCategoryVersions(term.CategoryHistory, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
 		term.DescriptionHistory = filterHistoryVersions(term.DescriptionHistory, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
-		if len(term.DescriptionHistory) > 0 {
+		term.DescriptionFacts = filterHistoryVersions(term.DescriptionFacts, func(index string) bool { return compareEpisode(index, boundary) <= 0 })
+		if len(term.DescriptionHistory) > 0 || len(term.DescriptionFacts) > 0 {
 			result = append(result, term)
 		}
 	}
@@ -362,6 +361,39 @@ func mergeHistoryVersions(existing []HistoryVersion, incoming []HistoryVersion) 
 	}
 	sort.Slice(result, func(i, j int) bool { return compareEpisode(result[i].EpisodeIndex, result[j].EpisodeIndex) < 0 })
 	return result
+}
+
+func mergeFactVersions(existing []HistoryVersion, incoming []HistoryVersion) []HistoryVersion {
+	byEpisode := map[string]HistoryVersion{}
+	for _, version := range append(append([]HistoryVersion{}, existing...), incoming...) {
+		version.Text = strings.TrimSpace(version.Text)
+		version.EpisodeIndex = strings.TrimSpace(version.EpisodeIndex)
+		if version.Text == "" || version.EpisodeIndex == "" {
+			continue
+		}
+		current := byEpisode[version.EpisodeIndex]
+		current.EpisodeIndex = version.EpisodeIndex
+		current.Text = mergeDescriptionSnapshot(current.Text, version.Text)
+		byEpisode[version.EpisodeIndex] = current
+	}
+	result := make([]HistoryVersion, 0, len(byEpisode))
+	for _, version := range byEpisode {
+		result = append(result, version)
+	}
+	sort.Slice(result, func(i, j int) bool { return compareEpisode(result[i].EpisodeIndex, result[j].EpisodeIndex) < 0 })
+	return result
+}
+
+func firstDescriptionEpisode(term GeneratedTerm) string {
+	first := ""
+	for _, versions := range [][]HistoryVersion{term.DescriptionHistory, term.DescriptionFacts} {
+		for _, version := range versions {
+			if first == "" || compareEpisode(version.EpisodeIndex, first) < 0 {
+				first = version.EpisodeIndex
+			}
+		}
+	}
+	return first
 }
 
 func filterTextVersions(versions []TextVersion, keep func(string) bool) []TextVersion {

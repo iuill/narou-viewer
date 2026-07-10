@@ -1,4 +1,8 @@
 .reader-theme-classic {
+  --accent: #9d4b2f;
+  --accent-strong: #6e2811;
+  --accent-soft: rgba(157, 75, 47, 0.12);
+  --reader-on-accent: #fffaf2;
   --text: #2b2118;
   --text-soft: #6f5a48;
   --panel-border: rgba(84, 58, 22, 0.16);
@@ -17,6 +21,10 @@
 }
 
 .reader-theme-paper {
+  --accent: #8a5c2f;
+  --accent-strong: #5f3b19;
+  --accent-soft: rgba(138, 92, 47, 0.14);
+  --reader-on-accent: #fffaf2;
   --text: #34281f;
   --text-soft: #6d5b4d;
   --panel-border: rgba(117, 91, 66, 0.18);
@@ -35,6 +43,10 @@
 }
 
 .reader-theme-forest {
+  --accent: #3f7550;
+  --accent-strong: #285337;
+  --accent-soft: rgba(63, 117, 80, 0.15);
+  --reader-on-accent: #f7fff8;
   --text: #1d2a22;
   --text-soft: #526558;
   --panel-border: rgba(52, 90, 65, 0.2);
@@ -53,6 +65,10 @@
 }
 
 .reader-theme-ocean {
+  --accent: #3478a8;
+  --accent-strong: #215777;
+  --accent-soft: rgba(52, 120, 168, 0.15);
+  --reader-on-accent: #f7fbff;
   --text: #132433;
   --text-soft: #496171;
   --panel-border: rgba(53, 95, 127, 0.22);
@@ -72,6 +88,10 @@
 
 .reader-theme-midnight {
   color-scheme: dark;
+  --accent: #467fae;
+  --accent-strong: #a9d3f2;
+  --accent-soft: rgba(111, 169, 216, 0.18);
+  --reader-on-accent: #f7fbff;
   --text: #edf2f7;
   --text-soft: #a7bac8;
   --panel-border: rgba(118, 145, 172, 0.24);

@@ -528,6 +528,76 @@ func TestValidateDeltaEpisodeIndexesAcceptsCompleteInBatchDelta(t *testing.T) {
 	}
 }
 
+func TestCharacterUpdateAcceptsPersistedFirstAppearanceOutsideBatch(t *testing.T) {
+	raw := []byte(`{
+		"processedUpToEpisodeIndex":"20",
+		"newCharacters":[],
+		"characterUpdates":[{
+			"characterId":"char_alice",
+			"canonicalName":null,
+			"fullName":null,
+			"fullNameHistory":[],
+			"gender":null,
+			"genderHistory":[],
+			"firstAppearanceEpisodeIndex":"1",
+			"aliases":[],
+			"appearanceHistory":[],
+			"personalityHistory":[],
+			"summaryHistory":[{"episodeIndex":"20","text":"第20話で新しく判明した情報"}]
+		}],
+		"mergeProposals":[],
+		"unresolvedMentions":[],
+		"terms":[]
+	}`)
+	delta, err := NormalizeOpenRouterResponseForEpisodes(raw, "novel-1", "20", []string{"20"})
+	if err != nil {
+		t.Fatalf("persisted first appearance should not violate the update boundary: %v", err)
+	}
+	if len(delta.CharacterUpdates) != 1 || delta.CharacterUpdates[0].FirstAppearanceEpisodeIndex != "1" || len(delta.CharacterUpdates[0].SummaryHistory) != 1 {
+		t.Fatalf("unexpected update: %+v", delta.CharacterUpdates)
+	}
+}
+
+func TestParallelTermFactsSurviveNormalizationAndProjection(t *testing.T) {
+	raw := []byte(`{
+		"processedUpToEpisodeIndex":"5",
+		"characters":[],
+		"terms":[{
+			"term":"魔導院",
+			"reading":null,
+			"category":{"value":"organization","episodeIndex":"5"},
+			"descriptionHistory":[
+				{"text":"王都にある。","episodeIndex":"5"},
+				{"text":"魔術師を育成する。","episodeIndex":"5"}
+			]
+		}]
+	}`)
+	delta, err := NormalizeOpenRouterResponseForEpisodes(raw, "novel-1", "5", []string{"5"})
+	if err != nil {
+		t.Fatalf("normalize parallel facts: %v", err)
+	}
+	merged := FilterAndMergeParallelTermFacts(nil, delta.Terms, nil)
+	projected := terms.ProjectTerms(merged, "5")
+	if len(merged) != 1 || len(merged[0].DescriptionFacts) != 1 || len(projected) != 1 || projected[0].Description != "王都にある。 魔術師を育成する。" {
+		t.Fatalf("same-response facts were lost: merged=%+v projected=%+v", merged, projected)
+	}
+}
+
+func TestTermCandidateCardsBoundLongDescriptions(t *testing.T) {
+	long := strings.Repeat("古", 900) + strings.Repeat("新", 900)
+	cards := TermCandidateCards([]terms.GeneratedTerm{{
+		Term:             "王都",
+		DescriptionFacts: []terms.HistoryVersion{{EpisodeIndex: "1", Text: long}},
+	}}, Batch{Chunks: []Chunk{{EpisodeIndex: "2", Text: "王都"}}})
+	if len(cards) != 1 {
+		t.Fatalf("cards = %+v", cards)
+	}
+	description := cards[0]["latestDescription"].(string)
+	if len([]rune(description)) > termCandidateDescriptionMaxRunes+3 || !strings.HasPrefix(description, strings.Repeat("古", 100)) || !strings.HasSuffix(description, strings.Repeat("新", 100)) {
+		t.Fatalf("description was not bounded while retaining definition and recent facts: runes=%d", len([]rune(description)))
+	}
+}
+
 func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 	if got := RenderExtractionInlineTokens([]library.ReaderInline{{Type: "ruby", Text: "聖剣", Ruby: "せいけん"}}); got != "聖剣《せいけん》" {
 		t.Fatalf("ruby prompt rendering = %q", got)
@@ -577,7 +647,8 @@ func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 		CanonicalName: "騎士団長",
 		Aliases:       []characters.GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "2"}},
 	}})
-	if len(filtered) != 1 || filtered[0].Term != "王都" || filtered[0].DescriptionHistory[1].Text != "王国の首都。 城壁がある。" {
+	projectedParallelTerms := terms.ProjectTerms(filtered, "2")
+	if len(filtered) != 1 || filtered[0].Term != "王都" || len(filtered[0].DescriptionFacts) != 1 || projectedParallelTerms[0].Description != "王国の首都。 城壁がある。" {
 		t.Fatalf("parallel facts must fold cumulatively and exclude character names: %+v", filtered)
 	}
 }

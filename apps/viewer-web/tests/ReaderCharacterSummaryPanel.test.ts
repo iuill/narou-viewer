@@ -189,12 +189,12 @@ describe("ReaderCharacterSummaryPanel", () => {
     expect(container.textContent).toContain("メインキャラ");
     expect(container.textContent).toContain("初登場第1話");
     expect(container.textContent).toContain("進行中の生成");
-    expect(container.textContent).toContain("並列抽出 + 同一人物解決");
-    expect(container.textContent).toContain("名前発見 + 並列抽出 + 補正");
+    expect(container.textContent).toContain("並列抽出 + 人物・用語統合");
+    expect(container.textContent).toContain("事前発見 + 並列抽出 + 補正");
     expect(container.textContent).toContain("batch 生成中");
     expect(container.textContent).toContain("62% / batch 2/4 / 5 人まで反映");
     expect(container.textContent).toContain("過去の生成履歴");
-    expect(container.textContent).toContain("現行 serial");
+    expect(container.textContent).toContain("順次抽出");
     expect(container.textContent).toContain("timeout");
 
     const form = container.querySelector("form");
@@ -219,12 +219,12 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
   });
 
-  it("生成方式の変更を通知する", async () => {
+  it("抽出方式の変更を通知する", async () => {
     const onRequestedGenerationStrategyChange = vi.fn();
     const props = createProps({ onRequestedGenerationStrategyChange });
     const { container, root, dom } = await renderPanel(props);
     const select = Array.from(container.querySelectorAll("select")).find((candidate) =>
-      candidate.textContent?.includes("現行 serial")
+      candidate.textContent?.includes("順次抽出")
     );
 
     if (!(select instanceof dom.window.HTMLSelectElement)) {

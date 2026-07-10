@@ -167,9 +167,12 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, pendingUnresolved []characters.GeneratedUnresolvedMention) ([]extractionBatch, error) {
 	runtimeBatches := []extractionBatch{}
 	for _, batch := range batches {
+		boundary := extractionBatchBoundary(batch)
+		projectedCharacters := projectGeneratedCharactersAtBoundary(knownCharacters, boundary)
+		projectedUnresolved := filterGeneratedUnresolvedAtBoundary(pendingUnresolved, boundary)
 		remaining := append([]extractionChunk{}, batch.Chunks...)
 		for len(remaining) > 0 {
-			runtimeBatch, nextRemaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, remaining, pendingUnresolved)
+			runtimeBatch, nextRemaining, err := r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, remaining, "parallel_entities", projectedUnresolved)
 			if err != nil {
 				return nil, err
 			}
@@ -323,20 +326,23 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	completedTermNames := map[string]bool{}
 	runErr := runParallelIdentityLLMJobs(ctx, len(batches), func(requestCtx context.Context, index int) error {
 		batch := batches[index]
+		boundary := extractionBatchBoundary(batch)
+		projectedCharacters := projectGeneratedCharactersAtBoundary(knownCharacters, boundary)
+		projectedUnresolved := filterGeneratedUnresolvedAtBoundary(initialUnresolved, boundary)
 		startedAt := time.Now()
 		if progressSink != nil {
 			sinkMu.Lock()
 			progressSink(appextraction.BatchProgress{Phase: "start", Batch: batch})
 			sinkMu.Unlock()
 		}
-		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "parallel_entities", initialUnresolved)
+		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, "parallel_entities", projectedUnresolved)
 		extraction := parallelIdentityExtractionResult{RequestIndex: index, Batch: batch, Err: err}
 		if err == nil {
 			result.Usage.RequestIndex = index
 			extraction.Usage = result.Usage
 			extraction.Unresolved = result.Delta.UnresolvedMentions
 			extraction.Terms = result.Delta.Terms
-			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, knownCharacters)
+			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
 		}
 		results[index] = extraction
 		if progressSink != nil {
@@ -379,6 +385,76 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		rawTerms = append(rawTerms, result.Terms...)
 	}
 	return candidates, rawTerms, usageRequests, unresolved, nil
+}
+
+func extractionBatchBoundary(batch extractionBatch) string {
+	boundary := ""
+	for _, episodeIndex := range batch.EpisodeIndexes {
+		if boundary == "" || compareEpisodeString(episodeIndex, boundary) > 0 {
+			boundary = episodeIndex
+		}
+	}
+	return boundary
+}
+
+func projectGeneratedCharactersAtBoundary(values []characters.GeneratedCharacter, boundary string) []characters.GeneratedCharacter {
+	if strings.TrimSpace(boundary) == "" {
+		return nil
+	}
+	result := make([]characters.GeneratedCharacter, 0, len(values))
+	for _, value := range values {
+		if value.FirstAppearanceEpisodeIndex != "" && compareEpisodeString(value.FirstAppearanceEpisodeIndex, boundary) > 0 {
+			continue
+		}
+		value.NameHistory = filterGeneratedTextVersionsAtBoundary(value.NameHistory, boundary)
+		value.FullNameHistory = filterGeneratedTextVersionsAtBoundary(value.FullNameHistory, boundary)
+		value.GenderHistory = filterGeneratedTextVersionsAtBoundary(value.GenderHistory, boundary)
+		value.Aliases = filterGeneratedTextVersionsAtBoundary(value.Aliases, boundary)
+		value.AppearanceHistory = filterGeneratedHistoryVersionsAtBoundary(value.AppearanceHistory, boundary)
+		value.PersonalityHistory = filterGeneratedHistoryVersionsAtBoundary(value.PersonalityHistory, boundary)
+		value.SummaryHistory = filterGeneratedHistoryVersionsAtBoundary(value.SummaryHistory, boundary)
+		if len(value.NameHistory) > 0 {
+			latest := value.NameHistory[len(value.NameHistory)-1]
+			value.CanonicalName = latest.Text
+			value.CanonicalEpisodeIndex = latest.EpisodeIndex
+		} else if value.CanonicalEpisodeIndex != "" && compareEpisodeString(value.CanonicalEpisodeIndex, boundary) > 0 {
+			continue
+		}
+		value.FullName, value.FullNameEpisodeIndex = core.LatestGeneratedTextVersionValue(nil, "", value.FullNameHistory)
+		value.Gender, value.GenderEpisodeIndex = core.LatestGeneratedTextVersionValue(nil, "", value.GenderHistory)
+		result = append(result, value)
+	}
+	return result
+}
+
+func filterGeneratedTextVersionsAtBoundary(values []characters.GeneratedTextVersion, boundary string) []characters.GeneratedTextVersion {
+	result := make([]characters.GeneratedTextVersion, 0, len(values))
+	for _, value := range values {
+		if compareEpisodeString(value.EpisodeIndex, boundary) <= 0 {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func filterGeneratedHistoryVersionsAtBoundary(values []characters.GeneratedHistoryVersion, boundary string) []characters.GeneratedHistoryVersion {
+	result := make([]characters.GeneratedHistoryVersion, 0, len(values))
+	for _, value := range values {
+		if compareEpisodeString(value.EpisodeIndex, boundary) <= 0 {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func filterGeneratedUnresolvedAtBoundary(values []characters.GeneratedUnresolvedMention, boundary string) []characters.GeneratedUnresolvedMention {
+	result := make([]characters.GeneratedUnresolvedMention, 0, len(values))
+	for _, value := range values {
+		if compareEpisodeString(value.EpisodeIndex, boundary) <= 0 {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func parallelIdentityCandidatesFromDelta(novelID string, requestIndex int, batch extractionBatch, delta extractionDelta) []parallelIdentityCandidate {

@@ -9,13 +9,13 @@
 .bookmark-block {
   margin-top: 20px;
   padding-top: 18px;
-  border-top: 1px solid rgba(84, 58, 22, 0.12);
+  border-top: 1px solid var(--reader-surface-border, var(--panel-border));
 }
 
 .episode-block {
   margin-top: 24px;
   padding-top: 18px;
-  border-top: 1px solid rgba(84, 58, 22, 0.12);
+  border-top: 1px solid var(--reader-surface-border, var(--panel-border));
 }
 
 .reader-bookmarks {
@@ -94,7 +94,7 @@
 
 .bookmark-item:hover,
 .bookmark-item:focus-within {
-  border-color: rgba(157, 75, 47, 0.3);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-soft);
 }
 

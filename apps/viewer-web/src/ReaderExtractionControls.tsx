@@ -17,9 +17,9 @@ type Props = {
 };
 
 export const EXTRACTION_GENERATION_STRATEGY_LABELS: Record<ExtractionGenerationStrategy, string> = {
-  discovery_parallel_correction: "名前発見 + 並列抽出 + 補正",
-  parallel_identity: "並列抽出 + 同一人物解決",
-  serial: "現行 serial"
+  discovery_parallel_correction: "事前発見 + 並列抽出 + 補正",
+  parallel_identity: "並列抽出 + 人物・用語統合",
+  serial: "順次抽出"
 };
 
 export function ReaderExtractionControls({
@@ -67,7 +67,7 @@ export function ReaderExtractionControls({
         />
       </label>
       <label className="reader-character-field">
-        <span>生成方式</span>
+        <span>抽出方式</span>
         <select
           disabled={defaultUpToEpisodeIndex === null || isSubmitting}
           onChange={(event) => onRequestedGenerationStrategyChange(event.target.value as ExtractionGenerationStrategy)}

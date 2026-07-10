@@ -135,13 +135,13 @@ export function getAiGenerationModeLabel(mode: AiGenerationMode): string {
 export function getCharacterGenerationStrategyLabel(strategy: CharacterGenerationStrategy | null | undefined): string {
   switch (strategy) {
     case "discovery_parallel_correction":
-      return "名前発見 + 並列抽出 + 補正";
+      return "事前発見 + 並列抽出 + 補正";
     case "parallel_identity":
-      return "並列抽出 + 同一人物解決";
+      return "並列抽出 + 人物・用語統合";
     case "serial":
-      return "現行 serial";
+      return "順次抽出";
     default:
-      return "現行 serial";
+      return "順次抽出";
   }
 }
 
