@@ -21,8 +21,8 @@ var (
 	ErrJobsRead                  = errors.New("character jobs could not be read")
 	ErrJobSave                   = errors.New("character job could not be saved")
 	ErrSettingsRead              = errors.New("AI generation settings could not be read")
-	ErrSummaryClear              = errors.New("character summary state could not be cleared")
-	ErrSummaryActive             = errors.New("character summary generation is still running")
+	ErrExtractionClear           = errors.New("extraction state could not be cleared")
+	ErrExtractionActive          = errors.New("extraction is still running")
 )
 
 type LibraryPort interface {
@@ -52,12 +52,12 @@ type EnqueueResponse struct {
 }
 
 type ClearResponse struct {
-	Message            string `json:"message"`
-	ProfileDeleted     bool   `json:"profileDeleted"`
-	EventsDeleted      bool   `json:"eventsDeleted"`
-	JobsDeleted        int    `json:"jobsDeleted"`
-	JobIndexDeleted    bool   `json:"jobIndexDeleted"`
-	CheckpointsDeleted int    `json:"checkpointsDeleted"`
+	Message                      string `json:"message"`
+	CharacterProfileDeleted      bool   `json:"characterProfileDeleted"`
+	CharacterEventsDeleted       bool   `json:"characterEventsDeleted"`
+	ExtractionJobsDeleted        int    `json:"extractionJobsDeleted"`
+	ExtractionJobIndexDeleted    bool   `json:"extractionJobIndexDeleted"`
+	ExtractionCheckpointsDeleted int    `json:"extractionCheckpointsDeleted"`
 }
 
 type Service struct {
@@ -143,18 +143,18 @@ func (s *Service) Clear(ctx context.Context, novelID string) (ClearResponse, err
 	}
 	result, active, err := extractdomain.PruneNovelStateIfNoActive(s.stateDir, novelID)
 	if err != nil {
-		return ClearResponse{}, ErrSummaryClear
+		return ClearResponse{}, ErrExtractionClear
 	}
 	if active {
-		return ClearResponse{}, ErrSummaryActive
+		return ClearResponse{}, ErrExtractionActive
 	}
 	return ClearResponse{
-		Message:            "キャラクター一覧生成データをクリアしました。",
-		ProfileDeleted:     result.ProfileDeleted,
-		EventsDeleted:      result.EventsDeleted,
-		JobsDeleted:        result.JobsDeleted,
-		JobIndexDeleted:    result.JobIndexDeleted,
-		CheckpointsDeleted: result.CheckpointsDeleted,
+		Message:                      "抽出データをクリアしました。",
+		CharacterProfileDeleted:      result.ProfileDeleted,
+		CharacterEventsDeleted:       result.EventsDeleted,
+		ExtractionJobsDeleted:        result.JobsDeleted,
+		ExtractionJobIndexDeleted:    result.JobIndexDeleted,
+		ExtractionCheckpointsDeleted: result.CheckpointsDeleted,
 	}, nil
 }
 

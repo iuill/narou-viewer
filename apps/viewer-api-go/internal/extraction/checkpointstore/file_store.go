@@ -36,8 +36,8 @@ func NewFileStore(stateDir string) FileStore {
 
 func (s FileStore) Path(novelID string, upToEpisodeIndex string) string {
 	sum := sha1.Sum([]byte(novelID + "\x00" + upToEpisodeIndex))
-	name := "character-summary-" + hex.EncodeToString(sum[:]) + ".json"
-	return filepath.Join(s.stateDir, "character_jobs", "checkpoints", name)
+	name := "extraction-" + hex.EncodeToString(sum[:]) + ".json"
+	return filepath.Join(s.stateDir, "extraction_jobs", "checkpoints", name)
 }
 
 func (s FileStore) Load(novelID string, upToEpisodeIndex string) (Checkpoint, error) {

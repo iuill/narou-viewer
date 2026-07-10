@@ -25,7 +25,7 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	settings, err := store.PutAIGenerationSettings(AIGenerationSettingsUpdate{
 		PreferredMode:     strPtr("llm"),
 		SelectedProfileID: &selectedProfileID,
-		CharacterSummaryStrategyModels: &AICharacterSummaryStrategyModelsInput{
+		ExtractionStrategyModels: &AIExtractionStrategyModelsInput{
 			NameDiscoveryModelID: &nameDiscoveryModelID,
 		},
 		SharedProviders: &AISharedProvidersInput{
@@ -68,8 +68,8 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	if settings.PreferredMode != "llm" || settings.Settings.SelectedProfileID == nil || *settings.Settings.SelectedProfileID != selectedProfileID {
 		t.Fatalf("unexpected AI settings: %+v", settings)
 	}
-	if settings.Settings.CharacterSummaryStrategyModels.NameDiscoveryModelID == nil || *settings.Settings.CharacterSummaryStrategyModels.NameDiscoveryModelID != nameDiscoveryModelID {
-		t.Fatalf("unexpected character summary strategy models: %+v", settings.Settings.CharacterSummaryStrategyModels)
+	if settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID == nil || *settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID != nameDiscoveryModelID {
+		t.Fatalf("unexpected character summary strategy models: %+v", settings.Settings.ExtractionStrategyModels)
 	}
 	if !settings.Settings.SharedProviders.OpenRouter.HasAPIKey || settings.Settings.SharedProviders.OpenRouter.APIKeyMasked == nil {
 		t.Fatalf("shared provider key metadata was not exposed safely: %+v", settings.Settings.SharedProviders.OpenRouter)
@@ -94,6 +94,9 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	}
 	if !strings.Contains(rawText, "api_key_encrypted:") || !strings.Contains(rawText, "api_key_version: 1") {
 		t.Fatalf("AI settings yaml did not persist encrypted credentials: %s", raw)
+	}
+	if !strings.Contains(rawText, "extraction_strategy_models:") || strings.Contains(rawText, "character_summary_strategy_models:") {
+		t.Fatalf("AI settings should write only the extraction strategy key: %s", rawText)
 	}
 	if !strings.Contains(rawText, "name_discovery_model_id: openai/gpt-5-nano") {
 		t.Fatalf("AI settings yaml did not persist character summary strategy model: %s", raw)
@@ -234,6 +237,35 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	}
 	if updated.PreferredMode != "heuristic" || updated.EffectiveGenerationMode != "heuristic" {
 		t.Fatalf("preferred mode was not updated: %+v", updated)
+	}
+}
+
+func TestAIGenerationSettingsReadsLegacyCharacterStrategyModels(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir, FileName), []byte(`
+schema_version: 2
+revision: 1
+preferred_mode: heuristic
+selected_profile_id: default
+shared_providers: {}
+profiles:
+  - id: default
+    label: Default
+    provider: openrouter
+    credentials:
+      source: shared
+character_summary_strategy_models:
+  name_discovery_model_id: openai/legacy-model
+`), 0o600); err != nil {
+		t.Fatalf("write legacy settings: %v", err)
+	}
+	settings, err := NewRepository(stateDir).GetAIGenerationSettings()
+	if err != nil {
+		t.Fatalf("GetAIGenerationSettings returned error: %v", err)
+	}
+	modelID := settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID
+	if modelID == nil || *modelID != "openai/legacy-model" {
+		t.Fatalf("legacy strategy model was not read: %+v", settings.Settings.ExtractionStrategyModels)
 	}
 }
 
@@ -593,7 +625,7 @@ func TestResolveAIGenerationConfigOverrideBranches(t *testing.T) {
 	if _, err := stateStore.PutAIGenerationSettings(AIGenerationSettingsUpdate{
 		PreferredMode:     strPtr("heuristic"),
 		SelectedProfileID: &profileID,
-		CharacterSummaryStrategyModels: &AICharacterSummaryStrategyModelsInput{
+		ExtractionStrategyModels: &AIExtractionStrategyModelsInput{
 			NameDiscoveryModelID: &nameDiscoveryModelID,
 		},
 		SharedProviders: &AISharedProvidersInput{
@@ -638,7 +670,7 @@ func TestResolveAIGenerationConfigOverrideBranches(t *testing.T) {
 		config.RequireParameters ||
 		config.SystemPrompt == nil ||
 		*config.SystemPrompt != systemPrompt ||
-		config.CharacterSummaryNameDiscoveryModelID != nameDiscoveryModelID {
+		config.ExtractionNameDiscoveryModelID != nameDiscoveryModelID {
 		t.Fatalf("unexpected override config: %+v", config)
 	}
 

@@ -63,7 +63,9 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 	switch suffix {
 	case "characters":
 		s.handleCharacters(w, r, novelID)
-	case "character-jobs":
+	case "extraction":
+		s.handleExtractionClear(w, r, novelID)
+	case "extraction-jobs":
 		s.handleExtractionJobs(w, r, novelID)
 	case "reader-settings":
 		s.handleNovelReaderSettings(w, r, novelID)
@@ -234,14 +236,10 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request, novelID str
 }
 
 func (s *Server) handleCharacters(w http.ResponseWriter, r *http.Request, novelID string) {
-	switch r.Method {
-	case http.MethodGet:
-		s.handleExtraction(w, r, novelID)
-	case http.MethodDelete:
-		s.handleExtractionClear(w, r, novelID)
-	default:
-		methodOnly(w, r, http.MethodGet, http.MethodDelete)
+	if !methodOnly(w, r, http.MethodGet) {
+		return
 	}
+	s.handleExtraction(w, r, novelID)
 }
 
 func (s *Server) handleExtraction(w http.ResponseWriter, r *http.Request, novelID string) {
@@ -280,6 +278,9 @@ func (s *Server) handleExtraction(w http.ResponseWriter, r *http.Request, novelI
 }
 
 func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, novelID string) {
+	if !methodOnly(w, r, http.MethodDelete) {
+		return
+	}
 	if s.characterJobQueue == nil {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
@@ -289,12 +290,12 @@ func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, n
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
-	if errors.Is(err, extractionjobs.ErrSummaryClear) {
-		writeError(w, http.StatusInternalServerError, "Character summary state could not be cleared.")
+	if errors.Is(err, extractionjobs.ErrExtractionClear) {
+		writeError(w, http.StatusInternalServerError, "Extraction state could not be cleared.")
 		return
 	}
-	if errors.Is(err, extractionjobs.ErrSummaryActive) {
-		writeError(w, http.StatusConflict, "Character summary generation is still running.")
+	if errors.Is(err, extractionjobs.ErrExtractionActive) {
+		writeError(w, http.StatusConflict, "Extraction is still running.")
 		return
 	}
 	writeResult(w, result, err)
@@ -547,7 +548,7 @@ func readerAssistantErrorMessage(err error) string {
 
 func resolveExtractionBatchBudget(ctx context.Context, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) extractionBatchBudget {
 	fallbackTokens := extraction.TokensFromChars(fallbackMaxBatchChars)
-	if configuredTokens := extraction.PositiveEnvInt("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
+	if configuredTokens := extraction.PositiveEnvIntWithFallback("EXTRACTION_MAX_BATCH_TOKENS", "CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
 		return extractionBatchBudget{MaxTextTokens: configuredTokens}
 	}
 	budget := extractionBatchBudget{MaxTextChars: fallbackMaxBatchChars, MaxTextTokens: fallbackTokens}

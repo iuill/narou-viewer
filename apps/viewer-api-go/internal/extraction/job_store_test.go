@@ -9,7 +9,7 @@ import (
 
 func TestLoadJobsReadsCharacterJobDocuments(t *testing.T) {
 	stateDir := t.TempDir()
-	jobDir := filepath.Join(stateDir, "character_jobs")
+	jobDir := filepath.Join(stateDir, "extraction_jobs")
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		t.Fatalf("mkdir job dir: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	stateDir := t.TempDir()
 	profileDir := filepath.Join(stateDir, "character_profiles")
 	eventsDir := filepath.Join(stateDir, "character_events")
-	checkpointDir := filepath.Join(stateDir, "character_jobs", "checkpoints")
+	checkpointDir := filepath.Join(stateDir, "extraction_jobs", "checkpoints")
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatalf("mkdir profile dir: %v", err)
 	}
@@ -144,8 +144,8 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(profileDir, "novel-1.yaml"),
 		filepath.Join(eventsDir, "novel-1.yaml"),
-		filepath.Join(stateDir, "character_jobs", "job-target.yaml"),
-		filepath.Join(stateDir, "character_jobs", "index", "novel-1.yaml"),
+		filepath.Join(stateDir, "extraction_jobs", "job-target.yaml"),
+		filepath.Join(stateDir, "extraction_jobs", "index", "novel-1.yaml"),
 		filepath.Join(checkpointDir, "target.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -334,10 +334,10 @@ func TestSaveJobUsesTSCompatibleFileNamesAndRejectsUnsafeIDs(t *testing.T) {
 			t.Fatalf("SaveJob(%q) returned error: %v", jobID, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "character_jobs", "go-job-1.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(stateDir, "extraction_jobs", "go-job-1.yaml")); err != nil {
 		t.Fatalf("TS-compatible job ID should be saved under its raw filename: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(stateDir, "character_jobs", "go-job-1.yaml"))
+	raw, err := os.ReadFile(filepath.Join(stateDir, "extraction_jobs", "go-job-1.yaml"))
 	if err != nil {
 		t.Fatalf("read saved job yaml: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestSaveJobUsesTSCompatibleFileNamesAndRejectsUnsafeIDs(t *testing.T) {
 
 func TestLoadJobsSkipsInvalidYAML(t *testing.T) {
 	stateDir := t.TempDir()
-	jobDir := filepath.Join(stateDir, "character_jobs")
+	jobDir := filepath.Join(stateDir, "extraction_jobs")
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		t.Fatalf("mkdir job dir: %v", err)
 	}

@@ -103,59 +103,61 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		result.EventsDeleted = deleted
 	}
 
-	indexPath := filepath.Join(stateDir, "character_jobs", "index", novelID+".yaml")
-	if deleted, err := removeIfExists(indexPath); err != nil {
-		return NovelStatePruneResult{}, err
-	} else {
-		result.JobIndexDeleted = deleted
-	}
-
-	jobPaths, err := filepath.Glob(filepath.Join(stateDir, "character_jobs", "*.yaml"))
-	if err != nil {
-		return NovelStatePruneResult{}, err
-	}
-	for _, path := range jobPaths {
-		var doc jobDocument
-		if ok, err := readYAMLIfExists(path, &doc); err != nil {
-			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
-			continue
-		} else if !ok || doc.NovelID != novelID {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	for _, jobsDirName := range []string{"extraction_jobs", "character_jobs"} {
+		indexPath := filepath.Join(stateDir, jobsDirName, "index", novelID+".yaml")
+		if deleted, err := removeIfExists(indexPath); err != nil {
 			return NovelStatePruneResult{}, err
+		} else {
+			result.JobIndexDeleted = result.JobIndexDeleted || deleted
 		}
-		result.JobsDeleted++
-	}
 
-	checkpointPaths, err := filepath.Glob(filepath.Join(stateDir, "character_jobs", "checkpoints", "*.json"))
-	if err != nil {
-		return NovelStatePruneResult{}, err
-	}
-	for _, path := range checkpointPaths {
-		raw, err := os.ReadFile(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		jobPaths, err := filepath.Glob(filepath.Join(stateDir, jobsDirName, "*.yaml"))
 		if err != nil {
 			return NovelStatePruneResult{}, err
 		}
-		var checkpoint struct {
-			NovelID string `json:"novelId"`
+		for _, path := range jobPaths {
+			var doc jobDocument
+			if ok, err := readYAMLIfExists(path, &doc); err != nil {
+				log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
+				continue
+			} else if !ok || doc.NovelID != novelID {
+				continue
+			}
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return NovelStatePruneResult{}, err
+			}
+			result.JobsDeleted++
 		}
-		if err := json.Unmarshal(raw, &checkpoint); err != nil || checkpoint.NovelID != novelID {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+
+		checkpointPaths, err := filepath.Glob(filepath.Join(stateDir, jobsDirName, "checkpoints", "*.json"))
+		if err != nil {
 			return NovelStatePruneResult{}, err
 		}
-		result.CheckpointsDeleted++
+		for _, path := range checkpointPaths {
+			raw, err := os.ReadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return NovelStatePruneResult{}, err
+			}
+			var checkpoint struct {
+				NovelID string `json:"novelId"`
+			}
+			if err := json.Unmarshal(raw, &checkpoint); err != nil || checkpoint.NovelID != novelID {
+				continue
+			}
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return NovelStatePruneResult{}, err
+			}
+			result.CheckpointsDeleted++
+		}
 	}
 	return result, nil
 }
 
 func loadJobRecords(stateDir string) ([]JobWithNovel, error) {
-	paths, err := filepath.Glob(filepath.Join(stateDir, "character_jobs", "*.yaml"))
+	paths, err := filepath.Glob(filepath.Join(stateDir, "extraction_jobs", "*.yaml"))
 	if err != nil {
 		return nil, err
 	}
@@ -284,14 +286,14 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	if err != nil {
 		return err
 	}
-	if err := writeYAMLAtomic(filepath.Join(stateDir, "character_jobs", fileName+".yaml"), doc); err != nil {
+	if err := writeYAMLAtomic(filepath.Join(stateDir, "extraction_jobs", fileName+".yaml"), doc); err != nil {
 		return err
 	}
 	return saveJobIndex(stateDir, novelID, job)
 }
 
 func saveJobIndex(stateDir string, novelID string, job Job) error {
-	path := filepath.Join(stateDir, "character_jobs", "index", novelID+".yaml")
+	path := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
 	doc := jobsIndexDocument{SchemaVersion: 2, NovelID: novelID, JobIDs: []string{}}
 	if ok, err := readYAMLIfExists(path, &doc); err != nil {
 		return err

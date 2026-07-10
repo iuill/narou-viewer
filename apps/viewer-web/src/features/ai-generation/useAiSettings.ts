@@ -9,7 +9,7 @@ import {
   getAiGenerationTriggerSummary,
   toAiGenerationProfileDraft,
   toAiGenerationSharedProviderDraft,
-  type CharacterSummaryStrategyModelsDraft,
+  type ExtractionStrategyModelsDraft,
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft
@@ -43,7 +43,7 @@ export function useAiSettings({
     updatedAt: null
   });
   const [profileDrafts, setProfileDrafts] = useState<AiGenerationProfileDraft[]>([]);
-  const [characterSummaryStrategyModelsDraft, setCharacterSummaryStrategyModelsDraft] = useState<CharacterSummaryStrategyModelsDraft>({
+  const [extractionStrategyModelsDraft, setExtractionStrategyModelsDraft] = useState<ExtractionStrategyModelsDraft>({
     nameDiscoveryModelId: ""
   });
   const [selectedProfileId, setSelectedProfileId] = useState("");
@@ -85,8 +85,8 @@ export function useAiSettings({
     );
     const nextDrafts = nextSettings.settings.profiles.map((profile) => toAiGenerationProfileDraft(profile));
     setProfileDrafts(nextDrafts);
-    setCharacterSummaryStrategyModelsDraft({
-      nameDiscoveryModelId: nextSettings.settings.characterSummaryStrategyModels?.nameDiscoveryModelId ?? ""
+    setExtractionStrategyModelsDraft({
+      nameDiscoveryModelId: nextSettings.settings.extractionStrategyModels?.nameDiscoveryModelId ?? ""
     });
     const nextSelectedProfileId = nextSettings.settings.selectedProfileId ?? nextSettings.settings.profiles[0]?.id ?? "";
     setSelectedProfileId(nextSelectedProfileId);
@@ -199,8 +199,8 @@ export function useAiSettings({
           allowFallbacks: profile.allowFallbacks,
           requireParameters: profile.requireParameters
         })),
-        characterSummaryStrategyModels: {
-          nameDiscoveryModelId: characterSummaryStrategyModelsDraft.nameDiscoveryModelId.trim() || null
+        extractionStrategyModels: {
+          nameDiscoveryModelId: extractionStrategyModelsDraft.nameDiscoveryModelId.trim() || null
         }
       });
       setSettings(nextSettings);
@@ -216,7 +216,7 @@ export function useAiSettings({
       setIsSettingsSaving(false);
     }
   }, [
-    characterSummaryStrategyModelsDraft.nameDiscoveryModelId,
+    extractionStrategyModelsDraft.nameDiscoveryModelId,
     profileDrafts,
     refreshRuntimeStatus,
     selectedProfileId,
@@ -229,7 +229,7 @@ export function useAiSettings({
     addProfile,
     applySettings,
     changePreferredMode,
-    characterSummaryStrategyModelsDraft,
+    extractionStrategyModelsDraft,
     editingProfileId,
     isModeSaving,
     isSettingsLoading,
@@ -245,7 +245,7 @@ export function useAiSettings({
     setNotice,
     setProfileDrafts,
     setSelectedProfileId,
-    setCharacterSummaryStrategyModelsDraft,
+    setExtractionStrategyModelsDraft,
     settings,
     settingsError,
     sharedGoogleBooksDraft,

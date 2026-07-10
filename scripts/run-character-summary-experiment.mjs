@@ -509,7 +509,7 @@ async function run() {
 
     console.log(`[run] ${target.displayLabel}`);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/ai-generation/playground/character-summary/stream`, {
+      const response = await fetch(`${apiBaseUrl}/api/ai-generation/playground/extraction/stream`, {
         method: "POST",
         headers: {
           ...createApiContractHeaders(),

@@ -460,11 +460,11 @@ func (r *Runtime) log(stage string, startedAt time.Time, fields ...any) {
 	}
 	values := []any{"stage", stage, "elapsedMs", time.Since(startedAt).Milliseconds()}
 	values = append(values, fields...)
-	log.Printf("viewer-api-go: character-summary timing %s", formatTimingFields(values...))
+	log.Printf("viewer-api-go: extraction timing %s", formatTimingFields(values...))
 }
 
 func extractionTimingLogEnabled() bool {
-	return strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG")) == "1"
+	return envWithFallback("VIEWER_EXTRACTION_TIMING_LOG", "VIEWER_CHARACTER_SUMMARY_TIMING_LOG") == "1"
 }
 
 func FormatTimingFields(fields ...any) string {
@@ -515,7 +515,7 @@ func buildHeuristicExtractionPreview(novelID string, upToEpisodeIndex string, ep
 }
 
 func buildExtractionPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
-	tempDir, err := os.MkdirTemp("", "narou-viewer-character-summary-preview-*")
+	tempDir, err := os.MkdirTemp("", "narou-viewer-extraction-preview-*")
 	if err != nil {
 		return characters.SummaryResponse{}, err
 	}

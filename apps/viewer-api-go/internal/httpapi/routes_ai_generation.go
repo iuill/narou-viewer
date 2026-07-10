@@ -54,7 +54,11 @@ const (
 )
 
 func extractionTimingLogEnabled() bool {
-	return strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG")) == "1"
+	value := strings.TrimSpace(os.Getenv("VIEWER_EXTRACTION_TIMING_LOG"))
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG"))
+	}
+	return value == "1"
 }
 
 func logExtractionTiming(stage string, startedAt time.Time, fields ...any) {
@@ -66,7 +70,7 @@ func logExtractionTiming(stage string, startedAt time.Time, fields ...any) {
 		"elapsedMs", time.Since(startedAt).Milliseconds(),
 	}
 	values = append(values, fields...)
-	log.Printf("viewer-api-go: character-summary timing %s", formatTimingFields(values...))
+	log.Printf("viewer-api-go: extraction timing %s", formatTimingFields(values...))
 }
 
 func LogExtractionTiming(stage string, startedAt time.Time, fields ...any) {
@@ -238,12 +242,12 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 		}
 		update.SharedProviders = &shared
 	}
-	if rawStrategyModels, ok := body["characterSummaryStrategyModels"]; ok {
+	if rawStrategyModels, ok := body["extractionStrategyModels"]; ok {
 		strategyModels, ok := parseAIExtractionStrategyModels(rawStrategyModels)
 		if !ok {
 			return update, "extractionStrategyModels is invalid."
 		}
-		update.CharacterSummaryStrategyModels = &strategyModels
+		update.ExtractionStrategyModels = &strategyModels
 	}
 	if rawProfiles, ok := body["profiles"]; ok {
 		profiles, ok := rawProfiles.([]any)
@@ -266,19 +270,19 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 	return update, ""
 }
 
-func parseAIExtractionStrategyModels(value any) (store.AICharacterSummaryStrategyModelsInput, bool) {
+func parseAIExtractionStrategyModels(value any) (store.AIExtractionStrategyModelsInput, bool) {
 	if value == nil {
-		return store.AICharacterSummaryStrategyModelsInput{}, true
+		return store.AIExtractionStrategyModelsInput{}, true
 	}
 	record, ok := value.(map[string]any)
 	if !ok {
-		return store.AICharacterSummaryStrategyModelsInput{}, false
+		return store.AIExtractionStrategyModelsInput{}, false
 	}
 	nameDiscoveryModelID, ok := nullableStringField(record, "nameDiscoveryModelId")
 	if !ok {
-		return store.AICharacterSummaryStrategyModelsInput{}, false
+		return store.AIExtractionStrategyModelsInput{}, false
 	}
-	return store.AICharacterSummaryStrategyModelsInput{NameDiscoveryModelID: nameDiscoveryModelID}, true
+	return store.AIExtractionStrategyModelsInput{NameDiscoveryModelID: nameDiscoveryModelID}, true
 }
 
 func parseAISharedProviders(value any) (store.AISharedProvidersInput, bool) {
@@ -1008,7 +1012,7 @@ func buildHeuristicExtractionPreview(novelID string, upToEpisodeIndex string, ep
 }
 
 func buildExtractionPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
-	tempDir, err := os.MkdirTemp("", "narou-viewer-character-summary-preview-*")
+	tempDir, err := os.MkdirTemp("", "narou-viewer-extraction-preview-*")
 	if err != nil {
 		return characters.SummaryResponse{}, err
 	}
@@ -1341,7 +1345,7 @@ func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRe
 	}
 	return ai.UsageRequest{
 		RequestIndex: index,
-		Kind:         "character_summary_batch",
+		Kind:         "extraction_batch",
 		InputTokens:  inputTokens,
 		TotalTokens:  inputTokens,
 	}
@@ -1521,7 +1525,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 	return map[string]any{
 		"type": "json_schema",
 		"json_schema": map[string]any{
-			"name":   "character_summary_delta_result",
+			"name":   "extraction_delta_result",
 			"strict": true,
 			"schema": map[string]any{
 				"type":                 "object",

@@ -112,6 +112,20 @@ func positiveEnvInt(name string, fallback int) int {
 	return value
 }
 
+func positiveEnvIntWithFallback(name string, legacyName string, fallback int) int {
+	if strings.TrimSpace(os.Getenv(name)) != "" {
+		return positiveEnvInt(name, fallback)
+	}
+	return positiveEnvInt(legacyName, fallback)
+}
+
+func envWithFallback(name string, legacyName string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return strings.TrimSpace(os.Getenv(legacyName))
+}
+
 func truncateRunes(value string, limit int) string {
 	runes := []rune(strings.TrimSpace(value))
 	if len(runes) <= limit {
@@ -122,7 +136,7 @@ func truncateRunes(value string, limit int) string {
 
 func resolveExtractionBatchBudget(ctx context.Context, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) extractionBatchBudget {
 	fallbackTokens := core.TokensFromChars(fallbackMaxBatchChars)
-	if configuredTokens := positiveEnvInt("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
+	if configuredTokens := positiveEnvIntWithFallback("EXTRACTION_MAX_BATCH_TOKENS", "CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
 		return extractionBatchBudget{MaxTextTokens: configuredTokens}
 	}
 	budget := extractionBatchBudget{MaxTextChars: fallbackMaxBatchChars, MaxTextTokens: fallbackTokens}

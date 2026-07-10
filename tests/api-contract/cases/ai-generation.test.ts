@@ -112,7 +112,7 @@ describe("AI generation settings contract", () => {
 
   it("keeps AI generation playground validation and not-found errors stable", async () => {
     const missingNovelId = await requestJson(
-      "/api/ai-generation/playground/character-summary",
+      "/api/ai-generation/playground/extraction",
       {
         method: "POST",
         body: {
@@ -128,7 +128,7 @@ describe("AI generation settings contract", () => {
     }));
 
     const missingUpToEpisodeIndex = await requestJson(
-      "/api/ai-generation/playground/character-summary",
+      "/api/ai-generation/playground/extraction",
       {
         method: "POST",
         body: {
@@ -146,7 +146,7 @@ describe("AI generation settings contract", () => {
     }));
 
     const missingNovel = await requestJson(
-      "/api/ai-generation/playground/character-summary",
+      "/api/ai-generation/playground/extraction",
       {
         method: "POST",
         body: {
@@ -168,7 +168,7 @@ describe("AI generation settings contract", () => {
     }
 
     const zeroEpisode = await requestJson(
-      "/api/ai-generation/playground/character-summary",
+      "/api/ai-generation/playground/extraction",
       {
         method: "POST",
         body: {
@@ -183,7 +183,7 @@ describe("AI generation settings contract", () => {
 
   it("keeps AI generation playground stream preflight responses stable", async () => {
     const invalidStream = await requestJson(
-      "/api/ai-generation/playground/character-summary/stream",
+      "/api/ai-generation/playground/extraction/stream",
       {
         method: "POST",
         body: {
@@ -206,7 +206,7 @@ describe("AI generation settings contract", () => {
     }
 
     const outOfRangeStream = await requestJson(
-      "/api/ai-generation/playground/character-summary/stream",
+      "/api/ai-generation/playground/extraction/stream",
       {
         method: "POST",
         body: {
@@ -219,7 +219,7 @@ describe("AI generation settings contract", () => {
     expectErrorShape(outOfRangeStream.json);
 
     const zeroEpisodeStream = await requestJson(
-      "/api/ai-generation/playground/character-summary/stream",
+      "/api/ai-generation/playground/extraction/stream",
       {
         method: "POST",
         body: {
@@ -232,7 +232,7 @@ describe("AI generation settings contract", () => {
     expectErrorShape(zeroEpisodeStream.json);
 
     const streamResponse = await requestRaw(
-      "/api/ai-generation/playground/character-summary/stream",
+      "/api/ai-generation/playground/extraction/stream",
       {
         method: "POST",
         body: {

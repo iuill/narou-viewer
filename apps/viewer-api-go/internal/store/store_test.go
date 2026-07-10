@@ -668,9 +668,9 @@ func TestCharacterStateDirInitializationFailsForBlockedManagedDirectories(t *tes
 			}
 		})
 	}
-	t.Run("character_jobs/index", func(t *testing.T) {
+	t.Run("extraction_jobs/index", func(t *testing.T) {
 		stateDir := t.TempDir()
-		blockedPath := filepath.Join(stateDir, "character_jobs", "index")
+		blockedPath := filepath.Join(stateDir, "extraction_jobs", "index")
 		if err := os.MkdirAll(filepath.Dir(blockedPath), 0o755); err != nil {
 			t.Fatalf("mkdir blocked path parent: %v", err)
 		}

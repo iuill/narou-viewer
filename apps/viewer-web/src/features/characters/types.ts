@@ -28,11 +28,11 @@ export type CharacterSummaryResponse = {
 
 export type CharacterSummaryClearResponse = {
   message: string;
-  profileDeleted: boolean;
-  eventsDeleted: boolean;
-  jobsDeleted: number;
-  jobIndexDeleted: boolean;
-  checkpointsDeleted: number;
+  characterProfileDeleted: boolean;
+  characterEventsDeleted: boolean;
+  extractionJobsDeleted: number;
+  extractionJobIndexDeleted: boolean;
+  extractionCheckpointsDeleted: number;
 };
 
 export type CharacterJobSummary = {

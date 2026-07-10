@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"reflect"
 	"sort"
 	"strconv"
@@ -218,7 +217,7 @@ func (l *parallelIdentityLLMStartLimiter) Wait(ctx context.Context) error {
 }
 
 func parallelIdentityLLMConcurrency() int {
-	concurrency := positiveEnvInt("CHARACTER_SUMMARY_LLM_CONCURRENCY", defaultParallelIdentityLLMConcurrency)
+	concurrency := positiveEnvIntWithFallback("EXTRACTION_LLM_CONCURRENCY", "CHARACTER_SUMMARY_LLM_CONCURRENCY", defaultParallelIdentityLLMConcurrency)
 	if concurrency > maxParallelIdentityLLMConcurrency {
 		return maxParallelIdentityLLMConcurrency
 	}
@@ -226,7 +225,7 @@ func parallelIdentityLLMConcurrency() int {
 }
 
 func parallelIdentityLLMStartInterval() time.Duration {
-	raw := strings.TrimSpace(os.Getenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS"))
+	raw := envWithFallback("EXTRACTION_LLM_START_INTERVAL_MS", "CHARACTER_SUMMARY_LLM_START_INTERVAL_MS")
 	if raw == "" {
 		return time.Duration(defaultParallelIdentityLLMStartIntervalMS) * time.Millisecond
 	}
@@ -238,11 +237,11 @@ func parallelIdentityLLMStartInterval() time.Duration {
 }
 
 func parallelIdentityMaxReduceItems() int {
-	return positiveEnvInt("CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_ITEMS", defaultParallelIdentityMaxReduceItems)
+	return positiveEnvIntWithFallback("EXTRACTION_PARALLEL_MAX_REDUCE_ITEMS", "CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_ITEMS", defaultParallelIdentityMaxReduceItems)
 }
 
 func parallelIdentityMaxReduceTokens() int {
-	return positiveEnvInt("CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_TOKENS", defaultParallelIdentityMaxReduceTokens)
+	return positiveEnvIntWithFallback("EXTRACTION_PARALLEL_MAX_REDUCE_TOKENS", "CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_TOKENS", defaultParallelIdentityMaxReduceTokens)
 }
 
 func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, run func(context.Context, int) error) error {
@@ -506,7 +505,7 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 		return nil, ai.UsageRequest{}, err
 	}
 	usage := ai.UsageRequest{
-		Kind:         "character_summary_identity_resolution",
+		Kind:         "extraction_identity_resolution",
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		TotalTokens:  result.TotalTokens,
@@ -528,7 +527,7 @@ func (r *Runtime) resolveParallelIdentityClustersByNameGroups(ctx context.Contex
 		groupClusters, groupUsage, err := r.resolveParallelIdentityClustersOneShot(ctx, config, novelID, upToEpisodeIndex, group)
 		if err != nil {
 			if !isParallelIdentityOneShotTooLarge(err) {
-				return nil, aggregateParallelIdentityUsage("character_summary_identity_resolution", usageParts), err
+				return nil, aggregateParallelIdentityUsage("extraction_identity_resolution", usageParts), err
 			}
 			log.Printf("viewer-api-go: parallel_identity identity resolution degraded %d candidates to singleton clusters (novel=%s upTo=%s): %v", len(group), novelID, upToEpisodeIndex, err)
 			groupClusters = completeParallelIdentitySingletons(nil, group)
@@ -538,7 +537,7 @@ func (r *Runtime) resolveParallelIdentityClustersByNameGroups(ctx context.Contex
 			usageParts = append(usageParts, groupUsage)
 		}
 	}
-	return completeParallelIdentitySingletons(mergeOverlappingParallelIdentityClusters(clusters), candidates), aggregateParallelIdentityUsage("character_summary_identity_resolution", usageParts), nil
+	return completeParallelIdentitySingletons(mergeOverlappingParallelIdentityClusters(clusters), candidates), aggregateParallelIdentityUsage("extraction_identity_resolution", usageParts), nil
 }
 
 type parallelIdentityDiscoveredName struct {
@@ -650,7 +649,7 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		return nil, ai.UsageRequest{}, err
 	}
 	usage := ai.UsageRequest{
-		Kind:         "character_summary_name_discovery",
+		Kind:         "extraction_name_discovery",
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		TotalTokens:  result.TotalTokens,
@@ -776,7 +775,7 @@ func (r *Runtime) correctParallelIdentityCharactersOneShot(ctx context.Context, 
 	}
 	corrected := applyParallelIdentityCorrections(generated, decoded.Characters, upToEpisodeIndex)
 	usage := ai.UsageRequest{
-		Kind:         "character_summary_correction",
+		Kind:         "extraction_correction",
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		TotalTokens:  result.TotalTokens,
@@ -803,7 +802,7 @@ func (r *Runtime) correctParallelIdentityCharactersInChunks(ctx context.Context,
 		chunkCorrected, chunkUsage, err := r.correctParallelIdentityCharactersOneShot(ctx, config, novelID, upToEpisodeIndex, chunk)
 		if err != nil {
 			if !isParallelIdentityOneShotTooLarge(err) {
-				return nil, aggregateParallelIdentityUsage("character_summary_correction", usageParts), err
+				return nil, aggregateParallelIdentityUsage("extraction_correction", usageParts), err
 			}
 			if len(chunk) == 1 {
 				log.Printf("viewer-api-go: parallel_identity correction kept character %s uncorrected because its prompt exceeds limits (novel=%s upTo=%s): %v", chunk[0].CharacterID, novelID, upToEpisodeIndex, err)
@@ -812,14 +811,14 @@ func (r *Runtime) correctParallelIdentityCharactersInChunks(ctx context.Context,
 			} else {
 				chunkCorrected, chunkUsage, err = r.correctParallelIdentityCharactersInChunks(ctx, config, novelID, upToEpisodeIndex, chunk[:len(chunk)/2])
 				if err != nil {
-					return nil, aggregateParallelIdentityUsage("character_summary_correction", append(append([]ai.UsageRequest{}, usageParts...), chunkUsage)), err
+					return nil, aggregateParallelIdentityUsage("extraction_correction", append(append([]ai.UsageRequest{}, usageParts...), chunkUsage)), err
 				}
 				remainingCorrected, remainingUsage, err := r.correctParallelIdentityCharactersInChunks(ctx, config, novelID, upToEpisodeIndex, chunk[len(chunk)/2:])
 				if err != nil {
-					return nil, aggregateParallelIdentityUsage("character_summary_correction", append(append([]ai.UsageRequest{}, usageParts...), chunkUsage, remainingUsage)), err
+					return nil, aggregateParallelIdentityUsage("extraction_correction", append(append([]ai.UsageRequest{}, usageParts...), chunkUsage, remainingUsage)), err
 				}
 				chunkCorrected = append(chunkCorrected, remainingCorrected...)
-				chunkUsage = aggregateParallelIdentityUsage("character_summary_correction", []ai.UsageRequest{chunkUsage, remainingUsage})
+				chunkUsage = aggregateParallelIdentityUsage("extraction_correction", []ai.UsageRequest{chunkUsage, remainingUsage})
 			}
 		}
 		corrected = append(corrected, chunkCorrected...)
@@ -827,7 +826,7 @@ func (r *Runtime) correctParallelIdentityCharactersInChunks(ctx context.Context,
 			usageParts = append(usageParts, chunkUsage)
 		}
 	}
-	return corrected, aggregateParallelIdentityUsage("character_summary_correction", usageParts), nil
+	return corrected, aggregateParallelIdentityUsage("extraction_correction", usageParts), nil
 }
 
 func applyParallelIdentityCorrections(generated []characters.GeneratedCharacter, corrections []parallelIdentityCorrection, fallbackEpisodeIndex string) []characters.GeneratedCharacter {
@@ -1340,7 +1339,7 @@ func extractionNameDiscoveryConfig(config *store.ResolvedAIGenerationConfig) *st
 	if config == nil {
 		return nil
 	}
-	return extractionConfigWithModel(config, config.CharacterSummaryNameDiscoveryModelID)
+	return extractionConfigWithModel(config, config.ExtractionNameDiscoveryModelID)
 }
 
 func extractionBatchPromptPayload(batch extractionBatch) map[string]any {

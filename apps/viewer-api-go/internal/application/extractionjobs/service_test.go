@@ -106,7 +106,7 @@ func TestListAndClearJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clear returned error: %v", err)
 	}
-	if cleared.Message == "" || cleared.JobsDeleted != 1 {
+	if cleared.Message == "" || cleared.ExtractionJobsDeleted != 1 {
 		t.Fatalf("Clear response should expose deletion counts: %+v", cleared)
 	}
 }
@@ -141,7 +141,7 @@ func TestClearRejectsActiveJob(t *testing.T) {
 	}
 	service := NewService(stateDir, fakeLibrary{workFound: true, episodeOK: true}, fakeSettings{})
 
-	if _, err := service.Clear(context.Background(), "novel-1"); !errors.Is(err, ErrSummaryActive) {
+	if _, err := service.Clear(context.Background(), "novel-1"); !errors.Is(err, ErrExtractionActive) {
 		t.Fatalf("Clear active error = %v", err)
 	}
 }

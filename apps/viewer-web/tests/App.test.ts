@@ -6034,7 +6034,7 @@ describe("App", () => {
         });
       }
 
-      if (requestUrl.pathname === "/api/library/novels/n1/character-jobs") {
+      if (requestUrl.pathname === "/api/library/novels/n1/extraction-jobs") {
         if (init?.method === "POST") {
           return jsonResponse({
             jobId: "job-2",
@@ -6297,7 +6297,7 @@ describe("App", () => {
         );
       }
 
-      if (requestUrl.pathname === "/api/library/novels/n1/character-jobs") {
+      if (requestUrl.pathname === "/api/library/novels/n1/extraction-jobs") {
         return jsonResponse({ jobs: [] });
       }
 

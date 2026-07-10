@@ -41,7 +41,7 @@ export type AiGenerationSettingsLike = {
       };
     };
     profiles: AiGenerationSettingsProfileLike[];
-    characterSummaryStrategyModels?: {
+    extractionStrategyModels?: {
       nameDiscoveryModelId?: string | null;
     };
   };
@@ -82,7 +82,7 @@ export type AiGenerationProfileDraft = {
   requireParameters: boolean;
 };
 
-export type CharacterSummaryStrategyModelsDraft = {
+export type ExtractionStrategyModelsDraft = {
   nameDiscoveryModelId: string;
 };
 

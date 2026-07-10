@@ -88,8 +88,15 @@ var htmlScriptPattern = regexp.MustCompile(`(?is)<script[\s\S]*?</script>`)
 var htmlStylePattern = regexp.MustCompile(`(?is)<style[\s\S]*?</style>`)
 
 func Limits() (int, int) {
-	return PositiveEnvInt("CHARACTER_SUMMARY_MAX_CHUNK_CHARS", defaultExtractionMaxChunkChars),
-		PositiveEnvInt("CHARACTER_SUMMARY_MAX_BATCH_CHARS", defaultExtractionMaxBatchChars)
+	return PositiveEnvIntWithFallback("EXTRACTION_MAX_CHUNK_CHARS", "CHARACTER_SUMMARY_MAX_CHUNK_CHARS", defaultExtractionMaxChunkChars),
+		PositiveEnvIntWithFallback("EXTRACTION_MAX_BATCH_CHARS", "CHARACTER_SUMMARY_MAX_BATCH_CHARS", defaultExtractionMaxBatchChars)
+}
+
+func PositiveEnvIntWithFallback(name string, legacyName string, fallback int) int {
+	if strings.TrimSpace(os.Getenv(name)) != "" {
+		return PositiveEnvInt(name, fallback)
+	}
+	return PositiveEnvInt(legacyName, fallback)
 }
 
 func PositiveEnvInt(name string, fallback int) int {

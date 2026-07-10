@@ -720,7 +720,7 @@ func TestCharacterJobSubmitStoresGenerationStrategy(t *testing.T) {
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
 
-	response := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex":   "1",
 		"generationStrategy": "parallel_identity",
 	}, http.StatusAccepted)
@@ -1392,7 +1392,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if characters["status"] != "ready" {
 		t.Fatalf("unexpected characters response: %+v", characters)
 	}
-	createdJob := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	createdJob := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": episodeIndex,
 	}, http.StatusAccepted)
 	if createdJob["status"] != "queued" {
@@ -1405,7 +1405,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if completedJob["progress"] != float64(100) || completedJob["progressStage"] != "completed" {
 		t.Fatalf("completed character job should expose worker progress metadata: %+v", completedJob)
 	}
-	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "llm"}, http.StatusOK)
@@ -1416,7 +1416,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage/run-http", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage/go-fixture-usage-run", nil, http.StatusNotFound)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": 1,
 	}, http.StatusOK)
@@ -1541,7 +1541,7 @@ processed_up_to_episode_index: "1"
 next_character_ordinal: 1
 characters: []
 `)
-	characterJobIndexDir := filepath.Join(server.stateDir(), "character_jobs", "index")
+	characterJobIndexDir := filepath.Join(server.stateDir(), "extraction_jobs", "index")
 	if err := os.MkdirAll(characterJobIndexDir, 0o755); err != nil {
 		t.Fatalf("mkdir character job index fixture: %v", err)
 	}
@@ -1574,7 +1574,7 @@ job_ids:
 	targetUsageNovelID := novelID
 	if err := ai.SaveUsageRun(server.aiUsageDBPath(), ai.UsageRun{
 		RunID:          "run-target-remove",
-		Feature:        "character-summary",
+		Feature:        "extraction",
 		WorkflowName:   "Character summary",
 		Status:         "completed",
 		StartedAt:      "2026-01-01T00:00:00Z",
@@ -1606,14 +1606,14 @@ job_ids:
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
 	expectedCounts := map[string]float64{
-		"readingStatesDeleted":        1,
-		"bookmarksDeleted":            1,
-		"characterEventsDeleted":      1,
-		"characterProfilesDeleted":    1,
-		"characterJobsDeleted":        1,
-		"characterJobIndexesDeleted":  1,
-		"characterCheckpointsDeleted": 1,
-		"aiUsageRunsDeleted":          1,
+		"readingStatesDeleted":         1,
+		"bookmarksDeleted":             1,
+		"characterEventsDeleted":       1,
+		"characterProfilesDeleted":     1,
+		"extractionJobsDeleted":        1,
+		"extractionJobIndexesDeleted":  1,
+		"extractionCheckpointsDeleted": 1,
+		"aiUsageRunsDeleted":           1,
 	}
 	for key, expected := range expectedCounts {
 		if cleanup[key] != expected {
@@ -1698,7 +1698,7 @@ func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.
 		t.Fatalf("cleanup failure should be reported without failing remove: %+v", response)
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
-	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["characterJobsDeleted"] != float64(1) {
+	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["extractionJobsDeleted"] != float64(1) {
 		t.Fatalf("cleanup response should keep successful partial counts: %+v", cleanup)
 	}
 }
@@ -1785,8 +1785,8 @@ func TestMethodAllowHeadersForMultiMethodRoutes(t *testing.T) {
 		{http.MethodPost, "/api/reader/state", "GET, PUT"},
 		{http.MethodPost, "/api/reader/preferences", "GET, PUT"},
 		{http.MethodPut, "/api/bookmarks", "GET, POST"},
-		{http.MethodPost, "/api/library/novels/" + novelID + "/characters?upToEpisodeIndex=1", "GET, DELETE"},
-		{http.MethodPut, "/api/library/novels/" + novelID + "/character-jobs", "GET, POST"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/characters?upToEpisodeIndex=1", "GET"},
+		{http.MethodPut, "/api/library/novels/" + novelID + "/extraction-jobs", "GET, POST"},
 	}
 	for _, tc := range cases {
 		response := httptest.NewRecorder()
@@ -1825,12 +1825,12 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=1", nil, http.StatusMethodNotAllowed)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=999", nil, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=0", nil, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/character-jobs", nil, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/extraction-jobs", nil, http.StatusNotFound)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": 0,
 	}, http.StatusBadRequest)
 
@@ -1890,13 +1890,13 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		"profiles":      []any{map[string]any{"id": "default", "label": "Default"}},
 	}, http.StatusOK)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "bad"}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/playground/character-summary", nil, http.StatusMethodNotAllowed)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/playground/extraction", nil, http.StatusMethodNotAllowed)
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
-	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -1904,29 +1904,29 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		t.Fatalf("unexpected playground result: %+v", playground)
 	}
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "llm"}, http.StatusOK)
-	llmPlayground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	llmPlayground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
 	if llmPlayground["generationMode"] != "disabled" {
 		t.Fatalf("playground should report effective AI generation mode: %+v", llmPlayground)
 	}
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": 0,
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId": "missing",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
@@ -2005,9 +2005,9 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		{http.MethodPost, "/api/bookmarks"},
 		{http.MethodPut, "/api/ai-generation/settings"},
 		{http.MethodPut, "/api/ai-generation/settings/preferred-mode"},
-		{http.MethodPost, "/api/ai-generation/playground/character-summary"},
-		{http.MethodPost, "/api/ai-generation/playground/character-summary/stream"},
-		{http.MethodPost, "/api/library/novels/" + novelID + "/character-jobs"},
+		{http.MethodPost, "/api/ai-generation/playground/extraction"},
+		{http.MethodPost, "/api/ai-generation/playground/extraction/stream"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/extraction-jobs"},
 		{http.MethodPost, "/api/library/novels/" + novelID + "/reader-assistant/chat"},
 		{http.MethodPost, "/api/library/novels/" + novelID + "/reader-assistant/chat/stream"},
 		{http.MethodPost, "/api/fetcher/works/download"},
@@ -2127,15 +2127,15 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	if before["status"] != "ready" {
 		t.Fatalf("precondition generated summary should be ready: %+v", before)
 	}
-	cleared := requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/characters", nil, http.StatusOK)
-	if cleared["profileDeleted"] != true || cleared["eventsDeleted"] != true || cleared["jobsDeleted"].(float64) < 1 || cleared["checkpointsDeleted"] != float64(1) {
+	cleared := requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/extraction", nil, http.StatusOK)
+	if cleared["characterProfileDeleted"] != true || cleared["characterEventsDeleted"] != true || cleared["extractionJobsDeleted"].(float64) < 1 || cleared["extractionCheckpointsDeleted"] != float64(1) {
 		t.Fatalf("clear response should report deleted generated state: %+v", cleared)
 	}
 	after := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex="+episodeIndex, nil, http.StatusOK)
 	if after["status"] != "not_generated" || len(after["characters"].([]any)) != 0 {
 		t.Fatalf("cleared character summary should become not_generated: %+v", after)
 	}
-	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 0 {
 		t.Fatalf("clear should delete character jobs: %+v", jobs)
 	}
@@ -2171,7 +2171,7 @@ func TestExtractionClearEndpointRejectsActiveJob(t *testing.T) {
 		t.Fatalf("save running job: %v", err)
 	}
 
-	requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/characters", nil, http.StatusConflict)
+	requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/extraction", nil, http.StatusConflict)
 	summary := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=1", nil, http.StatusOK)
 	if summary["status"] != "ready" {
 		t.Fatalf("active job rejection should keep generated summary: %+v", summary)
@@ -2189,7 +2189,7 @@ func TestServerDegradedDependencies(t *testing.T) {
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/toc", nil, http.StatusNotFound)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/characters?upToEpisodeIndex=1", nil, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
@@ -2200,7 +2200,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(dataDir, "state", "character_profiles")); err != nil {
 		t.Fatalf("remove character profiles: %v", err)
 	}
-	if err := os.RemoveAll(filepath.Join(dataDir, "state", "character_jobs")); err != nil {
+	if err := os.RemoveAll(filepath.Join(dataDir, "state", "extraction_jobs")); err != nil {
 		t.Fatalf("remove character jobs: %v", err)
 	}
 	if err := os.Remove(filepath.Join(dataDir, "state", "ai_usage.sqlite")); err != nil {
@@ -2218,11 +2218,11 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if characters["status"] != "not_generated" || len(characters["characters"].([]any)) != 0 {
 		t.Fatalf("fallback characters should be not_generated without fake characters: %+v", characters)
 	}
-	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 0 {
 		t.Fatalf("expected no initial memory jobs: %+v", jobs)
 	}
-	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": "1",
 	}, http.StatusAccepted)
 	if created["jobId"] == "" {
@@ -2232,7 +2232,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 		t.Fatalf("created job should start queued before the worker processes it: %+v", created)
 	}
 	completed := waitForCharacterJobStatus(t, handler, novelID, created["jobId"].(string), "completed")
-	jobs = requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	jobs = requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 1 {
 		t.Fatalf("expected one memory job: %+v", jobs)
 	}
@@ -2247,7 +2247,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if usage["runs"] == nil {
 		t.Fatalf("fallback usage should include runs key: %+v", usage)
 	}
-	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -2851,7 +2851,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		t.Fatalf("reader assistant should use fake OpenRouter result: %+v", readerResponse)
 	}
 
-	summaryStream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	summaryStream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -2879,7 +2879,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		run := rawRun.(map[string]any)
 		features[run["feature"].(string)] = true
 	}
-	if !features["reader-assistant"] || !features["character-summary"] {
+	if !features["reader-assistant"] || !features["extraction"] {
 		t.Fatalf("usage should include reader assistant and character summary runs: %+v", usage)
 	}
 	if providerCalls < 2 {
@@ -3086,7 +3086,7 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 	server := handler.(*Server)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -3111,7 +3111,7 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 	if run.Status != "completed" || run.InputTokens != 11 || run.OutputTokens != 7 || run.TotalTokens != 18 {
 		t.Fatalf("playground preview usage should preserve provider token counts: %+v", run)
 	}
-	if run.Feature != "character-summary" || run.WorkflowName != "character-summary" || run.HasSnapshot != true {
+	if run.Feature != "extraction" || run.WorkflowName != "extraction" || run.HasSnapshot != true {
 		t.Fatalf("playground preview usage should keep character summary metadata: %+v", run)
 	}
 }
@@ -3223,7 +3223,7 @@ func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
@@ -3304,7 +3304,7 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":              novelID,
 		"upToEpisodeIndex":     "1",
 		"modelId":              "openrouter/transient",
@@ -3361,7 +3361,7 @@ func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t 
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":              novelID,
 		"upToEpisodeIndex":     "1",
 		"modelId":              "openrouter/transient",
@@ -3412,7 +3412,7 @@ func TestPlaygroundExtractionRejectsInvalidTransientOverrides(t *testing.T) {
 		{"novelId": novelID, "upToEpisodeIndex": "1", "requireParameters": "false"},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "systemPromptOverride": "  "},
 	} {
-		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", body, http.StatusBadRequest)
+		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", body, http.StatusBadRequest)
 		if response["error"] != "一時 AI 生成設定が不正です。" {
 			t.Fatalf("unexpected transient validation response: body=%+v response=%+v", body, response)
 		}
@@ -3462,7 +3462,7 @@ func TestExtractionBatchUsageRequestsMatchMaterializedBatches(t *testing.T) {
 		t.Fatalf("usage requests should match materialized batches: requests=%+v materialized=%+v", plannedRequests, materialized)
 	}
 	for index, request := range plannedRequests {
-		if request.RequestIndex != index || request.Kind != "character_summary_batch" {
+		if request.RequestIndex != index || request.Kind != "extraction_batch" {
 			t.Fatalf("usage request should identify the materialized batch: %+v", plannedRequests)
 		}
 		expectedInputTokens := 0
@@ -3549,7 +3549,15 @@ func TestCharacterJobProgressHelpers(t *testing.T) {
 	}
 	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "1")
 	if !extractionTimingLogEnabled() {
-		t.Fatal("character summary timing log should be enabled by env")
+		t.Fatal("legacy extraction timing log should be enabled by env")
+	}
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "0")
+	if extractionTimingLogEnabled() {
+		t.Fatal("new extraction timing setting should take precedence")
+	}
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "1")
+	if !extractionTimingLogEnabled() {
+		t.Fatal("new extraction timing log should be enabled")
 	}
 	logExtractionTiming("test", time.Now())
 	if characterJobBatchProgressPercent(0, 0) != 70 || characterJobBatchProgressPercent(2, 4) != 62 {
@@ -3634,7 +3642,7 @@ func TestExtractionBatchBudgetUsesModelContext(t *testing.T) {
 		t.Fatalf("too-small model context should keep fallback budget: %+v", smallBudget)
 	}
 
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", "1234")
+	t.Setenv("EXTRACTION_MAX_BATCH_TOKENS", "1234")
 	budget = resolveExtractionBatchBudget(context.Background(), config, 12000)
 	if budget.MaxTextTokens != 1234 || budget.MaxTextChars != 0 {
 		t.Fatalf("explicit token budget should win: %+v", budget)
@@ -4809,11 +4817,11 @@ func TestServerAIGenerationProfileReadErrors(t *testing.T) {
 		t.Fatalf("initialize store: %v", err)
 	}
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -5362,7 +5370,7 @@ func waitForCharacterJobStatus(t *testing.T, handler http.Handler, novelID strin
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		response := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+		response := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 		for _, rawJob := range response["jobs"].([]any) {
 			job := rawJob.(map[string]any)
 			if job["jobId"] == jobID {
@@ -5565,7 +5573,7 @@ func newHTTPAPITestData(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(stateDir, "character_profiles"), 0o755); err != nil {
 		t.Fatalf("mkdir character profile fixture: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(stateDir, "character_jobs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(stateDir, "extraction_jobs"), 0o755); err != nil {
 		t.Fatalf("mkdir character job fixture: %v", err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(libraryRoot, "library.sqlite"))
@@ -5650,7 +5658,7 @@ characters:
       - episode_index: "1"
         text: テスト人物。
 `)
-	writeHTTPFixtureFile(t, filepath.Join(stateDir, "character_jobs", "job-1.yaml"), `
+	writeHTTPFixtureFile(t, filepath.Join(stateDir, "extraction_jobs", "job-1.yaml"), `
 job_id: job-1
 novel_id: `+novelID+`
 requested_up_to_episode_index: "1"

@@ -122,7 +122,7 @@ func (w *Workflow) GenerateAndSave(ctx context.Context, novelID string, upToEpis
 	unlock := w.ports.LockTarget(novelID, upToEpisodeIndex)
 	defer unlock()
 
-	recorder := newUsageRecorder(ctx, w.ports, "character-summary", novelID, upToEpisodeIndex)
+	recorder := newUsageRecorder(ctx, w.ports, "extraction", novelID, upToEpisodeIndex)
 	defer func() {
 		recorder.Finish(err)
 	}()
@@ -161,7 +161,7 @@ func (w *Workflow) GeneratePreview(ctx context.Context, novelID string, upToEpis
 	if w == nil || w.ports == nil {
 		return characters.SummaryResponse{}, nil
 	}
-	recorder := newUsageRecorder(ctx, w.ports, "character-summary-playground", novelID, upToEpisodeIndex)
+	recorder := newUsageRecorder(ctx, w.ports, "extraction-playground", novelID, upToEpisodeIndex)
 	defer func() {
 		recorder.Finish(err)
 	}()
@@ -452,8 +452,8 @@ func (r *usageRecorder) Finish(err error) {
 	}
 	_ = r.ports.RecordUsage(ai.UsageRun{
 		RunID:               r.runPrefix + "-" + strconv.FormatInt(time.Now().UnixNano(), 36),
-		Feature:             "character-summary",
-		WorkflowName:        "character-summary",
+		Feature:             "extraction",
+		WorkflowName:        "extraction",
 		Status:              status,
 		StartedAt:           r.startedAt,
 		FinishedAt:          finishedAt,
@@ -511,7 +511,7 @@ func resolvedStrategyModels(strategy string, config *store.ResolvedAIGenerationC
 		return nil
 	}
 	detailModelID := strings.TrimSpace(config.ModelID)
-	discoveryModelID := strings.TrimSpace(config.CharacterSummaryNameDiscoveryModelID)
+	discoveryModelID := strings.TrimSpace(config.ExtractionNameDiscoveryModelID)
 	if discoveryModelID == "" {
 		discoveryModelID = detailModelID
 	}
@@ -539,7 +539,7 @@ func batchUsageRequests(batches []core.Batch) []ai.UsageRequest {
 		}
 		requests = append(requests, ai.UsageRequest{
 			RequestIndex: index,
-			Kind:         "character_summary_batch",
+			Kind:         "extraction_batch",
 			InputTokens:  inputTokens,
 			TotalTokens:  inputTokens,
 		})

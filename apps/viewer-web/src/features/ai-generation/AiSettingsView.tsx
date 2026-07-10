@@ -5,7 +5,7 @@ import {
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft,
-  type CharacterSummaryStrategyModelsDraft
+  type ExtractionStrategyModelsDraft
 } from "./model";
 import type { AiGenerationSettingsResponse } from "./types";
 
@@ -24,8 +24,8 @@ export type AiSettingsViewProps = {
   aiGenerationSharedGoogleBooksDraft: AiGenerationSharedProviderDraft;
   onUpdateAiGenerationSharedGoogleBooksDraft: (updater: (current: AiGenerationSharedProviderDraft) => AiGenerationSharedProviderDraft) => void;
   aiGenerationProfileDrafts: AiGenerationProfileDraft[];
-  characterSummaryStrategyModelsDraft: CharacterSummaryStrategyModelsDraft;
-  onSetCharacterSummaryStrategyModelsDraft: (draft: CharacterSummaryStrategyModelsDraft) => void;
+  extractionStrategyModelsDraft: ExtractionStrategyModelsDraft;
+  onSetExtractionStrategyModelsDraft: (draft: ExtractionStrategyModelsDraft) => void;
   defaultAiGenerationProfileDraft: AiGenerationProfileDraft | null;
   editingAiGenerationProfileId: string;
   onSelectEditingAiGenerationProfile: (profileId: string) => void;
@@ -53,8 +53,8 @@ export function AiSettingsView({
   aiGenerationSharedGoogleBooksDraft,
   onUpdateAiGenerationSharedGoogleBooksDraft,
   aiGenerationProfileDrafts,
-  characterSummaryStrategyModelsDraft,
-  onSetCharacterSummaryStrategyModelsDraft,
+  extractionStrategyModelsDraft,
+  onSetExtractionStrategyModelsDraft,
   defaultAiGenerationProfileDraft,
   editingAiGenerationProfileId,
   onSelectEditingAiGenerationProfile,
@@ -263,14 +263,14 @@ export function AiSettingsView({
               </span>
               <input
                 onChange={(event) =>
-                  onSetCharacterSummaryStrategyModelsDraft({
-                    ...characterSummaryStrategyModelsDraft,
+                  onSetExtractionStrategyModelsDraft({
+                    ...extractionStrategyModelsDraft,
                     nameDiscoveryModelId: event.target.value
                   })
                 }
                 placeholder="未指定なら既定プロファイルのモデル"
                 type="text"
-                value={characterSummaryStrategyModelsDraft.nameDiscoveryModelId}
+                value={extractionStrategyModelsDraft.nameDiscoveryModelId}
               />
               {openAiGenerationHelpKey === "nameDiscoveryModelId" ? (
                 <p className="field-help-text">

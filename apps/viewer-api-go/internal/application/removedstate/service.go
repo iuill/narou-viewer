@@ -15,9 +15,9 @@ type CleanupResult struct {
 	BookmarksDeleted             int `json:"bookmarksDeleted"`
 	CharacterEventsDeleted       int `json:"characterEventsDeleted"`
 	CharacterProfilesDeleted     int `json:"characterProfilesDeleted"`
-	CharacterJobsDeleted         int `json:"characterJobsDeleted"`
-	CharacterJobIndexesDeleted   int `json:"characterJobIndexesDeleted"`
-	CharacterCheckpointsDeleted  int `json:"characterCheckpointsDeleted"`
+	ExtractionJobsDeleted        int `json:"extractionJobsDeleted"`
+	ExtractionJobIndexesDeleted  int `json:"extractionJobIndexesDeleted"`
+	ExtractionCheckpointsDeleted int `json:"extractionCheckpointsDeleted"`
 	PublicationEntriesDeleted    int `json:"publicationEntriesDeleted"`
 	AIUsageRunsDeleted           int `json:"aiUsageRunsDeleted"`
 	ReaderSearchCacheRowsDeleted int `json:"readerSearchCacheRowsDeleted"`
@@ -72,10 +72,10 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 			cleanup.CharacterEventsDeleted += 1
 		}
 		if characterResult.JobIndexDeleted {
-			cleanup.CharacterJobIndexesDeleted += 1
+			cleanup.ExtractionJobIndexesDeleted += 1
 		}
-		cleanup.CharacterJobsDeleted += characterResult.JobsDeleted
-		cleanup.CharacterCheckpointsDeleted += characterResult.CheckpointsDeleted
+		cleanup.ExtractionJobsDeleted += characterResult.JobsDeleted
+		cleanup.ExtractionCheckpointsDeleted += characterResult.CheckpointsDeleted
 
 		publicationsDeleted, err := publications.NewRepository(s.stateDir).PruneNovel(novelID)
 		if err != nil {

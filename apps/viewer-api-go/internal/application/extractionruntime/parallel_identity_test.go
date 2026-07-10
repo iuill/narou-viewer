@@ -78,7 +78,7 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 	if err != nil {
 		t.Fatalf("generateOpenRouterExtractionDiscoveryParallelCorrection returned error: %v", err)
 	}
-	if len(generated) != 1 || generated[0].CanonicalName != "アリス姫" || len(usage) != 1 || usage[0].Kind != "character_summary_correction" {
+	if len(generated) != 1 || generated[0].CanonicalName != "アリス姫" || len(usage) != 1 || usage[0].Kind != "extraction_correction" {
 		t.Fatalf("generated=%+v usage=%+v", generated, usage)
 	}
 	if len(state.UnresolvedMentions) != 0 || len(state.RetiredCharacterIDs) != 0 {
@@ -259,28 +259,29 @@ func TestRunParallelIdentityLLMJobsLimitsConcurrencyAndStaggersStarts(t *testing
 }
 
 func TestParallelIdentityLLMConfigReadsEnvironment(t *testing.T) {
-	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "99")
+	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "1")
+	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "99")
 	if got := parallelIdentityLLMConcurrency(); got != maxParallelIdentityLLMConcurrency {
 		t.Fatalf("concurrency should be capped: got %d", got)
 	}
-	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "bad")
+	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "bad")
 	if got := parallelIdentityLLMConcurrency(); got != defaultParallelIdentityLLMConcurrency {
 		t.Fatalf("invalid concurrency should use default: got %d", got)
 	}
 
-	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "0")
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 	if got := parallelIdentityLLMStartInterval(); got != 0 {
 		t.Fatalf("start interval should allow zero: got %s", got)
 	}
-	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "-1")
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "-1")
 	if got := parallelIdentityLLMStartInterval(); got != time.Duration(defaultParallelIdentityLLMStartIntervalMS)*time.Millisecond {
 		t.Fatalf("negative start interval should use default: got %s", got)
 	}
-	t.Setenv("CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_ITEMS", "12")
+	t.Setenv("EXTRACTION_PARALLEL_MAX_REDUCE_ITEMS", "12")
 	if got := parallelIdentityMaxReduceItems(); got != 12 {
 		t.Fatalf("max reduce items = %d, want 12", got)
 	}
-	t.Setenv("CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_TOKENS", "bad")
+	t.Setenv("EXTRACTION_PARALLEL_MAX_REDUCE_TOKENS", "bad")
 	if got := parallelIdentityMaxReduceTokens(); got != defaultParallelIdentityMaxReduceTokens {
 		t.Fatalf("invalid max reduce tokens should use default: got %d", got)
 	}
@@ -527,7 +528,7 @@ func TestResolveParallelIdentityClustersFallsBackToNameGroups(t *testing.T) {
 	if got := clusters[0].LocalIDs; len(got) != 2 || got[0] != "b1-c1" || got[1] != "b2-c1" {
 		t.Fatalf("group cluster ids = %+v", got)
 	}
-	if clusters[1].LocalIDs[0] != "b3-c1" || usage.Kind != "character_summary_identity_resolution" {
+	if clusters[1].LocalIDs[0] != "b3-c1" || usage.Kind != "extraction_identity_resolution" {
 		t.Fatalf("clusters=%+v usage=%+v", clusters, usage)
 	}
 }
@@ -558,7 +559,7 @@ func TestResolveParallelIdentityClustersFallbackKeepsSeedIdentityAcrossSplitName
 	if got := clusters[0].LocalIDs; len(got) != 3 || got[0] != "b1-c1" || got[1] != "b2-c1" || got[2] != "seed:char_alice" {
 		t.Fatalf("merged cluster ids = %+v", got)
 	}
-	if usage.Kind != "character_summary_identity_resolution" || usage.InputTokens != 22 || usage.OutputTokens != 14 || usage.TotalTokens != 36 {
+	if usage.Kind != "extraction_identity_resolution" || usage.InputTokens != 22 || usage.OutputTokens != 14 || usage.TotalTokens != 36 {
 		t.Fatalf("usage = %+v", usage)
 	}
 
@@ -621,15 +622,15 @@ func TestParallelIdentityNameGroupingAndUsageHelpers(t *testing.T) {
 	if key := normalizeParallelIdentityNameKey(" 　 "); key != "" {
 		t.Fatalf("whitespace-only key should be empty: %q", key)
 	}
-	usage := aggregateParallelIdentityUsage("character_summary_identity_resolution", []ai.UsageRequest{
-		{Kind: "character_summary_identity_resolution", InputTokens: 3, OutputTokens: 4},
+	usage := aggregateParallelIdentityUsage("extraction_identity_resolution", []ai.UsageRequest{
+		{Kind: "extraction_identity_resolution", InputTokens: 3, OutputTokens: 4},
 		{},
-		{Kind: "character_summary_identity_resolution", TotalTokens: 10, Cost: 0.2},
+		{Kind: "extraction_identity_resolution", TotalTokens: 10, Cost: 0.2},
 	})
-	if usage.Kind != "character_summary_identity_resolution" || usage.InputTokens != 3 || usage.OutputTokens != 4 || usage.TotalTokens != 10 || usage.Cost != 0.2 {
+	if usage.Kind != "extraction_identity_resolution" || usage.InputTokens != 3 || usage.OutputTokens != 4 || usage.TotalTokens != 10 || usage.Cost != 0.2 {
 		t.Fatalf("usage = %+v", usage)
 	}
-	if empty := aggregateParallelIdentityUsage("character_summary_identity_resolution", nil); empty.Kind != "" {
+	if empty := aggregateParallelIdentityUsage("extraction_identity_resolution", nil); empty.Kind != "" {
 		t.Fatalf("empty usage = %+v", empty)
 	}
 }
@@ -708,7 +709,7 @@ func TestCorrectParallelIdentityCharactersFallsBackToChunks(t *testing.T) {
 	if len(corrected) != 2 || corrected[0].CanonicalName != "アリス姫" || len(corrected[1].Aliases) != 1 {
 		t.Fatalf("corrected = %+v", corrected)
 	}
-	if usage.Kind != "character_summary_correction" || usage.InputTokens == 0 || usage.OutputTokens == 0 {
+	if usage.Kind != "extraction_correction" || usage.InputTokens == 0 || usage.OutputTokens == 0 {
 		t.Fatalf("usage = %+v", usage)
 	}
 }
@@ -728,7 +729,7 @@ func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverParallelIdentityNames returned error: %v", err)
 	}
-	if len(generated) != 1 || generated[0].CanonicalName != "アリス" || len(usage) != 1 || usage[0].Kind != "character_summary_name_discovery" {
+	if len(generated) != 1 || generated[0].CanonicalName != "アリス" || len(usage) != 1 || usage[0].Kind != "extraction_name_discovery" {
 		t.Fatalf("generated=%+v usage=%+v", generated, usage)
 	}
 }
@@ -748,7 +749,7 @@ func TestCorrectParallelIdentityCharactersUsesOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("correctParallelIdentityCharacters returned error: %v", err)
 	}
-	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || usage.Kind != "character_summary_correction" {
+	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || usage.Kind != "extraction_correction" {
 		t.Fatalf("corrected=%+v usage=%+v", corrected, usage)
 	}
 }
@@ -791,7 +792,7 @@ func TestParallelIdentityRepresentativeIDPrefersEarliestAppearanceThenID(t *test
 }
 
 func TestDiscoveryParallelCorrectionHelpers(t *testing.T) {
-	config := &store.ResolvedAIGenerationConfig{ModelID: "base-model", APIKey: "key", CharacterSummaryNameDiscoveryModelID: "name-model"}
+	config := &store.ResolvedAIGenerationConfig{ModelID: "base-model", APIKey: "key", ExtractionNameDiscoveryModelID: "name-model"}
 	copied := extractionNameDiscoveryConfig(config)
 	if copied == config || copied.ModelID != "name-model" || config.ModelID != "base-model" {
 		t.Fatalf("copied config = %+v base=%+v", copied, config)

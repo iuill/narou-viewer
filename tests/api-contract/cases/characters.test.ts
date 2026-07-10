@@ -154,7 +154,7 @@ describe("character summaries and jobs contract", () => {
     }
 
     const response = await requestJson<{ jobs: unknown[] }>(
-      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/character-jobs`,
+      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/extraction-jobs`,
     );
     expectJsonResponse(response);
     expect(response.json).toEqual({
@@ -168,13 +168,13 @@ describe("character summaries and jobs contract", () => {
 
   it("keeps character job validation and not-found errors stable", async () => {
     const missingNovel = await requestJson(
-      "/api/library/novels/__api_contract_missing__/character-jobs",
+      "/api/library/novels/__api_contract_missing__/extraction-jobs",
     );
     expectJsonResponse(missingNovel, 404);
     expectErrorShape(missingNovel.json);
 
     const missingUpToEpisodeIndex = await requestJson(
-      "/api/library/novels/__api_contract_missing__/character-jobs",
+      "/api/library/novels/__api_contract_missing__/extraction-jobs",
       {
         method: "POST",
         body: {},
@@ -184,7 +184,7 @@ describe("character summaries and jobs contract", () => {
     expectErrorShape(missingUpToEpisodeIndex.json);
 
     const postMissingNovel = await requestJson(
-      "/api/library/novels/__api_contract_missing__/character-jobs",
+      "/api/library/novels/__api_contract_missing__/extraction-jobs",
       {
         method: "POST",
         body: {
@@ -201,7 +201,7 @@ describe("character summaries and jobs contract", () => {
     }
 
     const outOfRangeJob = await requestJson(
-      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/character-jobs`,
+      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/extraction-jobs`,
       {
         method: "POST",
         body: {
@@ -213,7 +213,7 @@ describe("character summaries and jobs contract", () => {
     expectErrorShape(outOfRangeJob.json);
 
     const zeroJob = await requestJson(
-      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/character-jobs`,
+      `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/extraction-jobs`,
       {
         method: "POST",
         body: {
@@ -234,7 +234,7 @@ describe("character summaries and jobs contract", () => {
       }
 
       const created = await requestJson<{ jobId: string }>(
-        `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/character-jobs`,
+        `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/extraction-jobs`,
         {
           method: "POST",
           body: {
@@ -254,7 +254,7 @@ describe("character summaries and jobs contract", () => {
       );
 
       const jobs = await requestJson<{ jobs: unknown[] }>(
-        `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/character-jobs`,
+        `/api/library/novels/${encodeURIComponent(fixtureEpisode.novelId)}/extraction-jobs`,
       );
       expectJsonResponse(jobs);
       const createdJob = jobs.json.jobs.find(

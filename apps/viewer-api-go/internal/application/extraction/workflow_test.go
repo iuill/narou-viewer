@@ -123,12 +123,12 @@ func (p *workflowFakePorts) PlanRuntimeBatch(_ context.Context, _ *store.Resolve
 
 func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGenerationConfig, string, string, []characters.GeneratedCharacter, core.Batch, []characters.GeneratedUnresolvedMention) (BatchResult, error) {
 	if p.generateErr != nil && (p.generateErrAfter == 0 || p.generateCalls >= p.generateErrAfter) {
-		return BatchResult{Usage: ai.UsageRequest{RequestIndex: 0, Kind: "character_summary_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13}}, p.generateErr
+		return BatchResult{Usage: ai.UsageRequest{RequestIndex: 0, Kind: "extraction_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13}}, p.generateErr
 	}
 	p.generateCalls++
 	return BatchResult{
 		Delta: core.Delta{NewCharacters: []characters.GeneratedCharacter{{CanonicalName: "Alice", CanonicalEpisodeIndex: "1", SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "1", Text: "本文"}}}}},
-		Usage: ai.UsageRequest{RequestIndex: 0, Kind: "character_summary_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
+		Usage: ai.UsageRequest{RequestIndex: 0, Kind: "extraction_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
 	}, nil
 }
 
@@ -139,7 +139,7 @@ func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_parallel", CanonicalName: "Parallel", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
-	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "character_summary_parallel_identity", InputTokens: 12, OutputTokens: 4, TotalTokens: 16}}, nil
+	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_parallel_identity", InputTokens: 12, OutputTokens: 4, TotalTokens: 16}}, nil
 }
 
 func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
@@ -149,7 +149,7 @@ func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Contex
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_discovery", CanonicalName: "Discovery", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
-	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "character_summary_discovery_parallel_correction", InputTokens: 16, OutputTokens: 5, TotalTokens: 21}}, nil
+	return generated, core.GenerationState{}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_discovery_parallel_correction", InputTokens: 16, OutputTokens: 5, TotalTokens: 21}}, nil
 }
 
 func (p *workflowFakePorts) LoadCheckpoint(string, string) (checkpointstore.Checkpoint, error) {
@@ -494,8 +494,8 @@ func TestWorkflowSmallHelpers(t *testing.T) {
 		t.Fatal("empty profile helpers should return nil")
 	}
 	strategyModels := resolvedStrategyModels(GenerationStrategyDiscoveryParallelCorrection, &store.ResolvedAIGenerationConfig{
-		ModelID:                              "openai/gpt-5-mini",
-		CharacterSummaryNameDiscoveryModelID: "openai/gpt-5-nano",
+		ModelID:                        "openai/gpt-5-mini",
+		ExtractionNameDiscoveryModelID: "openai/gpt-5-nano",
 	})
 	if strategyModels["discovery"] != "openai/gpt-5-nano" || strategyModels["detail"] != "openai/gpt-5-mini" || strategyModels["correction"] != "openai/gpt-5-mini" {
 		t.Fatalf("unexpected strategy model snapshot: %+v", strategyModels)

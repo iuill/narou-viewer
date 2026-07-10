@@ -138,7 +138,7 @@ func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRe
 	}
 	return ai.UsageRequest{
 		RequestIndex: index,
-		Kind:         "character_summary_batch",
+		Kind:         "extraction_batch",
 		InputTokens:  inputTokens,
 		TotalTokens:  inputTokens,
 	}
@@ -224,7 +224,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 	return map[string]any{
 		"type": "json_schema",
 		"json_schema": map[string]any{
-			"name":   "character_summary_delta_result",
+			"name":   "extraction_delta_result",
 			"strict": true,
 			"schema": map[string]any{
 				"type":                 "object",

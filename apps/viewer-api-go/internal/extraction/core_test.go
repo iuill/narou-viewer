@@ -10,9 +10,24 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/library"
 )
 
+func TestExtractionLimitsPreferNewEnvironmentAndFallbackToLegacy(t *testing.T) {
+	t.Setenv("CHARACTER_SUMMARY_MAX_CHUNK_CHARS", "20")
+	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "40")
+	chunk, batch := Limits()
+	if chunk != 20 || batch != 40 {
+		t.Fatalf("legacy fallback limits = (%d, %d)", chunk, batch)
+	}
+	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "30")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "60")
+	chunk, batch = Limits()
+	if chunk != 30 || batch != 60 {
+		t.Fatalf("new extraction limits should win = (%d, %d)", chunk, batch)
+	}
+}
+
 func TestExtractionEngineBuildsPromptPreviewChunks(t *testing.T) {
-	t.Setenv("CHARACTER_SUMMARY_MAX_CHUNK_CHARS", "18")
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "35")
+	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "18")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "35")
 	maxChunkChars, maxBatchChars := Limits()
 	alt := "挿絵の人物"
 	title := "人物画"

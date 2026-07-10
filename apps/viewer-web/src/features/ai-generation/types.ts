@@ -41,7 +41,7 @@ export type AiGenerationSettingsResponse = {
       requireParameters: boolean;
       updatedAt: string | null;
     }>;
-    characterSummaryStrategyModels: {
+    extractionStrategyModels: {
       nameDiscoveryModelId: string | null;
     };
   };
@@ -71,7 +71,7 @@ export type AiGenerationSettingsRequest = Partial<{
     allowFallbacks: boolean;
     requireParameters: boolean;
   }>;
-  characterSummaryStrategyModels: {
+  extractionStrategyModels: {
     nameDiscoveryModelId: string | null;
   };
 }>;
@@ -173,7 +173,7 @@ export type AiUsageSummary = {
 
 export type AiUsageRunSummary = {
   runId: string;
-  feature: "reader-assistant" | "character-summary" | string;
+  feature: "reader-assistant" | "extraction" | string;
   workflowName: string;
   status: "completed" | "failed";
   startedAt: string;

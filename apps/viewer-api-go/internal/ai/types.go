@@ -11,13 +11,13 @@ type SettingsResponse struct {
 }
 
 type SettingsMetadata struct {
-	SelectedProfileID              *string                        `json:"selectedProfileId"`
-	SharedProviders                SharedProviders                `json:"sharedProviders"`
-	Profiles                       []Profile                      `json:"profiles"`
-	CharacterSummaryStrategyModels CharacterSummaryStrategyModels `json:"characterSummaryStrategyModels"`
+	SelectedProfileID        *string                  `json:"selectedProfileId"`
+	SharedProviders          SharedProviders          `json:"sharedProviders"`
+	Profiles                 []Profile                `json:"profiles"`
+	ExtractionStrategyModels ExtractionStrategyModels `json:"extractionStrategyModels"`
 }
 
-type CharacterSummaryStrategyModels struct {
+type ExtractionStrategyModels struct {
 	NameDiscoveryModelID *string `json:"nameDiscoveryModelId"`
 }
 
@@ -183,7 +183,7 @@ func DefaultSettings(preferredMode string) SettingsResponse {
 					UpdatedAt:         nil,
 				},
 			},
-			CharacterSummaryStrategyModels: CharacterSummaryStrategyModels{},
+			ExtractionStrategyModels: ExtractionStrategyModels{},
 		},
 	}
 }

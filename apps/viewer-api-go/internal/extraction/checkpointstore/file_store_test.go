@@ -32,6 +32,9 @@ func TestFileStoreSavesLoadsExistsAndDeletesCheckpoint(t *testing.T) {
 		t.Fatal("checkpoint should exist after save")
 	}
 	path := store.Path("novel-a", "2")
+	if filepath.Base(path)[:11] != "extraction-" {
+		t.Fatalf("checkpoint should use extraction prefix: %s", path)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat checkpoint: %v", err)

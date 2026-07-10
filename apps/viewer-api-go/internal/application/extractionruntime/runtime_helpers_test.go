@@ -31,6 +31,17 @@ func TestRuntimeHelperCoverage(t *testing.T) {
 	}
 }
 
+func TestExtractionTimingLogEnvironmentFallback(t *testing.T) {
+	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "1")
+	if !extractionTimingLogEnabled() {
+		t.Fatal("legacy timing setting should remain readable")
+	}
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "0")
+	if extractionTimingLogEnabled() {
+		t.Fatal("new timing setting should take precedence")
+	}
+}
+
 func TestRuntimeGeneratedStateHelpers(t *testing.T) {
 	stateDir := t.TempDir()
 	runtime := NewRuntime(RuntimeDependencies{StateDir: stateDir})

@@ -77,10 +77,10 @@ function createProps(overrides: WorkspaceOverrides = {}): WorkspaceProps {
       aiGenerationSharedGoogleBooksDraft: sharedGoogleBooksDraft,
       onUpdateAiGenerationSharedGoogleBooksDraft: vi.fn(),
       aiGenerationProfileDrafts: [defaultProfile, secondaryProfile],
-      characterSummaryStrategyModelsDraft: {
+      extractionStrategyModelsDraft: {
         nameDiscoveryModelId: "openai/gpt-5-nano"
       },
-      onSetCharacterSummaryStrategyModelsDraft: vi.fn(),
+      onSetExtractionStrategyModelsDraft: vi.fn(),
       defaultAiGenerationProfileDraft: defaultProfile,
       editingAiGenerationProfileId: defaultProfile.id,
       onSelectEditingAiGenerationProfile: vi.fn(),

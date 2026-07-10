@@ -9,15 +9,15 @@ import (
 var ErrAIGenerationProfileNotFound = errors.New("AI generation profile was not found")
 
 type ResolvedAIGenerationConfig struct {
-	ProfileID                            string
-	ProfileLabel                         string
-	APIKey                               string
-	ModelID                              string
-	ProviderOrder                        []string
-	AllowFallbacks                       bool
-	RequireParameters                    bool
-	SystemPrompt                         *string
-	CharacterSummaryNameDiscoveryModelID string
+	ProfileID                      string
+	ProfileLabel                   string
+	APIKey                         string
+	ModelID                        string
+	ProviderOrder                  []string
+	AllowFallbacks                 bool
+	RequireParameters              bool
+	SystemPrompt                   *string
+	ExtractionNameDiscoveryModelID string
 }
 
 type AIGenerationTransientConfig struct {
@@ -133,15 +133,15 @@ func resolveAIGenerationConfigFromDocument(doc aiGenerationSettingsDocument, pro
 		return nil, nil
 	}
 	return &ResolvedAIGenerationConfig{
-		ProfileID:                            profile.ID,
-		ProfileLabel:                         profile.Label,
-		APIKey:                               strings.TrimSpace(apiKey),
-		ModelID:                              strings.TrimSpace(*modelID),
-		ProviderOrder:                        providerOrder,
-		AllowFallbacks:                       allowFallbacks,
-		RequireParameters:                    requireParameters,
-		SystemPrompt:                         systemPrompt,
-		CharacterSummaryNameDiscoveryModelID: stringValue(doc.CharacterSummaryStrategyModels.NameDiscoveryModelID),
+		ProfileID:                      profile.ID,
+		ProfileLabel:                   profile.Label,
+		APIKey:                         strings.TrimSpace(apiKey),
+		ModelID:                        strings.TrimSpace(*modelID),
+		ProviderOrder:                  providerOrder,
+		AllowFallbacks:                 allowFallbacks,
+		RequireParameters:              requireParameters,
+		SystemPrompt:                   systemPrompt,
+		ExtractionNameDiscoveryModelID: stringValue(doc.ExtractionStrategyModels.NameDiscoveryModelID),
 	}, nil
 }
 
