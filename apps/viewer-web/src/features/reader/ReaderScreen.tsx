@@ -65,6 +65,7 @@ export type ReaderScreenState = {
   characterSummaryError: string | null;
   characterSummaryNotice: string | null;
   characterSummaryGenerationStrategy: ExtractionGenerationStrategy;
+  characterSummaryIncludeCurrentEpisode: boolean;
   characterSummaryUpToEpisodeIndex: string;
   clientUpdateRequired: ApiClientUpdateRequiredEventDetail | null;
   currentNovel: NovelSummary | null;
@@ -168,6 +169,8 @@ export type ReaderScreenCommands = {
   handleCreateBookmark: () => Promise<void>;
   handleDeleteBookmark: (bookmarkId: string) => Promise<void>;
   handleGenerateCharacterSummary: () => void | Promise<void>;
+  handleOpenCharacterSummary: () => void | Promise<void>;
+  handleOpenTerms: () => void | Promise<void>;
   handleImageViewerPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   handleImageViewerPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
   handleImageViewerPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -189,6 +192,7 @@ export type ReaderScreenCommands = {
   readerCommands: ReaderSelectionCommands;
   readerSessionCommands: ReaderStateCommands;
   setCharacterSummaryGenerationStrategy: Dispatch<SetStateAction<ExtractionGenerationStrategy>>;
+  setCharacterSummaryIncludeCurrentEpisode: (include: boolean) => void;
   setCharacterSummaryUpToEpisodeIndex: Dispatch<SetStateAction<string>>;
   setDebugPageOverflow: Dispatch<SetStateAction<boolean>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -246,6 +250,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     characterSummaryDefaultUpToEpisodeIndex,
     characterSummaryError,
     characterSummaryGenerationStrategy,
+    characterSummaryIncludeCurrentEpisode,
     characterSummaryNotice,
     characterSummaryUpToEpisodeIndex,
     clientUpdateRequired,
@@ -267,6 +272,8 @@ export function ReaderScreen(props: ReaderScreenProps) {
     handleCreateBookmark,
     handleDeleteBookmark,
     handleGenerateCharacterSummary,
+    handleOpenCharacterSummary,
+    handleOpenTerms,
     handleImageViewerPointerDown,
     handleImageViewerPointerMove,
     handleImageViewerPointerUp,
@@ -369,6 +376,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     selectedNovelId,
     selectedPositionRef,
     setCharacterSummaryGenerationStrategy,
+    setCharacterSummaryIncludeCurrentEpisode,
     setCharacterSummaryUpToEpisodeIndex,
     setDebugPageOverflow,
     setError,
@@ -401,6 +409,12 @@ export function ReaderScreen(props: ReaderScreenProps) {
     visibleBookmarks,
     visibleTocEpisodes,
   } = flatProps;
+
+  const selectedTocEpisodePosition = toc?.episodes.findIndex(
+    (tocEpisode) => tocEpisode.episodeIndex === selectedEpisodeIndex
+  ) ?? -1;
+  const previousEpisodeIndex =
+    selectedTocEpisodePosition > 0 ? toc?.episodes[selectedTocEpisodePosition - 1]?.episodeIndex ?? null : null;
 
   return (
     <ReaderShell
@@ -640,13 +654,16 @@ export function ReaderScreen(props: ReaderScreenProps) {
               error={characterSummaryError}
               formatEpisodeOrderLabel={formatCharacterSummaryEpisodeOrder}
               isClearing={isCharacterSummaryClearing}
+              includeCurrentEpisode={characterSummaryIncludeCurrentEpisode}
               isLoading={isCharacterSummaryLoading}
               isSubmitting={isCharacterSummarySubmitting}
               notice={characterSummaryNotice}
               onClear={handleClearCharacterSummary}
+              onIncludeCurrentEpisodeChange={setCharacterSummaryIncludeCurrentEpisode}
               onClose={closeReaderPanel}
               onRequestedGenerationStrategyChange={setCharacterSummaryGenerationStrategy}
               onRequestedUpToEpisodeIndexChange={setCharacterSummaryUpToEpisodeIndex}
+              onShowTerms={handleOpenTerms}
               onSubmit={handleGenerateCharacterSummary}
               requestedGenerationStrategy={characterSummaryGenerationStrategy}
               requestedUpToEpisodeIndex={characterSummaryUpToEpisodeIndex}
@@ -656,12 +673,28 @@ export function ReaderScreen(props: ReaderScreenProps) {
         {isTermsOpen ? (
           <section ref={readerPanelRef}>
             <ReaderTermListPanel
+              activeJobs={characterSummaryActiveJobs}
+              canClear={characterSummaryCanClear}
+              canGenerate={characterSummaryCanGenerate}
+              completedJobs={characterSummaryCompletedJobs}
               data={termsData}
+              defaultUpToEpisodeIndex={characterSummaryDefaultUpToEpisodeIndex}
               error={characterSummaryError}
               formatEpisodeOrderLabel={formatCharacterSummaryEpisodeOrder}
+              isClearing={isCharacterSummaryClearing}
+              includeCurrentEpisode={characterSummaryIncludeCurrentEpisode}
               isLoading={isCharacterSummaryLoading}
+              isSubmitting={isCharacterSummarySubmitting}
               notice={characterSummaryNotice}
+              onClear={handleClearCharacterSummary}
+              onIncludeCurrentEpisodeChange={setCharacterSummaryIncludeCurrentEpisode}
               onClose={closeReaderPanel}
+              onRequestedGenerationStrategyChange={setCharacterSummaryGenerationStrategy}
+              onRequestedUpToEpisodeIndexChange={setCharacterSummaryUpToEpisodeIndex}
+              onShowCharacters={handleOpenCharacterSummary}
+              onSubmit={handleGenerateCharacterSummary}
+              requestedGenerationStrategy={characterSummaryGenerationStrategy}
+              requestedUpToEpisodeIndex={characterSummaryUpToEpisodeIndex}
             />
           </section>
         ) : null}
@@ -670,6 +703,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
             <ReaderAiAssistantPanel
               assistantState={readerAiAssistantState}
               currentEpisodeIndex={selectedEpisodeIndex}
+              previousEpisodeIndex={previousEpisodeIndex}
               disabledReason={readerAiAssistantUnavailableMessage}
               formatEpisodeOrderLabel={formatCharacterSummaryEpisodeOrder}
               getCurrentPosition={() => getCurrentReaderViewportPosition() ?? selectedPositionRef.current ?? 0}

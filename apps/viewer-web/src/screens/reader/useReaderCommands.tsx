@@ -43,7 +43,6 @@ type UseReaderCommandsOptions = {
   episodeContentEtag: string | null;
   handleCreateBookmark: () => Promise<void>;
   handleOpenCharacterSummary: () => void | Promise<void>;
-  handleOpenTerms: () => void | Promise<void>;
   handleReturnToLibrary: () => void | Promise<void>;
   handleToggleReaderFullscreen: () => void | Promise<void>;
   hasUnlistedEpisodes: boolean;
@@ -107,7 +106,6 @@ export function useReaderCommands({
   episodeContentEtag,
   handleCreateBookmark,
   handleOpenCharacterSummary,
-  handleOpenTerms,
   handleReturnToLibrary,
   handleToggleReaderFullscreen,
   hasUnlistedEpisodes,
@@ -522,7 +520,6 @@ export function useReaderCommands({
     handleCreateBookmark,
     handleEpisodeMove,
     handleOpenCharacterSummary,
-    handleOpenTerms,
     handlePageMove,
     handleReturnToLibrary,
     handleToggleReaderFullscreen,

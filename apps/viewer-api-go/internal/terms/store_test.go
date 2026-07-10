@@ -114,7 +114,7 @@ func TestBuildResponseCapsTermsAtCharacterCommitFrontier(t *testing.T) {
 		t.Fatalf("SaveGeneratedTerms returned error: %v", err)
 	}
 	response, err := BuildResponse(stateDir, "novel-1", "4", "2")
-	if err != nil || response.Status != "not_generated" || response.ProcessedUpToEpisodeIndex == nil || *response.ProcessedUpToEpisodeIndex != "2" || len(response.Terms) != 1 {
+	if err != nil || response.Status != "partial" || response.ProcessedUpToEpisodeIndex == nil || *response.ProcessedUpToEpisodeIndex != "2" || len(response.Terms) != 1 {
 		t.Fatalf("unexpected capped response: %+v err=%v", response, err)
 	}
 	if response.Terms[0].Reading != nil || response.Terms[0].Category != CategoryOther || response.Terms[0].Description != "初期説明" {

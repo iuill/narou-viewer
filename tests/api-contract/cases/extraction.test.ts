@@ -60,7 +60,7 @@ describe("extraction contract", () => {
     expectJsonResponse(response);
     expect(response.json).toEqual(
       expect.objectContaining({
-        status: expect.stringMatching(/^(ready|not_generated)$/),
+        status: expect.stringMatching(/^(ready|partial|not_generated)$/),
         novelId: fixture.novelId,
         upToEpisodeIndex: fixture.episodeIndex,
         terms: expect.any(Array),

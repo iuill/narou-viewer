@@ -36,21 +36,25 @@ func LoadSummaryForEpisodes(stateDir string, novelID string, upToEpisodeIndex st
 	}
 	processed := doc.ProcessedUpToEpisodeIndex
 	status := "ready"
-	if processed == nil || compareEpisodeIndex(*processed, upToEpisodeIndex) < 0 {
+	visibilityBoundary := upToEpisodeIndex
+	if processed == nil {
 		status = "not_generated"
+	} else if compareEpisodeIndex(*processed, upToEpisodeIndex) < 0 {
+		status = "partial"
+		visibilityBoundary = *processed
 	}
 	characters := []Character{}
-	if status == "ready" {
+	if status == "ready" || status == "partial" {
 		visibleProfiles := []characterProfile{}
 		for _, profile := range doc.Characters {
-			if !episodeWithin(profile.FirstAppearanceEpisodeIndex, upToEpisodeIndex) {
+			if !episodeWithin(profile.FirstAppearanceEpisodeIndex, visibilityBoundary) {
 				continue
 			}
 			visibleProfiles = append(visibleProfiles, profile)
 		}
-		importanceByCharacterID := buildImportanceClassifications(visibleProfiles, episodeIndexes, upToEpisodeIndex)
+		importanceByCharacterID := buildImportanceClassifications(visibleProfiles, episodeIndexes, visibilityBoundary)
 		for _, profile := range visibleProfiles {
-			characters = append(characters, profile.toCharacter(upToEpisodeIndex, importanceByCharacterID[profile.CharacterID]))
+			characters = append(characters, profile.toCharacter(visibilityBoundary, importanceByCharacterID[profile.CharacterID]))
 		}
 		sort.SliceStable(characters, func(i, j int) bool {
 			leftOrder := importanceOrder(characters[i].Importance)

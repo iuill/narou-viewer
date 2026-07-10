@@ -2603,8 +2603,7 @@ describe("App", () => {
       "栞を追加",
       "読書設定",
       "実験フォント",
-      "キャラクター一覧",
-      "用語一覧",
+      "人物・用語一覧",
       "読書AI",
       "情報",
       "フルスクリーン表示"
@@ -6084,7 +6083,7 @@ describe("App", () => {
     await click(container.querySelector('button[aria-label="栞を追加"]') as Element, dom);
     await waitFor(() => container.textContent?.includes("栞を保存しました。") === true);
 
-    await click(container.querySelector('button[aria-label="キャラクター一覧"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="人物・用語一覧"]') as Element, dom);
     await waitFor(() => Boolean(container.querySelector(".reader-character-panel")));
     expect(container.textContent).toContain("キャラクターは抽出されませんでした。必要なら対象話数を変えて再生成できます。");
 
@@ -6094,20 +6093,23 @@ describe("App", () => {
     await waitFor(() => container.textContent?.includes("主人公") === true);
     expect(container.textContent).toContain("過去の生成履歴");
 
-    await click(container.querySelector('button[aria-label="キャラクター一覧を閉じる"]') as Element, dom);
-    await waitFor(() => !container.textContent?.includes("キャラクター一覧"));
-
-    await click(container.querySelector('button[aria-label="用語一覧"]') as Element, dom);
+    await click(container.querySelector(".reader-extraction-tabs button:last-child") as Element, dom);
     await waitFor(() => Boolean(container.querySelector(".reader-term-panel")));
     expect(container.textContent).toContain("聖剣");
     expect(container.textContent).toContain("王家に伝わる剣。");
+    expect(container.querySelector(".reader-term-panel .reader-character-form")).not.toBeNull();
+    expect(container.querySelector(".reader-term-panel")?.textContent).toContain("過去の生成履歴");
+
+    await click(container.querySelector(".reader-extraction-tabs button") as Element, dom);
+    await waitFor(() => Boolean(container.querySelector(".reader-character-panel")));
+    expect(container.textContent).toContain("主人公");
 
     await act(async () => {
       root.unmount();
     });
   });
 
-  it("reader 画面で未生成の最新話数なら生成済みの直近一覧へフォールバックする", async () => {
+  it("reader 画面で直前話まで未生成なら生成済み範囲を partial 表示する", async () => {
     const fetchHandler: FetchHandler = async (url, _init) => {
       const requestUrl = new URL(url, "http://localhost");
 
@@ -6276,19 +6278,9 @@ describe("App", () => {
       if (requestUrl.pathname === "/api/library/novels/n1/characters") {
         if (requestUrl.searchParams.get("upToEpisodeIndex") === "2") {
           return jsonResponse({
-            status: "not_generated",
+            status: "partial",
             novelId: "n1",
             upToEpisodeIndex: "2",
-            processedUpToEpisodeIndex: "1",
-            characters: []
-          });
-        }
-
-        if (requestUrl.searchParams.get("upToEpisodeIndex") === "1") {
-          return jsonResponse({
-            status: "ready",
-            novelId: "n1",
-            upToEpisodeIndex: "1",
             processedUpToEpisodeIndex: "1",
             characters: [
               {
@@ -6317,10 +6309,10 @@ describe("App", () => {
 
       if (requestUrl.pathname === "/api/library/novels/n1/terms") {
         return jsonResponse({
-          status: "ready",
+          status: "partial",
           novelId: "n1",
           upToEpisodeIndex: "2",
-          processedUpToEpisodeIndex: "2",
+          processedUpToEpisodeIndex: "1",
           terms: []
         });
       }
@@ -6338,10 +6330,10 @@ describe("App", () => {
 
     await waitFor(() => Boolean(container.querySelector(".reader-shell")) && container.textContent?.includes("第3話") === true);
 
-    await click(container.querySelector('button[aria-label="キャラクター一覧"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="人物・用語一覧"]') as Element, dom);
     await waitFor(() => container.textContent?.includes("主人公") === true);
     expect(container.textContent).toContain(
-      "第1話時点までの生成済み一覧を表示しています。第2話時点の人物一覧はまだ生成されていません。"
+      "第1話時点までの生成済み人物一覧を表示しています。第2話時点まではまだ生成されていません。"
     );
     expect(container.textContent).toContain("第1話時点 / 1 / 1 人");
 

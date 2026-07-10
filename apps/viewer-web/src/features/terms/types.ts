@@ -17,7 +17,7 @@ export type TermEntry = {
 };
 
 export type TermsResponse = {
-  status: "ready" | "not_generated";
+  status: "ready" | "partial" | "not_generated";
   novelId: string;
   upToEpisodeIndex: EpisodeIndex;
   processedUpToEpisodeIndex: EpisodeIndex | null;

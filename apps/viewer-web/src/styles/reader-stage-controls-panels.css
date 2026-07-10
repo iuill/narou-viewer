@@ -1171,6 +1171,71 @@
   align-items: end;
 }
 
+.reader-extraction-boundary-toggle {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.reader-extraction-boundary-toggle input {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.reader-ai-boundary-toggle {
+  margin: 0;
+}
+
+.reader-extraction-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--reader-surface-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--reader-panel-surface) 88%, var(--reader-surface-border));
+}
+
+.reader-extraction-tabs legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.reader-extraction-tabs button {
+  min-height: 2.5rem;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.reader-extraction-tabs button:hover,
+.reader-extraction-tabs button:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--reader-panel-surface) 82%, white 18%);
+}
+
+.reader-extraction-tabs button.is-active {
+  color: #fffaf2;
+  background: var(--accent);
+  box-shadow: var(--reader-surface-shadow);
+}
+
 .reader-character-field {
   display: grid;
   gap: 4px;
@@ -1195,6 +1260,11 @@
 .reader-character-field input {
   appearance: textfield;
   -webkit-appearance: textfield;
+}
+
+.reader-character-field select {
+  padding-block: 0;
+  line-height: 2.5rem;
 }
 
 .reader-character-actions {

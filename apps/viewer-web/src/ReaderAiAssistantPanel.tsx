@@ -30,6 +30,7 @@ export type ReaderAiAssistantProgressEvent = Exclude<ReaderAiAssistantStreamEven
 export type ReaderAiAssistantState = {
   draft: string;
   error: string | null;
+  includeCurrentEpisode: boolean;
   isSubmitting: boolean;
   lastResponse: ReaderAiAssistantResponse | null;
   messages: ReaderAiAssistantMessage[];
@@ -41,6 +42,7 @@ type ReaderAiAssistantStateUpdater = (updater: (current: ReaderAiAssistantState)
 type Props = {
   assistantState?: ReaderAiAssistantState;
   currentEpisodeIndex: string | null;
+  previousEpisodeIndex?: string | null;
   disabledReason?: string | null;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
   getCurrentPosition?: () => number | null;
@@ -51,10 +53,11 @@ type Props = {
 
 const SUGGESTED_PROMPTS = ["直近5話の流れを要約して", "前話で何があった？"];
 
-export function createEmptyReaderAiAssistantState(): ReaderAiAssistantState {
+export function createEmptyReaderAiAssistantState(includeCurrentEpisode = false): ReaderAiAssistantState {
   return {
     draft: "",
     error: null,
+    includeCurrentEpisode,
     isSubmitting: false,
     lastResponse: null,
     messages: [],
@@ -65,6 +68,7 @@ export function createEmptyReaderAiAssistantState(): ReaderAiAssistantState {
 export function ReaderAiAssistantPanel({
   assistantState: controlledAssistantState,
   currentEpisodeIndex,
+  previousEpisodeIndex = null,
   disabledReason = null,
   formatEpisodeOrderLabel,
   getCurrentPosition,
@@ -75,7 +79,12 @@ export function ReaderAiAssistantPanel({
   const [localAssistantState, setLocalAssistantState] = useState<ReaderAiAssistantState>(() => createEmptyReaderAiAssistantState());
   const assistantState = controlledAssistantState ?? localAssistantState;
   const updateAssistantState = onAssistantStateChange ?? setLocalAssistantState;
-  const { draft, error, isSubmitting, lastResponse, messages, progressEvents } = assistantState;
+  const { draft, error, includeCurrentEpisode, isSubmitting, lastResponse, messages, progressEvents } = assistantState;
+  const spoilerBoundaryEpisodeIndex = includeCurrentEpisode ? currentEpisodeIndex : previousEpisodeIndex;
+  const boundaryUnavailableReason =
+    !includeCurrentEpisode && currentEpisodeIndex && !previousEpisodeIndex
+      ? "第1話より前には参照できる話がありません。"
+      : null;
   const progressEventSequenceRef = useRef(0);
   const activeRequestRef = useRef<{
     controller: AbortController;
@@ -118,9 +127,14 @@ export function ReaderAiAssistantPanel({
       return;
     }
 
+    const keepDraft = readerContextRef.current.novelId === novelId;
     readerContextRef.current = { currentEpisodeIndex, novelId };
     cancelActiveRequest({ removeTurn: true });
-  }, [cancelActiveRequest, currentEpisodeIndex, novelId]);
+    updateAssistantState((current) => ({
+      ...createEmptyReaderAiAssistantState(current.includeCurrentEpisode),
+      draft: keepDraft ? current.draft : ""
+    }));
+  }, [cancelActiveRequest, currentEpisodeIndex, novelId, updateAssistantState]);
 
   useEffect(
     () => () => {
@@ -159,16 +173,18 @@ export function ReaderAiAssistantPanel({
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
-    if (disabledReason || !novelId || !currentEpisodeIndex || trimmed.length === 0 || activeRequestRef.current || isSubmitting) {
+    if (disabledReason || boundaryUnavailableReason || !novelId || !spoilerBoundaryEpisodeIndex || trimmed.length === 0 || activeRequestRef.current || isSubmitting) {
       return;
     }
 
     let currentPosition = 0;
-    try {
-      const measuredPosition = getCurrentPosition?.() ?? 0;
-      currentPosition = Number.isInteger(measuredPosition) && measuredPosition >= 0 ? measuredPosition : 0;
-    } catch {
-      currentPosition = 0;
+    if (includeCurrentEpisode) {
+      try {
+        const measuredPosition = getCurrentPosition?.() ?? 0;
+        currentPosition = Number.isInteger(measuredPosition) && measuredPosition >= 0 ? measuredPosition : 0;
+      } catch {
+        currentPosition = 0;
+      }
     }
 
     const requestId = crypto.randomUUID();
@@ -207,7 +223,7 @@ export function ReaderAiAssistantPanel({
         novelId,
         {
           message: trimmed,
-          currentEpisodeIndex,
+          currentEpisodeIndex: spoilerBoundaryEpisodeIndex,
           position: currentPosition,
           history
         },
@@ -301,7 +317,8 @@ export function ReaderAiAssistantPanel({
       readingContext: {
         currentEpisodeIndex,
         currentEpisodeLabel: currentEpisodeIndex ? formatEpisodeOrderLabel(currentEpisodeIndex) : null,
-        spoilerBoundaryEpisodeIndex: currentEpisodeIndex
+        includeCurrentEpisode,
+        spoilerBoundaryEpisodeIndex
       },
       messages: messages.map(({ createdAt, role, text, turnId }) => ({ createdAt, role, text, turnId })),
       timeline: buildReaderAiTimeline(messages, progressEvents),
@@ -321,11 +338,20 @@ export function ReaderAiAssistantPanel({
   }
 
   function resetConversation() {
-    updateAssistantState(() => createEmptyReaderAiAssistantState());
+    updateAssistantState(() => createEmptyReaderAiAssistantState(includeCurrentEpisode));
+  }
+
+  function handleIncludeCurrentEpisodeChange(include: boolean) {
+    cancelActiveRequest({ removeTurn: true });
+    updateAssistantState((current) => ({
+      ...createEmptyReaderAiAssistantState(include),
+      draft: current.draft
+    }));
   }
 
   const hasConversationState = messages.length > 0 || progressEvents.length > 0 || lastResponse !== null || error !== null || draft.length > 0;
-  const isInputDisabled = Boolean(disabledReason) || !novelId || !currentEpisodeIndex || isSubmitting;
+  const isInputDisabled =
+    Boolean(disabledReason) || Boolean(boundaryUnavailableReason) || !novelId || !spoilerBoundaryEpisodeIndex || isSubmitting;
 
   return (
     <ReaderFloatingPanel
@@ -334,18 +360,30 @@ export function ReaderAiAssistantPanel({
       description={
         disabledReason
           ? disabledReason
-          : currentEpisodeIndex
-            ? `第${formatEpisodeOrderLabel(currentEpisodeIndex)}話までの情報だけを使います。`
-            : "本文を開くと利用できます。"
+          : spoilerBoundaryEpisodeIndex
+            ? `第${formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex)}話までの情報だけを使います。`
+            : boundaryUnavailableReason ?? "本文を開くと利用できます。"
       }
       onClose={onClose}
       title="読書AI"
     >
       <div className="reader-ai-panel-body">
         <div className="reader-panel-chip-row">
-          <span className="reader-panel-chip">ネタバレ境界 第{currentEpisodeIndex ? formatEpisodeOrderLabel(currentEpisodeIndex) : "?"}話</span>
+          <span className="reader-panel-chip">ネタバレ境界 第{spoilerBoundaryEpisodeIndex ? formatEpisodeOrderLabel(spoilerBoundaryEpisodeIndex) : "?"}話</span>
           <span className="reader-panel-chip">{disabledReason ? "LLM未設定" : lastResponse ? "AI応答" : "待機中"}</span>
         </div>
+
+        <label className="reader-panel-card reader-panel-card--compact reader-extraction-boundary-toggle reader-ai-boundary-toggle">
+          <input
+            checked={includeCurrentEpisode}
+            disabled={isSubmitting}
+            onChange={(event) => handleIncludeCurrentEpisodeChange(event.target.checked)}
+            type="checkbox"
+          />
+          <span>現在話を含む</span>
+        </label>
+
+        {boundaryUnavailableReason ? <p className="message">{boundaryUnavailableReason}</p> : null}
 
         {disabledReason ? (
           <section className="reader-panel-card reader-panel-card--compact reader-ai-unavailable-card">

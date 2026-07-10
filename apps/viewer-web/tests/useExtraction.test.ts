@@ -80,6 +80,16 @@ function createToc(): TocResponse {
         contentEtag: "toc-2",
         bodyStatus: "complete",
       },
+      {
+        episodeIndex: "3",
+        title: "三",
+        chapter: null,
+        subchapter: null,
+        sourceUrl: null,
+        updatedAt: null,
+        contentEtag: "toc-3",
+        bodyStatus: "complete",
+      },
     ],
   };
 }
@@ -155,20 +165,18 @@ describe("useExtraction", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens with fallback summary notice when target is not generated yet", async () => {
+  it("opens at the previous episode by default and keeps partial extraction data visible", async () => {
     installDom();
     const jobs: ExtractionJobsResponse = { jobs: [] };
     vi.mocked(fetchExtractionJobs).mockResolvedValue(jobs);
     vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
-    vi.mocked(fetchCharacterSummary)
-      .mockResolvedValueOnce({
-        status: "not_generated",
-        novelId: "novel-a",
-        upToEpisodeIndex: "2",
-        processedUpToEpisodeIndex: "1",
-        characters: [],
-      })
-      .mockResolvedValueOnce(createReadySummary("1"));
+    vi.mocked(fetchCharacterSummary).mockResolvedValue({
+      status: "partial",
+      novelId: "novel-a",
+      upToEpisodeIndex: "2",
+      processedUpToEpisodeIndex: "1",
+      characters: [],
+    });
 
     let latest: HookResult | null = null;
     let openCalls = 0;
@@ -190,11 +198,11 @@ describe("useExtraction", () => {
     });
 
     expect(openCalls).toBe(1);
-    expect(fetchCharacterSummary).toHaveBeenNthCalledWith(1, "novel-a", "2");
-    expect(fetchCharacterSummary).toHaveBeenNthCalledWith(2, "novel-a", "1");
-    expect(latest?.data?.status).toBe("ready");
+    expect(fetchCharacterSummary).toHaveBeenCalledWith("novel-a", "2");
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(1);
+    expect(latest?.data?.status).toBe("partial");
     expect(latest?.notice).toContain(
-      "第1話時点までの生成済み一覧を表示しています。",
+      "第1話時点までの生成済み人物一覧を表示しています。",
     );
 
     await act(async () => {
@@ -248,19 +256,17 @@ describe("useExtraction", () => {
     });
   });
 
-  it("resolves character and term fallbacks independently", async () => {
+  it("reports a partial term boundary without replacing it with another request", async () => {
     installDom();
     vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
     vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
-    vi.mocked(fetchTerms)
-      .mockResolvedValueOnce({
-        status: "not_generated",
-        novelId: "novel-a",
-        upToEpisodeIndex: "2",
-        processedUpToEpisodeIndex: "1",
-        terms: [],
-      })
-      .mockResolvedValueOnce(createReadyTerms("1"));
+    vi.mocked(fetchTerms).mockResolvedValue({
+      status: "partial",
+      novelId: "novel-a",
+      upToEpisodeIndex: "2",
+      processedUpToEpisodeIndex: "1",
+      terms: [],
+    });
 
     let latest: HookResult | null = null;
     let root: Root | null = null;
@@ -279,10 +285,12 @@ describe("useExtraction", () => {
     });
 
     expect(latest?.data?.upToEpisodeIndex).toBe("2");
-    expect(latest?.termsData?.upToEpisodeIndex).toBe("1");
+    expect(latest?.termsData?.upToEpisodeIndex).toBe("2");
+    expect(latest?.termsData?.status).toBe("partial");
     expect(latest?.notice).toContain(
-      "第2話時点の用語一覧はまだ生成されていません。",
+      "第1話時点までの生成済み用語一覧を表示しています。",
     );
+    expect(vi.mocked(fetchTerms).mock.calls.every(([, episodeIndex]) => episodeIndex === "2")).toBe(true);
     await act(async () => root?.unmount());
   });
 
@@ -315,6 +323,38 @@ describe("useExtraction", () => {
     });
     expect(latest?.notice).toContain("旧生成データには用語が含まれないため");
     expect(latest?.canClear).toBe(true);
+    await act(async () => root?.unmount());
+  });
+
+  it("switches the extraction boundary between the current and previous episode", async () => {
+    installDom();
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchCharacterSummary).mockImplementation(async (_novelId, episodeIndex) => createReadySummary(episodeIndex));
+    vi.mocked(fetchTerms).mockImplementation(async (_novelId, episodeIndex) => createReadyTerms(episodeIndex));
+
+    let latest: HookResult | null = null;
+    let root: Root | null = null;
+    await act(async () => {
+      root = renderHookHarness({
+        currentTocEpisodeIndex: 2,
+        onRender: (result) => {
+          latest = result;
+        },
+      });
+      await flushAsyncWork();
+    });
+
+    expect(latest?.includeCurrentEpisode).toBe(false);
+    expect(latest?.defaultUpToEpisodeIndex).toBe("2");
+    await act(async () => {
+      latest?.setIncludeCurrentEpisode(true);
+      await flushAsyncWork();
+    });
+    expect(latest?.includeCurrentEpisode).toBe(true);
+    expect(latest?.defaultUpToEpisodeIndex).toBe("3");
+    expect(latest?.requestedUpToEpisodeIndex).toBe("3");
+    expect(fetchCharacterSummary).toHaveBeenCalledWith("novel-a", "3");
+
     await act(async () => root?.unmount());
   });
 });

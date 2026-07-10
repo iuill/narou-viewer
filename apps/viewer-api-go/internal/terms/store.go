@@ -205,6 +205,8 @@ func BuildResponse(stateDir string, novelID string, requestedBoundary string, co
 	response.Terms = ProjectTerms(generated, visibilityCap)
 	if compareEpisode(effectiveFrontier, requestedBoundary) >= 0 {
 		response.Status = "ready"
+	} else {
+		response.Status = "partial"
 	}
 	return response, nil
 }

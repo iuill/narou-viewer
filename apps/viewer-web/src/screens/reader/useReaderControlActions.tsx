@@ -21,7 +21,6 @@ type UseReaderControlActionsOptions = {
   handleCreateBookmark: () => Promise<void>;
   handleEpisodeMove: (direction: -1 | 1) => void;
   handleOpenCharacterSummary: () => void | Promise<void>;
-  handleOpenTerms: () => void | Promise<void>;
   handlePageMove: (direction: -1 | 1) => void;
   handleReturnToLibrary: () => void | Promise<void>;
   handleToggleReaderFullscreen: () => void | Promise<void>;
@@ -63,7 +62,6 @@ export function useReaderControlActions({
   handleCreateBookmark,
   handleEpisodeMove,
   handleOpenCharacterSummary,
-  handleOpenTerms,
   handlePageMove,
   handleReturnToLibrary,
   handleToggleReaderFullscreen,
@@ -264,13 +262,13 @@ export function useReaderControlActions({
     },
     {
       id: "characters",
-      label: "キャラクター一覧",
-      title: "キャラクター一覧",
+      label: "人物・用語一覧",
+      title: "人物・用語一覧",
       className: "reader-characters-button",
-      ariaExpanded: isCharacterSummaryOpen,
+      ariaExpanded: isCharacterSummaryOpen || isTermsOpen,
       onClick: () => {
         setIsReaderOverflowOpen(false);
-        if (isCharacterSummaryOpen) {
+        if (isCharacterSummaryOpen || isTermsOpen) {
           closeReaderPanel();
           return;
         }
@@ -279,27 +277,23 @@ export function useReaderControlActions({
       },
       icon: (
         <svg aria-hidden="true" className="reader-characters-icon" viewBox="0 0 24 24">
-          <path d="M8.5 11.5a3.25 3.25 0 1 1 0-6.5 3.25 3.25 0 0 1 0 6.5Zm7 0a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5Zm-7 2c3.06 0 5.5 1.64 5.5 3.67V20H3v-2.83c0-2.03 2.44-3.67 5.5-3.67Zm7 1.1c2.48 0 4.5 1.23 4.5 2.74V20h-4.9v-2.96c0-.57-.14-1.1-.41-1.54.24-.04.5-.06.81-.06Z" />
-        </svg>
-      )
-    },
-    {
-      id: "terms",
-      label: "用語一覧",
-      title: "用語一覧",
-      className: "reader-terms-button",
-      ariaExpanded: isTermsOpen,
-      onClick: () => {
-        setIsReaderOverflowOpen(false);
-        if (isTermsOpen) {
-          closeReaderPanel();
-          return;
-        }
-        void handleOpenTerms();
-      },
-      icon: (
-        <svg aria-hidden="true" className="reader-terms-icon" viewBox="0 0 24 24">
-          <path d="M5 3.5h11.5A2.5 2.5 0 0 1 19 6v14.5H7A3 3 0 0 1 4 17.5v-11A3 3 0 0 1 7 3.5Zm2 2A1 1 0 0 0 6 6.5v8.17c.31-.11.65-.17 1-.17h10V6a.5.5 0 0 0-.5-.5Zm0 11a1 1 0 0 0 0 2h10v-2Zm2-8h6v1.5H9Zm0 3h5v1.5H9Z" />
+          <path
+            d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.75"
+          />
+          <circle cx="8" cy="9" fill="none" r="2" stroke="currentColor" strokeWidth="1.65" />
+          <path
+            d="M5 16c.3-2.25 1.45-3.35 3-3.35s2.7 1.1 3 3.35m3-7h4m-4 3h4m-4 3h3"
+            fill="none"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.65"
+          />
         </svg>
       )
     },

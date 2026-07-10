@@ -9,7 +9,7 @@ import {
 import { findFixtureEpisode, type FixtureEpisode } from "../harness/fixtures";
 
 type CharacterSummaryResponse = {
-  status: "ready" | "not_generated";
+  status: "ready" | "partial" | "not_generated";
   novelId: string;
   upToEpisodeIndex: string;
   processedUpToEpisodeIndex: string | null;
@@ -22,7 +22,7 @@ function expectCharacterSummaryResponseShape(
 ): asserts value is CharacterSummaryResponse {
   expect(value).toEqual(
     expect.objectContaining({
-      status: expect.stringMatching(/^(ready|not_generated)$/),
+      status: expect.stringMatching(/^(ready|partial|not_generated)$/),
       novelId: fixtureEpisode.novelId,
       upToEpisodeIndex: fixtureEpisode.episodeIndex,
       characters: expect.any(Array),

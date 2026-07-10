@@ -17,7 +17,7 @@ export type CharacterSummaryEntry = {
 };
 
 export type CharacterSummaryResponse = {
-  status: "ready" | "not_generated";
+  status: "ready" | "partial" | "not_generated";
   novelId: string;
   upToEpisodeIndex: EpisodeIndex;
   processedUpToEpisodeIndex: EpisodeIndex | null;

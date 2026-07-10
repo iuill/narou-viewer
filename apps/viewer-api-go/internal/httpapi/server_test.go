@@ -2598,7 +2598,7 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	if !strings.Contains(instructions, "現在位置: 第1話まで") {
 		t.Fatalf("instructions should fall back to episode 1 label: %s", instructions)
 	}
-	if !strings.Contains(instructions, "get_character_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "search_full_text") {
+	if !strings.Contains(instructions, "get_character_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "get_term_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "search_full_text") {
 		t.Fatalf("instructions should guide concrete term fallback search: %s", instructions)
 	}
 	if args := decodeToolArguments(`bad json`); len(args) != 0 {
@@ -2617,6 +2617,13 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	}
 	if snapshot.Result["status"] == "not_generated" && snapshot.Result["fallbackTool"] != "search_full_text" {
 		t.Fatalf("not_generated character snapshot should suggest full text fallback: %+v", snapshot)
+	}
+	termSnapshot := server.executeReaderAssistantTool(context.Background(), contextInfo, "get_term_snapshot", `{}`)
+	if termSnapshot.Name != "get_term_snapshot" || termSnapshot.Result["status"] == "" {
+		t.Fatalf("term snapshot tool should return a status: %+v", termSnapshot)
+	}
+	if termSnapshot.Result["status"] == "not_generated" && termSnapshot.Result["fallbackTool"] != "search_full_text" {
+		t.Fatalf("not_generated term snapshot should suggest full text fallback: %+v", termSnapshot)
 	}
 	unsupported := server.executeReaderAssistantTool(context.Background(), contextInfo, "missing_tool", `{}`)
 	if unsupported.Name != "tool_recovery" {

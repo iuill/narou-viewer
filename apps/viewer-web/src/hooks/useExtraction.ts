@@ -58,12 +58,14 @@ type UseExtractionResult = {
   isClearing: boolean;
   isLoading: boolean;
   isSubmitting: boolean;
+  includeCurrentEpisode: boolean;
   notice: string | null;
   requestedGenerationStrategy: ExtractionGenerationStrategy;
   requestedUpToEpisodeIndex: string;
   setRequestedGenerationStrategy: Dispatch<
     SetStateAction<ExtractionGenerationStrategy>
   >;
+  setIncludeCurrentEpisode: (include: boolean) => void;
   setRequestedUpToEpisodeIndex: Dispatch<SetStateAction<string>>;
 };
 
@@ -83,6 +85,7 @@ export function useExtraction({
     useState("");
   const [requestedGenerationStrategy, setRequestedGenerationStrategy] =
     useState<ExtractionGenerationStrategy>("parallel_identity");
+  const [includeCurrentEpisode, setIncludeCurrentEpisodeState] = useState(false);
   const [data, setData] = useState<CharacterSummaryResponse | null>(null);
   const [termsData, setTermsData] = useState<TermsResponse | null>(null);
   const [jobs, setJobs] = useState<ExtractionJobsResponse | null>(null);
@@ -94,12 +97,13 @@ export function useExtraction({
   const requestSeqRef = useRef(0);
 
   const defaultUpToEpisodeIndex = useMemo(() => {
-    if (currentTocEpisodeIndex <= 0) {
+    const episodeOrder = currentTocEpisodeIndex + (includeCurrentEpisode ? 1 : 0);
+    if (episodeOrder <= 0) {
       return null;
     }
 
-    return String(currentTocEpisodeIndex);
-  }, [currentTocEpisodeIndex]);
+    return String(episodeOrder);
+  }, [currentTocEpisodeIndex, includeCurrentEpisode]);
   const requestedUpToEpisodeOrder = useMemo(() => {
     const requested = requestedUpToEpisodeIndex.trim();
     return requested.length > 0 && /^\d+$/.test(requested) ? requested : null;
@@ -141,8 +145,27 @@ export function useExtraction({
     selectedNovelId !== null &&
     activeJobs.length === 0 &&
     (data?.status === "ready" ||
+      data?.status === "partial" ||
       termsData?.status === "ready" ||
+      termsData?.status === "partial" ||
       completedJobs.length > 0);
+
+  function setIncludeCurrentEpisode(include: boolean) {
+    setIncludeCurrentEpisodeState(include);
+    const nextEpisodeOrder = currentTocEpisodeIndex + (include ? 1 : 0);
+    setRequestedUpToEpisodeIndex(nextEpisodeOrder > 0 ? String(nextEpisodeOrder) : "");
+
+    const targetEpisodeIndex = nextEpisodeOrder > 0 ? toc?.episodes[nextEpisodeOrder - 1]?.episodeIndex ?? null : null;
+    if (isOpen && targetEpisodeIndex !== null) {
+      void load(targetEpisodeIndex);
+    } else if (isOpen) {
+      setData(null);
+      setTermsData(null);
+      setJobs(null);
+      setNotice(null);
+      setError(null);
+    }
+  }
 
   async function load(
     targetUpToEpisodeIndex: EpisodeIndex,
@@ -173,58 +196,20 @@ export function useExtraction({
         fetchExtractionJobs(novelId),
       ]);
 
-      let summary = initialSummary;
-      let displayedTerms = initialTerms;
       const notices: string[] = [];
 
-      if (
-        initialSummary.status === "not_generated" &&
-        initialSummary.processedUpToEpisodeIndex !== null &&
-        compareEpisodeIndex(
-          initialSummary.processedUpToEpisodeIndex,
-          targetUpToEpisodeIndex,
-        ) < 0
-      ) {
-        if (requestSeq !== requestSeqRef.current) {
-          return;
-        }
-
-        const fallbackSummary = await fetchCharacterSummary(
-          novelId,
-          initialSummary.processedUpToEpisodeIndex,
+      if (initialSummary.status === "partial" && initialSummary.processedUpToEpisodeIndex !== null) {
+        notices.push(
+          `第${formatEpisodeOrderLabel(initialSummary.processedUpToEpisodeIndex)}話時点までの生成済み人物一覧を表示しています。` +
+            `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点まではまだ生成されていません。`,
         );
-
-        if (fallbackSummary.status === "ready") {
-          summary = fallbackSummary;
-          notices.push(
-            `第${formatEpisodeOrderLabel(fallbackSummary.upToEpisodeIndex)}話時点までの生成済み一覧を表示しています。` +
-              `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点の人物一覧はまだ生成されていません。`,
-          );
-        }
       }
 
-      if (
-        initialTerms.status === "not_generated" &&
-        initialTerms.processedUpToEpisodeIndex !== null &&
-        compareEpisodeIndex(
-          initialTerms.processedUpToEpisodeIndex,
-          targetUpToEpisodeIndex,
-        ) < 0
-      ) {
-        if (requestSeq !== requestSeqRef.current) {
-          return;
-        }
-        const fallbackTerms = await fetchTerms(
-          novelId,
-          initialTerms.processedUpToEpisodeIndex,
+      if (initialTerms.status === "partial" && initialTerms.processedUpToEpisodeIndex !== null) {
+        notices.push(
+          `第${formatEpisodeOrderLabel(initialTerms.processedUpToEpisodeIndex)}話時点までの生成済み用語一覧を表示しています。` +
+            `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点まではまだ生成されていません。`,
         );
-        if (fallbackTerms.status === "ready") {
-          displayedTerms = fallbackTerms;
-          notices.push(
-            `第${formatEpisodeOrderLabel(fallbackTerms.upToEpisodeIndex)}話時点までの用語一覧を表示しています。` +
-              `第${formatEpisodeOrderLabel(targetUpToEpisodeIndex)}話時点の用語一覧はまだ生成されていません。`,
-          );
-        }
       }
 
       if (
@@ -241,8 +226,8 @@ export function useExtraction({
         return;
       }
 
-      setData(summary);
-      setTermsData(displayedTerms);
+      setData(initialSummary);
+      setTermsData(initialTerms);
       setJobs(nextJobs);
       setNotice(notices.length > 0 ? notices.join(" ") : null);
     } catch (loadError) {
@@ -283,6 +268,7 @@ export function useExtraction({
     setError(null);
     setRequestedUpToEpisodeIndex("");
     setRequestedGenerationStrategy("parallel_identity");
+    setIncludeCurrentEpisodeState(false);
     setIsLoading(false);
     setIsSubmitting(false);
     setIsClearing(false);
@@ -459,10 +445,12 @@ export function useExtraction({
     isClearing,
     isLoading,
     isSubmitting,
+    includeCurrentEpisode,
     notice,
     requestedGenerationStrategy,
     requestedUpToEpisodeIndex,
     setRequestedGenerationStrategy,
+    setIncludeCurrentEpisode,
     setRequestedUpToEpisodeIndex,
   };
 }

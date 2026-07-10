@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func TestNormalizeHistoryKeepsLatestValidTurns(t *testing.T) {
@@ -60,6 +62,94 @@ func TestEstimateOpenRouterChatRequestTokensIncludesToolSchema(t *testing.T) {
 	withToolSchema := EstimateOpenRouterChatRequestTokens(messages, ToolDefinitions(), nil)
 	if withToolSchema <= messageOnly {
 		t.Fatalf("tool schema should increase the prompt estimate: messageOnly=%d withToolSchema=%d", messageOnly, withToolSchema)
+	}
+}
+
+func TestCharacterSnapshotReturnsPartialDataAtProcessedFrontier(t *testing.T) {
+	stateDir := t.TempDir()
+	const novelID = "novel-characters"
+	if err := characters.SaveGeneratedSummary(stateDir, novelID, "2", []characters.GeneratedCharacter{{
+		CanonicalName:               "アリス",
+		CanonicalEpisodeIndex:       "1",
+		FirstAppearanceEpisodeIndex: "1",
+	}}); err != nil {
+		t.Fatalf("save character snapshot: %v", err)
+	}
+	tocEpisodes := []library.TocEpisodeSummary{
+		{EpisodeIndex: "1", Title: "第一話"},
+		{EpisodeIndex: "2", Title: "第二話"},
+		{EpisodeIndex: "3", Title: "第三話"},
+	}
+	result := NewService(Dependencies{StateDir: stateDir}).characterSnapshotResult(novelID, "3", tocEpisodes)
+	if result["status"] != "partial" || result["characterCount"] != 1 || result["fallbackTool"] != "search_full_text" {
+		t.Fatalf("character snapshot beyond the processed frontier should return partial data: %+v", result)
+	}
+}
+
+func TestTermSnapshotRespectsCurrentEpisodeAndCharacterCommitFrontier(t *testing.T) {
+	stateDir := t.TempDir()
+	const novelID = "novel-terms"
+	if err := characters.SaveGeneratedSummary(stateDir, novelID, "2", nil); err != nil {
+		t.Fatalf("save character commit frontier: %v", err)
+	}
+	if err := terms.SaveGeneratedTerms(stateDir, novelID, "3", []terms.GeneratedTerm{
+		{
+			Term:            "聖剣",
+			ReadingHistory:  []terms.TextVersion{{Text: "せいけん", EpisodeIndex: "1"}},
+			CategoryHistory: []terms.CategoryVersion{{Category: terms.CategoryItem, EpisodeIndex: "1"}},
+			DescriptionHistory: []terms.HistoryVersion{
+				{Text: "古い剣。", EpisodeIndex: "1"},
+				{Text: "王家の聖剣。", EpisodeIndex: "3"},
+			},
+		},
+		{
+			Term:               "王都",
+			CategoryHistory:    []terms.CategoryVersion{{Category: terms.CategoryPlace, EpisodeIndex: "3"}},
+			DescriptionHistory: []terms.HistoryVersion{{Text: "王国の首都。", EpisodeIndex: "3"}},
+		},
+	}, nil); err != nil {
+		t.Fatalf("save generated terms: %v", err)
+	}
+	tocEpisodes := []library.TocEpisodeSummary{
+		{EpisodeIndex: "1", Title: "第一話"},
+		{EpisodeIndex: "2", Title: "第二話"},
+		{EpisodeIndex: "3", Title: "第三話"},
+	}
+	service := NewService(Dependencies{StateDir: stateDir})
+
+	ready := service.termSnapshotResult(novelID, "2", tocEpisodes)
+	if ready["status"] != "ready" || ready["termCount"] != 1 {
+		t.Fatalf("term snapshot at committed frontier should be ready: %+v", ready)
+	}
+	items := ready["terms"].([]map[string]any)
+	if len(items) != 1 || items[0]["term"] != "聖剣" || items[0]["description"] != "古い剣。" || items[0]["category"] != terms.CategoryItem {
+		t.Fatalf("term snapshot should project only visible versions: %+v", items)
+	}
+
+	partial := service.termSnapshotResult(novelID, "3", tocEpisodes)
+	if partial["status"] != "partial" || partial["termCount"] != 1 || partial["fallbackTool"] != "search_full_text" {
+		t.Fatalf("term snapshot beyond character frontier should hide uncommitted terms and suggest fallback: %+v", partial)
+	}
+
+	missing := service.termSnapshotResult("missing", "2", tocEpisodes)
+	if missing["status"] != "not_generated" || missing["termCount"] != 0 || missing["fallbackTool"] != "search_full_text" {
+		t.Fatalf("missing term snapshot should be recoverable: %+v", missing)
+	}
+}
+
+func TestReaderAssistantExposesTermSnapshotTool(t *testing.T) {
+	found := false
+	for _, tool := range ToolDefinitions() {
+		if tool.Function.Name == "get_term_snapshot" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("get_term_snapshot tool definition is missing")
+	}
+	if message := ToolResultMessage("get_term_snapshot"); message != "用語情報を確認しました。" {
+		t.Fatalf("unexpected term snapshot result message: %s", message)
 	}
 }
 

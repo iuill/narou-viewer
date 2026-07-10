@@ -10,18 +10,24 @@ type PanelProps = ComponentProps<typeof ReaderCharacterSummaryPanel>;
 function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
   return {
     activeJobs: [],
+    canClear: true,
     canGenerate: true,
     completedJobs: [],
     data: null,
     defaultUpToEpisodeIndex: "12",
     error: null,
     formatEpisodeOrderLabel: (episodeIndex) => episodeIndex,
+    isClearing: false,
+    includeCurrentEpisode: false,
     isLoading: false,
     isSubmitting: false,
     notice: null,
+    onClear: vi.fn(),
+    onIncludeCurrentEpisodeChange: vi.fn(),
     onClose: vi.fn(),
     onRequestedGenerationStrategyChange: vi.fn(),
     onRequestedUpToEpisodeIndexChange: vi.fn(),
+    onShowTerms: vi.fn(),
     onSubmit: vi.fn(),
     requestedGenerationStrategy: "parallel_identity",
     requestedUpToEpisodeIndex: "12",
@@ -174,7 +180,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root, dom } = await renderPanel(props);
 
-    expect(container.textContent).toContain("キャラクター一覧");
+    expect(container.textContent).toContain("人物・用語一覧");
     expect(container.textContent).toContain("第12話時点までの情報を確認します。");
     expect(container.textContent).toContain(
       "第11話時点までの生成済み一覧を表示しています。第12話時点の一覧はまだ生成されていません。"
@@ -197,9 +203,15 @@ describe("ReaderCharacterSummaryPanel", () => {
     }
 
     await submitForm(form, dom);
+    const termsTab = container.querySelector(".reader-extraction-tabs button:last-child");
+    if (!(termsTab instanceof dom.window.HTMLButtonElement)) {
+      throw new Error("terms tab not found");
+    }
+    await click(termsTab, dom);
     await click(getButtonByText(container, "×"), dom);
 
     expect(props.onSubmit).toHaveBeenCalledTimes(1);
+    expect(props.onShowTerms).toHaveBeenCalledTimes(1);
     expect(props.onClose).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -323,12 +335,13 @@ describe("ReaderCharacterSummaryPanel", () => {
   it("未生成かつ第1話では生成不可メッセージと disabled 状態を出す", async () => {
     const props = createProps({
       canGenerate: false,
-      defaultUpToEpisodeIndex: null
+      defaultUpToEpisodeIndex: null,
+      includeCurrentEpisode: false
     });
     const { container, root, dom } = await renderPanel(props);
 
-    expect(container.textContent).toContain("第1話閲覧中のため、抽出は実行できません。");
-    expect(container.textContent).toContain("第1話ではキャラクター一覧を生成できません。");
+    expect(container.textContent).toContain("第1話より前には生成対象がありません。");
+    expect(container.textContent).toContain("「現在話を含む」を有効にすると第1話を生成できます。");
 
     const input = container.querySelector('input[type="number"]');
     if (!(input instanceof dom.window.HTMLInputElement)) {

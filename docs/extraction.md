@@ -5,10 +5,12 @@
 ## 境界と表示
 
 - `episodeIndex` をネタバレ境界とし、人物・用語とも指定話以下の履歴だけを表示する。
+- 本文画面では「現在話を含む」を既定で無効にし、直前話を生成・表示境界とする。有効にした場合だけ現在表示中の話を境界へ含める。第1話では、有効にするまで生成を実行できない。
 - `GET /api/library/novels/{novelId}/characters` は人物一覧、`GET .../terms` は用語一覧を返す。
 - 両 API は character profile の committed frontier を共有する。term profile が先行しても、人物保存済み話より未来の用語は公開しない。
 - 用語の `reading`、`category`、`description` は履歴として保持し、境界以下の最新 snapshot を選ぶ。読みは本文に明示された場合だけ保存する。
 - 生成済みで用語が0件の場合も `terms: []` の document を保存し、API は `ready` を返す。
+- 要求境界より committed frontier が手前の場合、人物・用語 API は `partial` と生成済み範囲の一覧を返す。`not_generated` は生成済み frontier 自体がない場合に限る。
 
 ## pipeline と保存
 

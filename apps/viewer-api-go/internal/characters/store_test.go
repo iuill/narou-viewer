@@ -65,12 +65,12 @@ characters:
 		t.Fatalf("unexpected importance: %+v", importance)
 	}
 
-	notGenerated, ok, err := LoadSummary(stateDir, "novel-1", "4")
+	partial, ok, err := LoadSummary(stateDir, "novel-1", "4")
 	if err != nil || !ok {
 		t.Fatalf("LoadSummary for later episode failed: ok=%v err=%v", ok, err)
 	}
-	if notGenerated.Status != "not_generated" || len(notGenerated.Characters) != 0 {
-		t.Fatalf("expected not_generated, got %+v", notGenerated)
+	if partial.Status != "partial" || len(partial.Characters) != 1 {
+		t.Fatalf("expected partial data through the processed frontier, got %+v", partial)
 	}
 }
 
