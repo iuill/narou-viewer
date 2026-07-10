@@ -23,6 +23,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type HandlerResult struct {
@@ -50,6 +51,7 @@ func NewHandler(dataDir string) HandlerResult {
 	publicationInitErr := publicationService.Ensure()
 	characterInitErr := characters.EnsureStateDirs(stateDir)
 	extractionInitErr := extractdomain.EnsureStateDirs(stateDir)
+	termInitErr := terms.EnsureStateDirs(stateDir)
 	fetcherClient := fetcher.NewClient(config.FetcherAPIBaseURL())
 	libraryService := library.NewServiceWithFetcher(filepath.Join(dataDir, "novel-fetcher"), fetcherClient)
 	textCache := readertextcache.New(stateDir)
@@ -75,7 +77,7 @@ func NewHandler(dataDir string) HandlerResult {
 	})
 	extractionJobsService := extractionjobs.NewService(stateDir, libraryService, stateStore)
 	characterJobCoordinator := appextraction.NewJobCoordinator(stateDir, extractionRuntime.ProcessJob)
-	joinedInitErr := errors.Join(initErr, publicationInitErr, characterInitErr, extractionInitErr)
+	joinedInitErr := errors.Join(initErr, publicationInitErr, characterInitErr, extractionInitErr, termInitErr)
 	handler := httpapi.NewServerWithDependencies(httpapi.ServerDependencies{
 		DataDir:                  dataDir,
 		Library:                  libraryService,

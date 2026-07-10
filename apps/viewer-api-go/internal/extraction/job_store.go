@@ -103,6 +103,13 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		result.EventsDeleted = deleted
 	}
 
+	termProfilePath := filepath.Join(stateDir, "term_profiles", novelID+".yaml")
+	if deleted, err := removeIfExists(termProfilePath); err != nil {
+		return NovelStatePruneResult{}, err
+	} else {
+		result.TermProfileDeleted = deleted
+	}
+
 	for _, jobsDirName := range []string{"extraction_jobs", "character_jobs"} {
 		indexPath := filepath.Join(stateDir, jobsDirName, "index", novelID+".yaml")
 		if deleted, err := removeIfExists(indexPath); err != nil {

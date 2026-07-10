@@ -15,6 +15,7 @@ type CleanupResult struct {
 	BookmarksDeleted             int `json:"bookmarksDeleted"`
 	CharacterEventsDeleted       int `json:"characterEventsDeleted"`
 	CharacterProfilesDeleted     int `json:"characterProfilesDeleted"`
+	TermProfilesDeleted          int `json:"termProfilesDeleted"`
 	ExtractionJobsDeleted        int `json:"extractionJobsDeleted"`
 	ExtractionJobIndexesDeleted  int `json:"extractionJobIndexesDeleted"`
 	ExtractionCheckpointsDeleted int `json:"extractionCheckpointsDeleted"`
@@ -70,6 +71,9 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 		}
 		if characterResult.EventsDeleted {
 			cleanup.CharacterEventsDeleted += 1
+		}
+		if characterResult.TermProfileDeleted {
+			cleanup.TermProfilesDeleted += 1
 		}
 		if characterResult.JobIndexDeleted {
 			cleanup.ExtractionJobIndexesDeleted += 1

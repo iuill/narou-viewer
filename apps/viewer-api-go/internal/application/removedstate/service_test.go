@@ -72,6 +72,12 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := extractdomain.EnsureStateDirs(stateDir); err != nil {
 		t.Fatalf("extraction EnsureStateDirs returned error: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "term_profiles"), 0o755); err != nil {
+		t.Fatalf("mkdir term profiles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "term_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\nterms: []\n"), 0o644); err != nil {
+		t.Fatalf("write term profile fixture: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character profile fixture: %v", err)
 	}
@@ -118,6 +124,7 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	}
 	if result.CharacterProfilesDeleted != 1 ||
 		result.CharacterEventsDeleted != 1 ||
+		result.TermProfilesDeleted != 1 ||
 		result.ExtractionJobsDeleted != 1 ||
 		result.ExtractionJobIndexesDeleted != 1 ||
 		result.ExtractionCheckpointsDeleted != 1 {

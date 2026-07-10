@@ -59,6 +59,7 @@ type JobWithNovel struct {
 type NovelStatePruneResult struct {
 	ProfileDeleted     bool
 	EventsDeleted      bool
+	TermProfileDeleted bool
 	JobsDeleted        int
 	JobIndexDeleted    bool
 	CheckpointsDeleted int

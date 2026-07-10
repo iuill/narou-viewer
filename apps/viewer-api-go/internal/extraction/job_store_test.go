@@ -112,6 +112,7 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	stateDir := t.TempDir()
 	profileDir := filepath.Join(stateDir, "character_profiles")
 	eventsDir := filepath.Join(stateDir, "character_events")
+	termDir := filepath.Join(stateDir, "term_profiles")
 	checkpointDir := filepath.Join(stateDir, "extraction_jobs", "checkpoints")
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatalf("mkdir profile dir: %v", err)
@@ -119,11 +120,15 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
 		t.Fatalf("mkdir events dir: %v", err)
 	}
+	if err := os.MkdirAll(termDir, 0o755); err != nil {
+		t.Fatalf("mkdir term dir: %v", err)
+	}
 	if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
 	writeFile(t, filepath.Join(profileDir, "novel-1.yaml"), `novel_id: novel-1`)
 	writeFile(t, filepath.Join(eventsDir, "novel-1.yaml"), `novel_id: novel-1`)
+	writeFile(t, filepath.Join(termDir, "novel-1.yaml"), `novel_id: novel-1`)
 	if err := SaveJob(stateDir, "novel-1", Job{JobID: "job-target", RequestedUpToEpisodeIndex: "1", GenerationMode: "heuristic", Status: "completed", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob target returned error: %v", err)
 	}
@@ -138,12 +143,13 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PruneNovelState returned error: %v", err)
 	}
-	if !result.ProfileDeleted || !result.EventsDeleted || result.JobsDeleted != 1 || !result.JobIndexDeleted || result.CheckpointsDeleted != 1 {
+	if !result.ProfileDeleted || !result.EventsDeleted || !result.TermProfileDeleted || result.JobsDeleted != 1 || !result.JobIndexDeleted || result.CheckpointsDeleted != 1 {
 		t.Fatalf("unexpected prune result: %+v", result)
 	}
 	for _, path := range []string{
 		filepath.Join(profileDir, "novel-1.yaml"),
 		filepath.Join(eventsDir, "novel-1.yaml"),
+		filepath.Join(termDir, "novel-1.yaml"),
 		filepath.Join(stateDir, "extraction_jobs", "job-target.yaml"),
 		filepath.Join(stateDir, "extraction_jobs", "index", "novel-1.yaml"),
 		filepath.Join(checkpointDir, "target.json"),
