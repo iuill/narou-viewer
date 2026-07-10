@@ -2,10 +2,12 @@ package extractionruntime
 
 import (
 	"testing"
+	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func TestRuntimeHelperCoverage(t *testing.T) {
@@ -39,6 +41,17 @@ func TestExtractionTimingLogEnvironmentFallback(t *testing.T) {
 	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "0")
 	if extractionTimingLogEnabled() {
 		t.Fatal("new timing setting should take precedence")
+	}
+}
+
+func TestRuntimeUsesInjectedExtractionLogger(t *testing.T) {
+	called := false
+	runtime := NewRuntime(RuntimeDependencies{Logger: func(stage string, _ time.Time, fields ...any) {
+		called = stage == "test" && len(fields) == 2
+	}})
+	runtime.log("test", time.Now(), "count", 1)
+	if !called {
+		t.Fatal("runtime should delegate timing events to the injected logger")
 	}
 }
 
@@ -91,6 +104,16 @@ func TestRuntimeGeneratedStateHelpers(t *testing.T) {
 	seed, processed, ok, err := runtime.LoadGeneratedCharactersBeforeEpisode("novel-1", "2")
 	if err != nil || !ok || processed == nil || len(seed) != 1 {
 		t.Fatalf("LoadGeneratedCharactersBeforeEpisode seed=%+v processed=%v ok=%v err=%v", seed, processed, ok, err)
+	}
+	if err := terms.SaveGeneratedTerms(stateDir, "novel-1", "3", []terms.GeneratedTerm{{
+		Term:               "聖剣",
+		DescriptionHistory: []terms.HistoryVersion{{Text: "王家の剣。", EpisodeIndex: "1"}},
+	}}, nil); err != nil {
+		t.Fatalf("SaveGeneratedTerms returned error: %v", err)
+	}
+	termSeed, termProcessed, termOK, err := runtime.LoadGeneratedTermsBeforeEpisode("novel-1", "2")
+	if err != nil || !termOK || termProcessed == nil || *termProcessed != "3" || len(termSeed) != 1 {
+		t.Fatalf("LoadGeneratedTermsBeforeEpisode seed=%+v processed=%v ok=%v err=%v", termSeed, termProcessed, termOK, err)
 	}
 
 	pending := filterGeneratedUnresolvedMentionsBeforeEpisode([]characters.GeneratedUnresolvedMention{

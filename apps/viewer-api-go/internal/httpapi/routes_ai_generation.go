@@ -993,12 +993,6 @@ func buildGeneratedExtractionPreview(stateDir string, novelID string, upToEpisod
 	})
 }
 
-func buildHeuristicExtractionPreview(novelID string, upToEpisodeIndex string, episodes []characters.HeuristicEpisode, episodeIndexes []string) (characters.SummaryResponse, error) {
-	return buildExtractionPreview(novelID, upToEpisodeIndex, episodeIndexes, func(tempDir string) error {
-		return characters.SaveHeuristicSummary(tempDir, novelID, upToEpisodeIndex, episodes)
-	})
-}
-
 func buildExtractionPreview(novelID string, upToEpisodeIndex string, episodeIndexes []string, writeSummary func(string) error) (characters.SummaryResponse, error) {
 	tempDir, err := os.MkdirTemp("", "narou-viewer-extraction-preview-*")
 	if err != nil {
@@ -1089,10 +1083,6 @@ func (s *Server) extractionInitialUnresolved(novelID string, initialUnresolved .
 	return characters.LoadGeneratedUnresolvedMentions(s.stateDir(), novelID)
 }
 
-func extractionCheckpointHasSnapshot(checkpoint extractionCheckpoint) bool {
-	return appextraction.CheckpointHasSnapshot(checkpoint)
-}
-
 func extractionStateFromAllocator(unresolved []characters.GeneratedUnresolvedMention, allocator *characters.GeneratedCharacterIDAllocator) extractionGenerationState {
 	state := extractionGenerationState{
 		UnresolvedMentions: append([]characters.GeneratedUnresolvedMention{}, unresolved...),
@@ -1152,10 +1142,6 @@ func extractionCheckpointFingerprint(config *store.ResolvedAIGenerationConfig, e
 
 func extractionCheckpointBatchInputs(batches []extractionBatch) []map[string]any {
 	return appextraction.CheckpointBatchInputs(batches)
-}
-
-func extractionCheckpointBatchInput(batch extractionBatch) map[string]any {
-	return appextraction.CheckpointBatchInput(batch)
 }
 
 func (s *Server) extractionCheckpointPath(novelID string, upToEpisodeIndex string) string {
@@ -1378,12 +1364,6 @@ func (s *Server) nextExtractionRuntimeBatch(ctx context.Context, config *store.R
 func (s *Server) extractionRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch) ([]extractionBatch, error) {
 	return extraction.PlanRuntimeBatches(batch, func(candidate extractionBatch) (bool, error) {
 		return extractionBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate)
-	})
-}
-
-func splitOversizedExtractionChunkBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) ([]extractionBatch, error) {
-	return extraction.SplitOversizedChunkBatch(batch, func(candidate extractionBatch) (bool, error) {
-		return extractionBatchFitsContext(ctx, config, novelID, upToEpisodeIndex, knownCharacters, candidate, unresolvedMentions...)
 	})
 }
 

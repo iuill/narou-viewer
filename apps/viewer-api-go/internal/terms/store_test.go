@@ -153,3 +153,43 @@ func TestNormalizeCategory(t *testing.T) {
 		t.Fatal("unknown category should normalize to other")
 	}
 }
+
+func TestMalformedGeneratedTermsPropagatesThroughReadAPIs(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := EnsureStateDirs(stateDir); err != nil {
+		t.Fatalf("EnsureStateDirs returned error: %v", err)
+	}
+	if err := os.WriteFile(profilePath(stateDir, "broken"), []byte("schema_version: ["), 0o644); err != nil {
+		t.Fatalf("write malformed profile: %v", err)
+	}
+	if _, _, _, err := LoadGeneratedTerms(stateDir, "broken"); err == nil {
+		t.Fatal("LoadGeneratedTerms should reject malformed YAML")
+	}
+	if _, _, _, err := LoadGeneratedTermsAtOrBefore(stateDir, "broken", "1"); err == nil {
+		t.Fatal("LoadGeneratedTermsAtOrBefore should propagate malformed YAML")
+	}
+	if _, _, _, err := LoadGeneratedTermsBeforeEpisode(stateDir, "broken", "1"); err == nil {
+		t.Fatal("LoadGeneratedTermsBeforeEpisode should propagate malformed YAML")
+	}
+	if _, err := BuildResponse(stateDir, "broken", "1", "1"); err == nil {
+		t.Fatal("BuildResponse should propagate malformed YAML")
+	}
+}
+
+func TestTermStoreBoundaryHelperEdges(t *testing.T) {
+	if got := compareEpisode("alpha", "beta"); got >= 0 {
+		t.Fatalf("compareEpisode fallback = %d, want negative", got)
+	}
+	if got := minEpisode("", " 2 "); got != "2" {
+		t.Fatalf("minEpisode empty left = %q", got)
+	}
+	if got := minEpisode("2", ""); got != "2" {
+		t.Fatalf("minEpisode empty right = %q", got)
+	}
+	if valueOrEmpty(nil) != "" {
+		t.Fatal("valueOrEmpty(nil) should be empty")
+	}
+	if stringPointer("  ") != nil {
+		t.Fatal("stringPointer(blank) should be nil")
+	}
+}
