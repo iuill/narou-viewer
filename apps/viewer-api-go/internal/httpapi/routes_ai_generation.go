@@ -661,11 +661,11 @@ func (s *Server) parseExtractionRequestOptions(body map[string]any) (extractionR
 	if rawStrategy, exists := body["generationStrategy"]; exists {
 		strategy, ok := rawStrategy.(string)
 		if !ok {
-			return options, "キャラクター一覧生成方式が不正です。"
+			return options, "抽出方式が不正です。"
 		}
 		normalized := appextraction.NormalizeGenerationStrategy(strategy)
 		if strings.TrimSpace(strategy) != "" && normalized != strings.TrimSpace(strategy) {
-			return options, "キャラクター一覧生成方式が不正です。"
+			return options, "抽出方式が不正です。"
 		}
 		options.GenerationStrategy = normalized
 	}
@@ -1061,7 +1061,7 @@ func loadRequiredExtractionPreview(stateDir string, novelID string, upToEpisodeI
 		return characters.SummaryResponse{}, err
 	}
 	if !ok {
-		return characters.SummaryResponse{}, errors.New("character summary preview could not be built")
+		return characters.SummaryResponse{}, errors.New("extraction preview could not be built")
 	}
 	return summary, nil
 }

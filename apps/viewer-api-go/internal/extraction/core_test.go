@@ -485,9 +485,13 @@ func TestExtractionRubyTermCandidatesAndCharacterNameFiltering(t *testing.T) {
 
 	incoming := []terms.GeneratedTerm{
 		{Term: "アリス", DescriptionHistory: []terms.HistoryVersion{{Text: "人物名", EpisodeIndex: "1"}}},
+		{Term: "謎の少女", DescriptionHistory: []terms.HistoryVersion{{Text: "人物の旧称", EpisodeIndex: "1"}}},
 		{Term: "聖剣", DescriptionHistory: []terms.HistoryVersion{{Text: "武器", EpisodeIndex: "1"}}},
 	}
-	filtered := FilterAndMergeTermDeltas(nil, incoming, []characters.GeneratedCharacter{{CanonicalName: "アリス"}})
+	filtered := FilterAndMergeTermDeltas(nil, incoming, []characters.GeneratedCharacter{{
+		CanonicalName: "アリス",
+		NameHistory:   []characters.GeneratedTextVersion{{Text: "謎の少女", EpisodeIndex: "1"}},
+	}})
 	if len(filtered) != 1 || filtered[0].Term != "聖剣" {
 		t.Fatalf("character names must be removed from term deltas: %+v", filtered)
 	}

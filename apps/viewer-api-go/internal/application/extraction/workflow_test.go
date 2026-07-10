@@ -35,6 +35,8 @@ type workflowFakePorts struct {
 	loadedPreview     bool
 	recordedUsage     []ai.UsageRun
 	generateErr       error
+	saveGeneratedErr  error
+	saveTermsErr      error
 	generateErrAfter  int
 	parallelCalls     int
 	planErr           error
@@ -184,13 +186,13 @@ func (p *workflowFakePorts) DeleteCheckpoint(string, string) error {
 func (p *workflowFakePorts) SaveGeneratedSummary(_ string, _ string, _ []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ characters.SaveGeneratedSummaryOptions) error {
 	p.saveGenerated = true
 	p.generatedEpisodes = append([]characters.HeuristicEpisode{}, episodes...)
-	return nil
+	return p.saveGeneratedErr
 }
 
 func (p *workflowFakePorts) SaveGeneratedTerms(_ string, _ string, generated []terms.GeneratedTerm, _ string) error {
 	p.saveTerms = true
 	p.seedTerms = append([]terms.GeneratedTerm{}, generated...)
-	return nil
+	return p.saveTermsErr
 }
 
 func (p *workflowFakePorts) BuildGeneratedPreview(_ string, _ string, _ []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ []string, _ characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
@@ -583,5 +585,39 @@ func TestWorkflowGenerateAndSaveRecordsFailedUsage(t *testing.T) {
 	run := ports.recordedUsage[0]
 	if run.Status != "failed" || run.ErrorMessage == nil || *run.ErrorMessage != "provider failed" {
 		t.Fatalf("failed usage run = %+v", run)
+	}
+}
+
+func TestWorkflowTermsSaveFailureStopsBeforeCharacterSaveAndKeepsCheckpoint(t *testing.T) {
+	ports := &workflowFakePorts{
+		settings:     ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},
+		config:       &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"},
+		inputs:       workflowInputs(),
+		saveTermsErr: errors.New("term save failed"),
+	}
+
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	if !errors.Is(err, ports.saveTermsErr) {
+		t.Fatalf("GenerateAndSave error = %v, want term save failure", err)
+	}
+	if !ports.saveTerms || ports.saveGenerated || ports.removedCheckpoint {
+		t.Fatalf("term failure must stop character save and retain checkpoint: %+v", ports)
+	}
+}
+
+func TestWorkflowCharacterSaveFailureKeepsCheckpointAfterTermsSave(t *testing.T) {
+	ports := &workflowFakePorts{
+		settings:         ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},
+		config:           &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"},
+		inputs:           workflowInputs(),
+		saveGeneratedErr: errors.New("character save failed"),
+	}
+
+	_, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "1", nil, "", nil)
+	if !errors.Is(err, ports.saveGeneratedErr) {
+		t.Fatalf("GenerateAndSave error = %v, want character save failure", err)
+	}
+	if !ports.saveTerms || !ports.saveGenerated || ports.removedCheckpoint {
+		t.Fatalf("character failure must occur after terms save and retain checkpoint: %+v", ports)
 	}
 }

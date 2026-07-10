@@ -77,7 +77,7 @@ func (r *Runtime) generateOpenRouterBatch(ctx context.Context, config *store.Res
 		return extractionBatchResult{}, err
 	}
 	if maxTokens < extractionMinimumCompletionTokens {
-		return extractionBatchResult{}, fmt.Errorf("OpenRouter request has only %d output tokens available for character summary; at least %d are required.", maxTokens, extractionMinimumCompletionTokens)
+		return extractionBatchResult{}, fmt.Errorf("OpenRouter request has only %d output tokens available for extraction; at least %d are required.", maxTokens, extractionMinimumCompletionTokens)
 	}
 	stageStartedAt = time.Now()
 	result, err := ai.GenerateOpenRouterChat(ctx, ai.OpenRouterConfig{

@@ -12,7 +12,7 @@ export const apiContractVersion = "1";
 export const apiContractVersionHeader = "x-narou-viewer-api-contract-version";
 export const apiClientBuildHeader = "x-narou-viewer-client-build";
 
-export function createApiContractHeaders(clientBuild = "character-summary-experiment") {
+export function createApiContractHeaders(clientBuild = "extraction-experiment") {
   return {
     [apiContractVersionHeader]: apiContractVersion,
     [apiClientBuildHeader]: clientBuild,
@@ -314,7 +314,7 @@ function joinNonEmpty(values, separator = ", ") {
     .join(separator);
 }
 
-export function renderCharacterSummaryMarkdown(execution) {
+export function renderExtractionMarkdown(execution) {
   const result = execution.result;
   const lines = [
     `# ${execution.profileLabel ?? execution.profileId}`,
@@ -323,6 +323,7 @@ export function renderCharacterSummaryMarkdown(execution) {
     `- profileId: ${execution.profileId}`,
     `- processedUpToEpisodeIndex: ${result.processedUpToEpisodeIndex}`,
     `- characterCount: ${Array.isArray(result.characters) ? result.characters.length : 0}`,
+    `- termCount: ${Array.isArray(result.terms) ? result.terms.length : 0}`,
   ];
 
   if (execution.batchTimings.length > 0) {
@@ -359,6 +360,13 @@ export function renderCharacterSummaryMarkdown(execution) {
       lines.push(`- summary: ${character.summary}`);
     }
     lines.push("");
+  }
+
+  lines.push("## Terms", "");
+  for (const term of Array.isArray(result.terms) ? result.terms : []) {
+    lines.push(`### ${term.term}`, "");
+    if (term.reading) lines.push(`- reading: ${term.reading}`);
+    lines.push(`- category: ${term.category}`, `- description: ${term.description}`, "");
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

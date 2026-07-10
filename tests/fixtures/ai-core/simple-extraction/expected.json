@@ -15,6 +15,7 @@
   ],
   "heuristicResult": {
     "processedUpToEpisodeIndex": "3",
+    "terms": [],
     "characters": [
       {
         "characterId": "char_60f8b911bf12",
@@ -65,7 +66,7 @@
             "subchapter": null,
             "chunkIndex": 1,
             "chunkCount": 1,
-            "text": "アリスは銀髪の少女だ。アリスは主人公の仲間だ。 剣城瑛人は旅に出た。"
+            "text": "アリスは銀髪の少女だ。アリスは主人公の仲間だ。 剣城《ツルギ》瑛人《エイト》は旅に出た。"
           },
           {
             "episodeIndex": "2",

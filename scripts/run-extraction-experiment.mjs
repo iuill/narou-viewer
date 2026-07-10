@@ -15,7 +15,7 @@ import {
   readNdjsonStream,
   readNamedStringListFile,
   readResponseDetail,
-  renderCharacterSummaryMarkdown,
+  renderExtractionMarkdown,
   requireOption,
   sanitizeFileName,
   sha256Hex,
@@ -23,11 +23,11 @@ import {
   writeJsonAtomic,
   writeTextAtomic,
   writeYamlAtomic,
-} from "./character-summary-experiment-lib.mjs";
+} from "./extraction-experiment-lib.mjs";
 
 function printHelp() {
   console.log(`Usage:
-  bun run experiment:character-summary:run -- \\
+  bun run experiment:extraction:run -- \\
     --novel-id <novelId> \\
     --up-to-episode-index <episodeIndex> \\
     [--profile <profileIdOrLabel> ...] \\
@@ -48,11 +48,11 @@ function printHelp() {
     [--fail-fast]
 
 Examples:
-  bun run experiment:character-summary:run -- --novel-id n1234xx --up-to-episode-index 18 --profile default
-  bun run experiment:character-summary:run -- --novel-id n1234xx --up-to-episode-index 18 --profiles-file .tmp/profiles.yaml
-  bun run experiment:character-summary:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --model anthropic/claude-3.7-sonnet
-  bun run experiment:character-summary:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --model anthropic/claude-haiku-4.5 --concurrency 3
-  bun run experiment:character-summary:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --system-prompt-file prompts/character-summary-v2.txt`);
+  bun run experiment:extraction:run -- --novel-id n1234xx --up-to-episode-index 18 --profile default
+  bun run experiment:extraction:run -- --novel-id n1234xx --up-to-episode-index 18 --profiles-file .tmp/profiles.yaml
+  bun run experiment:extraction:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --model anthropic/claude-3.7-sonnet
+  bun run experiment:extraction:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --model anthropic/claude-haiku-4.5 --concurrency 3
+  bun run experiment:extraction:run -- --novel-id n1234xx --up-to-episode-index 18 --model openai/gpt-4.1-mini --system-prompt-file prompts/extraction-v2.txt`);
 }
 
 function normalizeApiBaseUrl(input) {
@@ -244,7 +244,7 @@ function createInitialManifest({
 }) {
   return {
     runId,
-    experimentType: "character-summary",
+    experimentType: "extraction",
     createdAt: new Date().toISOString(),
     updatedAt: null,
     finishedAt: null,
@@ -328,7 +328,7 @@ async function run() {
   const allowFallbacksOverride =
     values["allow-fallbacks"] === undefined ? undefined : getBooleanOption(values, "allow-fallbacks", false);
   const outputDir = toAbsolutePath(getStringOption(values, "output-dir", "data/ai-experiments/runs"));
-  const runId = getStringOption(values, "run-id", createRunId("character-summary", requestedNovelId, upToEpisodeIndex));
+  const runId = getStringOption(values, "run-id", createRunId("extraction", requestedNovelId, upToEpisodeIndex));
 
   const requestedProfiles = getRepeatableOption(values, "profile", "profile-id");
   const profilesFile = getStringOption(values, "profiles-file", null);
@@ -628,7 +628,7 @@ async function run() {
       };
 
       await writeJsonAtomic(rawFile, rawPayload);
-      await writeTextAtomic(markdownFile, renderCharacterSummaryMarkdown(rawPayload));
+      await writeTextAtomic(markdownFile, renderExtractionMarkdown(rawPayload));
 
       executionRecord.status = "completed";
       executionRecord.finishedAt = new Date().toISOString();
@@ -637,6 +637,7 @@ async function run() {
       executionRecord.characterCount = Array.isArray(streamState.result.characters)
         ? streamState.result.characters.length
         : 0;
+      executionRecord.termCount = Array.isArray(streamState.result.terms) ? streamState.result.terms.length : 0;
       executionRecord.processedUpToEpisodeIndex = streamState.result.processedUpToEpisodeIndex;
     } catch (error) {
       executionRecord.status = "failed";

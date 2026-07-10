@@ -63,7 +63,7 @@ flowchart LR
 | `viewer-api-e2e`            | E2E 用 API                                                     | `18080`            | リポジトリ bind mount                 | `viewer-dev` 起動時に常駐。`viewer-api` を起動                             |
 | `viewer-web-e2e`            | E2E 用 web                                                     | `15173`            | リポジトリ bind mount                 | `viewer-dev` 起動時に常駐。workspace の Bun 依存導入後に dev server を開始 |
 
-`viewer-api` はキャラクター一覧生成と読書AI応答を process 内で扱う。HTTP 層は request / response / streaming event の変換に留め、読書AIの agent loop・tool 実行・usage 記録とキャラクター一覧生成 job の状態遷移は application service が担う。
+`viewer-api` は人物・用語抽出と読書AI応答を process 内で扱う。HTTP 層は request / response / streaming event の変換に留め、読書AIの agent loop・tool 実行・usage 記録と抽出 job の状態遷移は application service が担う。
 
 `data_e2e` は E2E 専用の作業コピーとして扱い、通常のテスト実行では `data/` から再生成しない。git 管理する fixture 正本は `tests/fixtures/e2e/` に置き、初期化時に `data_e2e` へ展開する。fixture の初期化や明示的な再生成手順は `README.md` に記載する。
 
@@ -145,9 +145,11 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
   - reader API/UI 向けの materialized view。削除や破損時は AI 生成分について `character_events` から再構築できる。
   - 再構築は events の processed index が現在の profile 以上の場合だけ行い、より新しい heuristic profile を古い AI events で巻き戻さない。
   - AI 生成分の保存、materialize、クリアは小説単位で直列化し、正本と materialized view の逆転を避ける。
-- `state/character_jobs/*.yaml`
-- `state/character_jobs/index/*.yaml`
-- `state/character_jobs/checkpoints/*.json`
+- `state/term_profiles/*.yaml`
+  - reader API/UI 向けの用語履歴。公開時は character commit frontier 以下に制限する。
+- `state/extraction_jobs/*.yaml`
+- `state/extraction_jobs/index/*.yaml`
+- `state/extraction_jobs/checkpoints/*.json`
 - `state/ai_usage.sqlite`
   - 読書AIなどの AI 利用統計を run / request 単位で保持する派生統計。
   - 会話・tool request/result・provider response 由来の分析用 snapshot も保存するが、API キーなど credentials は保存前に redaction する。

@@ -3287,7 +3287,7 @@ func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
-	if !strings.Contains(response["error"].(string), "OpenRouter response did not match the expected character summary schema.") {
+	if !strings.Contains(response["error"].(string), "OpenRouter response did not match the expected extraction schema.") {
 		t.Fatalf("unexpected schema mismatch response: %+v", response)
 	}
 	server := handler.(*Server)
@@ -3296,7 +3296,7 @@ func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 		t.Fatalf("failed playground preview usage run should be saved: ok=%v usage=%+v err=%v", ok, usage, err)
 	}
 	run := usage.Runs[0]
-	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "OpenRouter response did not match the expected character summary schema.") {
+	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "OpenRouter response did not match the expected extraction schema.") {
 		t.Fatalf("failed playground preview usage should preserve the generation error: %+v", run)
 	}
 }

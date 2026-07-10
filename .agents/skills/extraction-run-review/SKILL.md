@@ -1,11 +1,11 @@
 ---
-name: character-summary-run-review
-description: Use when reviewing saved character-summary experiment runs that are synthetic, self-authored, or explicitly licensed for repository-safe analysis.
+name: extraction-run-review
+description: Use when reviewing saved extraction experiment runs that are synthetic, self-authored, or explicitly licensed for repository-safe analysis.
 ---
 
-# Character Summary Run Review
+# Extraction Run Review
 
-この skill は、保存済みの `character-summary` 実験 run を安全にレビューするための手順です。
+この skill は、保存済みの `extraction` 実験 run を安全にレビューするための手順です。
 既定では外部 API を追加で呼ばず、現在のセッションで比較・分析します。
 
 ## 入力データと保存物の制約

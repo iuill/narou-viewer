@@ -416,7 +416,7 @@ func PlanRuntimeBatch(template Batch, chunks []Chunk, fits BatchFitFunc) (Batch,
 			return Batch{}, nil, err
 		}
 		if len(split) == 0 {
-			return Batch{}, nil, errors.New("character summary batch split returned no chunks")
+			return Batch{}, nil, errors.New("extraction batch split returned no chunks")
 		}
 		remaining := []Chunk{}
 		for _, batch := range split[1:] {
@@ -501,7 +501,7 @@ func SplitOversizedChunkBatch(batch Batch, fits BatchFitFunc) ([]Batch, error) {
 	chunk := batch.Chunks[0]
 	runes := []rune(chunk.Text)
 	if len(runes) <= 1 {
-		return nil, fmt.Errorf("character summary batch cannot fit in model context even after splitting: episodeIndex=%s", chunk.EpisodeIndex)
+		return nil, fmt.Errorf("extraction batch cannot fit in model context even after splitting: episodeIndex=%s", chunk.EpisodeIndex)
 	}
 	mid := len(runes) / 2
 	if mid < 1 {
@@ -930,7 +930,7 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		return Delta{}, errors.New("OpenRouter response was not valid JSON.")
 	}
 	if payload.Characters == nil && payload.NewCharacters == nil && payload.CharacterUpdates == nil {
-		return Delta{}, errors.New("OpenRouter response did not match the expected character summary schema.")
+		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema.")
 	}
 	if payload.Terms == nil || string(payload.Terms) == "null" {
 		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema: terms is required.")

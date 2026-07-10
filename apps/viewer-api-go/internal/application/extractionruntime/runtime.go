@@ -226,7 +226,7 @@ func (r *Runtime) LoadInputs(ctx context.Context, novelID string, upToEpisodeInd
 		return appextraction.Inputs{}, err
 	}
 	if toc == nil {
-		return appextraction.Inputs{}, errors.New("character summary generation target novel was not found")
+		return appextraction.Inputs{}, errors.New("extraction target novel was not found")
 	}
 	afterEpisodeIndex = strings.TrimSpace(afterEpisodeIndex)
 	episodes := []characters.HeuristicEpisode{}
@@ -243,7 +243,7 @@ func (r *Runtime) LoadInputs(ctx context.Context, novelID string, upToEpisodeInd
 			return appextraction.Inputs{}, err
 		}
 		if episode == nil {
-			return appextraction.Inputs{}, errors.New("character summary generation could not load episode bodies")
+			return appextraction.Inputs{}, errors.New("extraction could not load episode bodies")
 		}
 		input := core.EpisodeInput{
 			EpisodeIndex:   episode.EpisodeIndex,
@@ -568,7 +568,7 @@ func loadRequiredExtractionPreview(stateDir string, novelID string, upToEpisodeI
 		return characters.SummaryResponse{}, err
 	}
 	if !ok {
-		return characters.SummaryResponse{}, errors.New("character summary preview could not be built")
+		return characters.SummaryResponse{}, errors.New("extraction preview could not be built")
 	}
 	return summary, nil
 }

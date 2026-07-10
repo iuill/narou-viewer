@@ -15,7 +15,7 @@
   - `services/novel-fetcher`: 取得 sidecar
 - 共有ランタイムデータは `data/` 配下に置く。`data/` は runtime / private analysis data であり、第三者作品由来の本文、raw HTML、画像、model output を repository に保存しない。
 - アーキテクチャとデータ境界は `docs/architecture.md` に記載されている。
-- 機能別仕様は `docs/character-summary.md`、`docs/publication-info.md`、`docs/reader-ai-assistant.md`、`docs/state-schema-policy.md` などに記載されている。
+- 機能別仕様は `docs/extraction.md`、`docs/publication-info.md`、`docs/reader-ai-assistant.md`、`docs/state-schema-policy.md` などに記載されている。
 - ドキュメント索引は `docs/README.md` を参照する。
 - エージェント向けの反復手順は `.agents/skills/` 配下に置き、人間向けの正本を置き換えない。
 - `.github/skills` は `.agents/skills` への symlink 生成先として扱い、正本にはしない。

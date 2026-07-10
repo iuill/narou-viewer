@@ -367,14 +367,38 @@ async function writeTermProfilesFixture() {
     if (!novelId || typeof row.episode_index !== "string" || row.episode_index.length === 0) {
       continue;
     }
+    const isTermListFixture = row.site_work_id === "n3234ab";
+    const isPartialWriteFixture = row.site_work_id === "n5234ab";
+    const processedEpisodeIndex = isPartialWriteFixture ? "2" : row.episode_index;
+    const generatedTerms = isTermListFixture
+      ? [
+          {
+            term: "星見の塔",
+            reading_history: [{ text: "ほしみのとう", episode_index: row.episode_index }],
+            category_history: [{ category: "place", episode_index: row.episode_index }],
+            description_history: [
+              { text: "夜空を観測するための合成 fixture の塔。", episode_index: row.episode_index },
+            ],
+          },
+        ]
+      : isPartialWriteFixture
+        ? [
+            {
+              term: "未確定の未来語",
+              reading_history: [],
+              category_history: [{ category: "other", episode_index: "2" }],
+              description_history: [{ text: "character frontier より先行した履歴。", episode_index: "2" }],
+            },
+          ]
+        : [];
     const profilePath = path.join(termProfilesDir, `${novelId}.yaml`);
     await fs.writeFile(
       profilePath,
       stringify({
         schema_version: 1,
         novel_id: novelId,
-        processed_up_to_episode_index: row.episode_index,
-        terms: [],
+        processed_up_to_episode_index: processedEpisodeIndex,
+        terms: generatedTerms,
       }),
       "utf8",
     );

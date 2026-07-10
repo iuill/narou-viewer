@@ -16,7 +16,7 @@
     "audit:go:module-age": "GO_MODULE_AGE_ALLOWLIST='golang.org/x/net@v0.55.0 golang.org/x/sys@v0.45.0 modernc.org/sqlite@v1.52.0' bun ./scripts/audit-go-module-age.mjs",
     "dev": "concurrently -k -n api,web \"VIEWER_API_GO_ADDR=:8080 VIEWER_API_DEV_CORS=1 bun run dev:api-go\" \"bun run dev:web\"",
     "dev:web": "bun run --filter @narou-viewer/viewer-web dev",
-    "experiment:character-summary:run": "bun ./scripts/run-with-root-env.mjs bun ./scripts/run-character-summary-experiment.mjs",
+    "experiment:extraction:run": "bun ./scripts/run-with-root-env.mjs bun ./scripts/run-extraction-experiment.mjs",
     "lint": "bun run lint:markdown && bun run lint:shell && bun run lint:code && bun run format:check",
     "lint:markdown": "markdownlint-cli2 \"AGENTS.md\" \"README*.md\" \"docs/**/*.md\" \".agents/skills/**/*.md\"",
     "lint:shell": "bash ./scripts/lint-shellcheck.sh",
