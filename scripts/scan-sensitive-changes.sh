@@ -25,6 +25,24 @@ run_betterleaks() {
     "$betterleaks" "$@"
 }
 
+scan_message_file() {
+  local message_file="$1"
+  [[ -f "$message_file" ]] || {
+    echo "commit message file が見つかりません: $message_file" >&2
+    return 1
+  }
+  bash ./scripts/check-sensitive-content.sh <"$message_file"
+  run_betterleaks stdin --redact=100 --no-banner <"$message_file"
+}
+
+scan_commit_messages() (
+  local message_file
+  message_file="$(mktemp)"
+  trap 'rm -f "$message_file"' EXIT
+  git log --format=%B "$@" >"$message_file"
+  scan_message_file "$message_file"
+)
+
 check_added_content() {
   awk '
     /^diff --/ { in_hunk = 0; next }
@@ -40,6 +58,7 @@ scan_range() {
   git log --diff-merges=remerge --no-renames --format= --name-only --diff-filter=ACMR -z "$range" |
     bash ./scripts/check-sensitive-paths.sh --stdin0
   git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" | check_added_content
+  scan_commit_messages "$range"
   run_betterleaks git --git-workers=1 --redact=100 --no-banner --log-opts="$log_opts" .
 }
 
@@ -49,6 +68,10 @@ case "$mode" in
       bash ./scripts/check-sensitive-paths.sh --stdin0
     git diff --cached --unified=0 --no-ext-diff --no-color | check_added_content
     run_betterleaks git --staged --redact=100 --no-banner .
+    ;;
+  message)
+    [[ $# -eq 2 ]] || { echo "usage: $0 message <message-file>" >&2; exit 2; }
+    scan_message_file "$2"
     ;;
   range)
     [[ $# -eq 3 ]] || { echo "usage: $0 range <base> <head>" >&2; exit 2; }
@@ -66,6 +89,7 @@ case "$mode" in
         git log --diff-merges=remerge --format= -p --unified=0 --no-color \
           "$local_sha" --not --remotes="$remote_name" |
           check_added_content
+        scan_commit_messages "$local_sha" --not --remotes="$remote_name"
       else
         range="$remote_sha..$local_sha"
         log_opts="--diff-merges=remerge $range"
@@ -73,6 +97,7 @@ case "$mode" in
           bash ./scripts/check-sensitive-paths.sh --stdin0
         git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" |
           check_added_content
+        scan_commit_messages "$range"
       fi
       run_betterleaks git --git-workers=1 --redact=100 --no-banner --log-opts="$log_opts" .
     done
@@ -80,11 +105,12 @@ case "$mode" in
   history)
     git log --all --diff-merges=remerge --format= --name-only -z |
       bash ./scripts/check-sensitive-paths.sh --stdin0
+    scan_commit_messages --all
     run_betterleaks git --git-workers=1 --redact=100 --no-banner \
       --log-opts="--diff-merges=remerge --all" .
     ;;
   *)
-    echo "usage: $0 {staged|pre-push <remote>|range <base> <head>|history}" >&2
+    echo "usage: $0 {staged|message <message-file>|pre-push <remote>|range <base> <head>|history}" >&2
     exit 2
     ;;
 esac

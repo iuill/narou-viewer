@@ -11,7 +11,7 @@ description: Use when changing code in narou-viewer and you need to choose or ru
 
 - 作業開始時に `git config --get core.hooksPath` を確認する。Dev Container で `.githooks` でなければ post-create の警告と既存設定を確認し、Dev Container 外なら Betterleaks 導入後に `bash scripts/install-git-hooks.sh` を実行する。
 - commit / push 前の検査を `--no-verify` で回避しない。CI 相当の全履歴検査が必要なら `bun run security:scan:history` を実行し、検出値を報告へ転記しない。
-- Git hook または機微情報 scanner を変更したら `bun run test:security` も実行する。
+- Git hook、commit message検査、trusted PR event解決、または機微情報scannerを変更したら`bun run test:security`も実行する。
 - コードを変更したら、`bun run lint` の実行を必須とする。
 - コードを変更したら、まず `bun run lint` を実行し、その後に高速テスト、最後に build、原則として E2E を検討する。
 - `services/novel-fetcher` を変更した場合は、Go 標準ツールチェーンの薄い入口として `bun run verify:novel-fetcher` も実行する。これは `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` の alias であり、Go を Bun workspace package として扱うものではない。

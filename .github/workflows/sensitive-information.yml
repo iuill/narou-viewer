@@ -4,44 +4,93 @@ on:
   pull_request_target:
     branches:
       - main
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
   pull-requests: read
+  statuses: write
 
 concurrency:
-  group: sensitive-information-${{ github.event.pull_request.number }}
+  group: sensitive-information-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   scan:
     name: trusted sensitive information
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      - name: Checkout trusted base revision
+      - name: Checkout trusted default-branch scanner
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: main
           fetch-depth: 0
+
+      - name: Resolve current pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/resolve-pull-request-event.sh
+
+      - name: Mark current head scan as pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/update-sensitive-status.sh "${{ steps.pr.outputs.head_sha }}" pending "機微情報を検査中"
 
       - name: Fetch pull request head object without checkout
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: git fetch --no-tags origin "pull/${PR_NUMBER}/head"
 
       - name: Run trusted sensitive information regression tests
+        id: regression
+        continue-on-error: true
         run: bash ./scripts/test-sensitive-information-checks.sh
 
       - name: Scan pull request commits with trusted scanner
+        id: commits
+        continue-on-error: true
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: bash ./scripts/scan-sensitive-changes.sh range "$BASE_SHA" "$HEAD_SHA"
 
       - name: Scan pull request description and comments
+        id: metadata
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: bash ./scripts/scan-pull-request-content.sh "$PR_URL"
+
+      - name: Publish trusted result for the current head
+        if: always() && steps.pr.outputs.head_sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCANNED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
+          COMMITS_OUTCOME: ${{ steps.commits.outcome }}
+          METADATA_OUTCOME: ${{ steps.metadata.outcome }}
+        run: |
+          current_output="$(mktemp)"
+          GITHUB_OUTPUT="$current_output" bash ./scripts/resolve-pull-request-event.sh
+          current_head_sha="$(sed -n 's/^head_sha=//p' "$current_output")"
+          if [[ "$current_head_sha" != "$SCANNED_HEAD_SHA" ]]; then
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" error "新しいheadへ更新されたため結果を破棄"
+            exit 1
+          fi
+          if [[ "$REGRESSION_OUTCOME" == "success" && "$COMMITS_OUTCOME" == "success" && "$METADATA_OUTCOME" == "success" ]]; then
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" success "機微情報は検出されませんでした"
+          else
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" failure "機微情報検査に失敗しました"
+            exit 1
+          fi

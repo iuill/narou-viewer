@@ -18,9 +18,11 @@
 bun run dev
 ```
 
-Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`pre-push` は push 対象 commit を検査し、同じ検査を GitHub Actions でも実行します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
+Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
 
-PR の機微情報検査は `pull_request_target` で default branch 版 scanner だけを実行し、PR head は checkout せず commit object として検査します。Betterleaks の GitHub sourceでPR本文とコメントも検査しますが、read-only tokenだけを渡し、外部 validationは有効にしません。repository ruleset では `trusted sensitive information` check を required に設定してください。通常の `pull_request` CI にも同じ検査を残し、導入直後や設定不備を含む defense in depth として扱います。
+PR の機微情報検査は `pull_request_target` とコメント・レビュー系 event で default branch 版 scanner だけを実行し、PR head は checkout せず commit object として検査します。PR 本文・タイトル・通常コメント・review・diff 上の review comment を追加・編集・削除した場合も、Betterleaks の GitHub source で現在の PR 全体を再検査します。外部 validation は有効にしません。
+
+repository ruleset では、status check 名ではなく `.github/workflows/sensitive-information.yml` を **Require workflows to pass before merging** で指定してください。さらに metadata 変更後も同じ PR head を再評価するため、commit status `trusted-sensitive-information/metadata` も required にし、status の expected source を GitHub Actions に固定してください。workflow は検査開始時に pending、終了時に success または failure を発行し、検査中に head が変わった場合は古い結果を success として発行しません。通常の `pull_request` CI にも同じ検査を残し、導入直後や設定不備を含む defense in depth として扱います。
 
 必要なら先に `.env.sample` を `.env.local` へコピーして値を調整してください。root の `.env.local` が存在する場合、`bun run dev` と各 app の主要 script から自動で読み込みます。シェルや CI で明示した環境変数は `.env.local` より優先されます。
 
