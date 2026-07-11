@@ -1,30 +1,50 @@
 name: Sensitive Information Gate
 
 on:
-  pull_request_target:
-    branches:
-      - main
-    types: [opened, synchronize, reopened, edited]
-  issue_comment:
-    types: [created, edited, deleted]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
-  pull_request_review_comment:
-    types: [created, edited, deleted]
+  workflow_run:
+    workflows: [Sensitive Information Events]
+    types: [completed]
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
-  statuses: write
-
-concurrency:
-  group: sensitive-information-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
 
 jobs:
+  prepare:
+    name: Validate event data
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+
+    steps:
+      - name: Download event data without executing it
+        id: event
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: sensitive-information-event
+          path: event
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Validate pull request number
+        if: steps.event.outcome == 'success'
+        id: validate
+        run: |
+          pr_number="$(tr -d '\r\n' < event/pr-number)"
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+          printf 'pr_number=%s\n' "$pr_number" >> "$GITHUB_OUTPUT"
+
   scan:
     name: trusted sensitive information
-    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
+    needs: prepare
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/sensitive-information-events.yml' &&
+      needs.prepare.outputs.pr_number != '' &&
+      contains(fromJSON('["pull_request_target","issue_comment","pull_request_review","pull_request_review_comment","workflow_dispatch"]'), github.event.workflow_run.event)
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -39,12 +59,20 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash ./scripts/resolve-pull-request-event.sh
+        run: bash ./scripts/resolve-pull-request-number.sh "${{ needs.prepare.outputs.pr_number }}"
+
+      - name: Create secret guard App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.SECRET_GUARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SECRET_GUARD_APP_PRIVATE_KEY }}
 
       - name: Mark current head scan as pending
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash ./scripts/update-sensitive-status.sh "${{ steps.pr.outputs.head_sha }}" pending "機微情報を検査中"
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash ./scripts/update-sensitive-status.sh "${{ steps.pr.outputs.head_sha }}" pending "機微情報を検査中" "$STATUS_TARGET_URL"
 
       - name: Fetch pull request head object without checkout
         env:
@@ -72,25 +100,29 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.url }}
         run: bash ./scripts/scan-pull-request-content.sh "$PR_URL"
 
-      - name: Publish trusted result for the current head
-        if: always() && steps.pr.outputs.head_sha
+      - name: Publish App-authenticated result for the current head
+        if: always() && steps.pr.outputs.head_sha && steps.app-token.outputs.token
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          READ_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           SCANNED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
           REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
           COMMITS_OUTCOME: ${{ steps.commits.outcome }}
           METADATA_OUTCOME: ${{ steps.metadata.outcome }}
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           current_output="$(mktemp)"
-          GITHUB_OUTPUT="$current_output" bash ./scripts/resolve-pull-request-event.sh
+          GH_TOKEN="$READ_TOKEN" GITHUB_OUTPUT="$current_output" bash ./scripts/resolve-pull-request-number.sh "$PR_NUMBER"
           current_head_sha="$(sed -n 's/^head_sha=//p' "$current_output")"
           if [[ "$current_head_sha" != "$SCANNED_HEAD_SHA" ]]; then
-            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" error "新しいheadへ更新されたため結果を破棄"
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" error "新しいheadへ更新されたため結果を破棄" "$STATUS_TARGET_URL"
             exit 1
           fi
+          bash ./scripts/assert-latest-sensitive-status.sh "$SCANNED_HEAD_SHA" "$STATUS_TARGET_URL"
           if [[ "$REGRESSION_OUTCOME" == "success" && "$COMMITS_OUTCOME" == "success" && "$METADATA_OUTCOME" == "success" ]]; then
-            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" success "機微情報は検出されませんでした"
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" success "機微情報は検出されませんでした" "$STATUS_TARGET_URL"
           else
-            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" failure "機微情報検査に失敗しました"
+            bash ./scripts/update-sensitive-status.sh "$SCANNED_HEAD_SHA" failure "機微情報検査に失敗しました" "$STATUS_TARGET_URL"
             exit 1
           fi

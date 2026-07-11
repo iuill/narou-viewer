@@ -14,6 +14,11 @@ if [[ "${1:-}" == "version" ]]; then
   echo "1.6.1"
   exit 0
 fi
+if [[ "${1:-}" != "--ignore-gitleaks-allow" ]]; then
+  echo "all Betterleaks scans must disable allow markers" >&2
+  exit 1
+fi
+shift
 if [[ "${1:-}" == "git" && " $* " != *" --staged " && " $* " != *"--diff-merges=remerge"* ]]; then
   echo "betterleaks git must receive --diff-merges=remerge" >&2
   exit 1
@@ -26,6 +31,21 @@ if [[ "${1:-}" == "stdin" ]] && grep -q 'SECRET_TEST_TOKEN'; then
   echo "secret detected (redacted)" >&2
   exit 1
 fi
+if [[ "${1:-}" == "git" ]]; then
+  if [[ " $* " == *" --staged "* ]]; then
+    content="$(git diff --cached)"
+  else
+    content="$(git log --all -p)"
+  fi
+  if grep -q 'SECRET_TEST_TOKEN' <<<"$content"; then
+    echo "secret detected (redacted)" >&2
+    exit 1
+  fi
+fi
+if [[ "${1:-}" == "github" && "${FAKE_GITHUB_CONTENT:-}" == *SECRET_TEST_TOKEN* ]]; then
+  echo "secret detected (redacted)" >&2
+  exit 1
+fi
 exit 0
 EOF
 chmod +x "$fake_bin/betterleaks"
@@ -33,6 +53,15 @@ chmod +x "$fake_bin/betterleaks"
 cat >"$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_LATEST_TARGET_URL:-}" ]]; then
+  printf '%s\n' "$FAKE_LATEST_TARGET_URL"
+  exit 0
+fi
+if [[ -n "${EXPECT_STATUS_TARGET_URL:-}" ]]; then
+  [[ " $* " == *" context=trusted-sensitive-information/metadata "* ]]
+  [[ " $* " == *" target_url=${EXPECT_STATUS_TARGET_URL} "* ]]
+  exit 0
+fi
 cat "$FAKE_PR_JSON_FILE"
 EOF
 chmod +x "$fake_bin/gh"
@@ -44,6 +73,14 @@ if PATH="$fake_bin:$PATH" bash "$source_root/scripts/scan-pull-request-content.s
   echo "expected non-GitHub pull request URL to be rejected" >&2
   exit 1
 fi
+for metadata_source in pr-body issue-comment review-comment; do
+  if FAKE_GITHUB_CONTENT="${metadata_source}: SECRET_TEST_TOKEN # betterleaks:allow" \
+    PATH="$fake_bin:$PATH" bash "$source_root/scripts/scan-pull-request-content.sh" \
+    https://github.com/example/repository/pull/123 >/dev/null 2>&1; then
+    echo "expected allow marker in ${metadata_source} to be ignored" >&2
+    exit 1
+  fi
+done
 
 # Every trusted event resolves the PR from the API instead of trusting stale payload metadata.
 pr_json="$tmpdir/pr.json"
@@ -74,6 +111,21 @@ if GITHUB_REPOSITORY=example/repository GITHUB_OUTPUT="$output_file" \
   echo "expected a non-PR issue comment to be skipped" >&2
   exit 1
 fi
+
+status_target="https://github.com/example/repository/actions/runs/123"
+GITHUB_REPOSITORY=example/repository FAKE_LATEST_TARGET_URL="$status_target" \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/assert-latest-sensitive-status.sh" \
+  1111111111111111111111111111111111111111 "$status_target"
+if GITHUB_REPOSITORY=example/repository \
+  FAKE_LATEST_TARGET_URL="https://github.com/example/repository/actions/runs/124" \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/assert-latest-sensitive-status.sh" \
+  1111111111111111111111111111111111111111 "$status_target" >/dev/null 2>&1; then
+  echo "expected a stale metadata scan result to be rejected" >&2
+  exit 1
+fi
+GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/update-sensitive-status.sh" \
+  1111111111111111111111111111111111111111 pending test "$status_target"
 
 new_repo() {
   local repo="$1"
@@ -114,6 +166,30 @@ commit_all() {
 
 public_ip_a="8.8.4.$((2 + 2))"
 public_ip_b="9.9.9.$((8 + 1))"
+
+# betterleaks:allow cannot suppress findings in staged, range, pre-push, or history scans.
+repo="$tmpdir/allow-marker"
+remote="$tmpdir/allow-marker.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+printf 'SECRET_TEST_TOKEN # betterleaks:allow\n' >"$repo/example.txt"
+git -C "$repo" add example.txt
+scan_fails "$repo" staged
+commit_all "$repo" allow-marker
+local_sha="$(git -C "$repo" rev-parse HEAD)"
+zero_sha="0000000000000000000000000000000000000000"
+scan_fails "$repo" range "$base_sha" HEAD
+scan_fails "$repo" history
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
+  scan_passes "$repo" pre-push origin; then
+  echo "expected allow marker in pre-push content to be ignored" >&2
+  exit 1
+fi
 
 # Commit messages are scanned in ranges, including merge messages, and history.
 repo="$tmpdir/commit-messages"

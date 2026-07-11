@@ -20,9 +20,24 @@ bun run dev
 
 Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
 
-PR の機微情報検査は `pull_request_target` とコメント・レビュー系 event で default branch 版 scanner だけを実行し、PR head は checkout せず commit object として検査します。PR 本文・タイトル・通常コメント・review・diff 上の review comment を追加・編集・削除した場合も、Betterleaks の GitHub source で現在の PR 全体を再検査します。外部 validation は有効にしません。
+PR の機微情報検査は権限なしの `.github/workflows/sensitive-information-events.yml` で event と PR 番号を受け、`workflow_run` で起動する default branch 版 scanner へ渡します。後段は PR head を checkout せず commit object として検査します。PR 本文・タイトル・通常コメント・review・diff 上の review comment を追加・編集・削除した場合も、Betterleaks の GitHub source で現在の PR 全体を再検査します。Betterleaks の allow marker と外部 validation は有効にしません。
 
-repository ruleset では、status check 名ではなく `.github/workflows/sensitive-information.yml` を **Require workflows to pass before merging** で指定してください。さらに metadata 変更後も同じ PR head を再評価するため、commit status `trusted-sensitive-information/metadata` も required にし、status の expected source を GitHub Actions に固定してください。workflow は検査開始時に pending、終了時に success または failure を発行し、検査中に head が変わった場合は古い結果を success として発行しません。通常の `pull_request` CI にも同じ検査を残し、導入直後や設定不備を含む defense in depth として扱います。
+後段workflowは専用GitHub Appのinstallation tokenでcommit status `trusted-sensitive-information/metadata`を発行します。PR側workflowはAppの秘密鍵を取得できず、fork PRのevent受付workflowにもsecretを渡しません。検査開始時にpending、終了時にsuccessまたはfailureを発行し、検査中にheadが変わった場合や、同じheadでより新しい検査が始まった場合は古い結果をsuccessとして発行しません。通常の`pull_request` CIにも同じcommit検査を残し、defense in depthとして扱います。
+
+### Secret Guard GitHub App の初期設定
+
+Enterprise限定のRequired Workflowは使用しません。個人accountのDeveloper settingsで、このrepository専用Appを次のように設定します。
+
+1. **Settings > Developer settings > GitHub Apps > New GitHub App** でAppを作成する。
+2. GitHub App nameは一意な名前、Homepage URLはこのrepository URLを指定する。Webhookは不要なので無効にする。
+3. Repository permissionsは **Commit statuses: Read and write** だけを設定し、その他はNo accessのままにする。
+4. App作成後、**Install App**から自分のaccountへinstallし、**Only select repositories**で`narou-viewer`だけを選ぶ。
+5. App設定画面のClient IDをrepository variable `SECRET_GUARD_APP_CLIENT_ID`へ登録する。
+6. App設定画面の**Generate a private key**で`.pem`を一度生成し、その内容全体をrepository secret `SECRET_GUARD_APP_PRIVATE_KEY`へ登録する。秘密鍵ファイルはrepositoryや共有storageへ置かず、secret登録後にlocalから削除する。
+7. このworkflowがdefault branchへ入った後、**Sensitive Information Events** workflowをPR番号付きで手動実行し、App名義のstatusが成功することを確認する。
+8. repository rulesetで`trusted-sensitive-information/metadata`をrequired statusに追加し、expected sourceを作成したGitHub Appに固定する。
+
+Appの秘密鍵を更新する場合は、新しい鍵を先に生成してrepository secretを更新し、手動scanの成功後に古い鍵をApp設定画面から削除します。
 
 必要なら先に `.env.sample` を `.env.local` へコピーして値を調整してください。root の `.env.local` が存在する場合、`bun run dev` と各 app の主要 script から自動で読み込みます。シェルや CI で明示した環境変数は `.env.local` より優先されます。
 

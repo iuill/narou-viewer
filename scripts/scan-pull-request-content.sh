@@ -15,4 +15,4 @@ if [[ "$detected_version" != "$expected_version" ]]; then
   export PATH="${HOME}/.local/bin:${PATH}"
 fi
 
-betterleaks github --redact=100 --no-banner "$pr_url"
+betterleaks --ignore-gitleaks-allow github --redact=100 --no-banner "$pr_url"

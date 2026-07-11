@@ -22,7 +22,7 @@ run_betterleaks() {
   GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0=safe.directory \
     GIT_CONFIG_VALUE_0="$repo_root" \
-    "$betterleaks" "$@"
+    "$betterleaks" --ignore-gitleaks-allow "$@"
 }
 
 scan_message_file() {
