@@ -27,7 +27,8 @@ jobs:
       - name: Scan repository history for sensitive information
         run: bash ./scripts/scan-sensitive-changes.sh history
 
-  audit:
+  dependency-audit:
+    name: Dependency and toolchain audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -49,14 +50,14 @@ jobs:
       - name: Install dependencies
         run: bun run install:locked
 
-      - name: Audit high-severity dependencies
-        run: bun run audit:dependencies
+      - name: Audit Bun dependency vulnerabilities
+        run: bun run audit:bun:vulnerabilities
 
-      - name: Audit Go vulnerabilities
-        run: bun run audit:go
+      - name: Verify Go toolchain consistency
+        run: bun run audit:go:toolchain
+
+      - name: Audit Go dependency vulnerabilities
+        run: bun run audit:go:vulnerabilities
 
       - name: Audit Go module release age
-        env:
-          # Temporary allowlist for security-fix modules; safe to remove after they exceed GO_MINIMUM_RELEASE_AGE_SECONDS.
-          GO_MODULE_AGE_ALLOWLIST: golang.org/x/net@v0.55.0 golang.org/x/sys@v0.45.0
         run: bun run audit:go:module-age
