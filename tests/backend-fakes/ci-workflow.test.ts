@@ -5,8 +5,14 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+const independentAuditCondition = [
+  "$",
+  "{{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}",
+].join("");
 
 type WorkflowStep = {
+  id?: string;
+  if?: string;
   name?: string;
   run?: string;
 };
@@ -24,6 +30,23 @@ type Workflow = {
 function readWorkflow(fileName: string): Workflow {
   return parse(readFileSync(`${repositoryRoot}.github/workflows/${fileName}`, "utf8")) as Workflow;
 }
+
+describe.each(["ci.yml", "ci-branch-push.yml", "security-audit.yml"])(
+  "%s dependency audit",
+  (fileName) => {
+    it("runs every audit after dependency installation even if an earlier audit fails", () => {
+      const auditSteps = readWorkflow(fileName).jobs["dependency-audit"].steps ?? [];
+      const installStep = auditSteps.find((step) => step.id === "install_dependencies_for_audit");
+      const commands = auditSteps.filter((step) => step.run?.startsWith("bun run audit:"));
+
+      expect(installStep?.run).toBe("bun run install:locked");
+      expect(commands).toHaveLength(4);
+      for (const step of commands) {
+        expect(step.if).toBe(independentAuditCondition);
+      }
+    });
+  },
+);
 
 describe.each(["ci.yml", "ci-branch-push.yml"])("%s job boundaries", (fileName) => {
   it("keeps dependency audit parallel and outside service build jobs", () => {

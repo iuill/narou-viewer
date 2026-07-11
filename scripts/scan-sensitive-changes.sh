@@ -179,8 +179,16 @@ case "$mode" in
     ;;
   branch)
     [[ $# -le 2 ]] || { echo "usage: $0 branch [base-ref]" >&2; exit 2; }
+    inferred_base=1
+    [[ -n "${2:-}" ]] && inferred_base=0
     base_ref="$(resolve_branch_base "${2:-}")"
     merge_base="$(git merge-base "$base_ref" HEAD)"
+    commit_count="$(git rev-list --count "$merge_base..HEAD")"
+    printf 'branch scan: base=%s merge-base=%s commits=%s\n' "$base_ref" "$merge_base" "$commit_count" >&2
+    if [[ "$inferred_base" == "1" && "$commit_count" == "0" ]]; then
+      echo "推測したbaseでは走査対象commitがありません。PRのbaseを明示してください: bun run security:scan:branch -- <base-ref>" >&2
+      exit 1
+    fi
     scan_range "$merge_base..HEAD"
     ;;
   pre-push)

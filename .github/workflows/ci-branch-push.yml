@@ -196,18 +196,23 @@ jobs:
             services/novel-fetcher/go.sum
 
       - name: Install dependencies
+        id: install_dependencies_for_audit
         run: bun run install:locked
 
       - name: Audit Bun dependency vulnerabilities
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
         run: bun run audit:bun:vulnerabilities
 
       - name: Verify Go toolchain consistency
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
         run: bun run audit:go:toolchain
 
       - name: Audit Go dependency vulnerabilities
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
         run: bun run audit:go:vulnerabilities
 
       - name: Audit Go module release age
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
         run: bun run audit:go:module-age
 
   api-contract:

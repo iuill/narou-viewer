@@ -10,7 +10,7 @@ description: Use when changing code in narou-viewer and you need to choose or ru
 ## 基本ルール
 
 - 作業開始時に `git config --get core.hooksPath` を確認する。Dev Container で `.githooks` でなければ post-create の警告と既存設定を確認し、Dev Container 外なら Betterleaks 導入後に `bash scripts/install-git-hooks.sh` を実行する。
-- commit / push 前の検査を `--no-verify` で回避しない。通常の commit 前は `bun run security:scan:staged`、PR / push 前は `bun run security:scan:branch` または pre-push hook で現在ブランチだけを検査する。`bun run security:scan:history` は定期 CI、scanner 自体の変更、または明示的な全履歴 audit に限定し、検出値を報告へ転記しない。
+- commit / push 前の検査を `--no-verify` で回避しない。通常の commit 前は `bun run security:scan:staged`、PR / push 前は `bun run security:scan:branch` または pre-push hook で現在ブランチだけを検査する。fork や通常と異なるbaseへPRを出す場合は `bun run security:scan:branch -- upstream/main` のように実際のbase refを明示する。base省略時に走査対象commitが0件なら失敗する。`bun run security:scan:history` は定期 CI、scanner 自体の変更、または明示的な全履歴 audit に限定し、検出値を報告へ転記しない。
 - Git hook、binary blob・commit identity検査、trusted PR event解決、GitHub App status発行、または機微情報scannerを変更したら`bun run test:security`も実行する。
 - コードを変更したら、`bun run lint` の実行を必須とする。
 - コードを変更したら、まず `bun run lint` を実行し、その後に高速テスト、最後に build、原則として E2E を検討する。
