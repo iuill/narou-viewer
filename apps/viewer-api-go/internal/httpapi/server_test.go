@@ -179,6 +179,19 @@ func TestExtractionUsageTokenHelpers(t *testing.T) {
 	}
 }
 
+func TestExtractionPlaygroundParallelStartEmitsBatchStatus(t *testing.T) {
+	event := extractionPlaygroundProgressEvent(extractionBatchProgress{
+		Phase: "parallelStart",
+		Batch: extractionBatch{BatchIndex: 2, BatchCount: 4, EpisodeIndexes: []string{"3"}},
+	})
+	if event == nil || event["type"] != "status" || event["stage"] != "batch" || event["batchIndex"] != 2 || event["batchCount"] != 4 {
+		t.Fatalf("parallelStart event = %+v, want public batch status", event)
+	}
+	if event := extractionPlaygroundProgressEvent(extractionBatchProgress{Phase: "error"}); event != nil {
+		t.Fatalf("error phase should not emit playground progress event: %+v", event)
+	}
+}
+
 func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
 	stateStore := store.New(dataDir)
@@ -3620,11 +3633,11 @@ func TestCharacterJobProgressHelpers(t *testing.T) {
 	if got := formatTimingFields("stage", "load_inputs", "elapsedMs", 12); got != "stage=load_inputs elapsedMs=12" {
 		t.Fatalf("formatTimingFields returned %q", got)
 	}
-	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "")
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "")
 	if extractionTimingLogEnabled() {
 		t.Fatal("character summary timing log should be disabled by default")
 	}
-	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "1")
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "1")
 	if !extractionTimingLogEnabled() {
 		t.Fatal("legacy extraction timing log should be enabled by env")
 	}
@@ -4067,7 +4080,7 @@ func TestRebatchExtractionInputsUsesResolvedBudget(t *testing.T) {
 			},
 		}},
 	}
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", "90")
+	t.Setenv("EXTRACTION_MAX_BATCH_TOKENS", "90")
 	rebatched := rebatchExtractionInputs(context.Background(), inputs, &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-rebatch",
 		ModelID: "openrouter/rebatch-model",
@@ -4357,7 +4370,7 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "1")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "1")
 
 	server := &Server{dataDir: t.TempDir()}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/auto"}

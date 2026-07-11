@@ -11,8 +11,8 @@ import (
 )
 
 func TestExtractionEngineBuildsPromptPreviewChunks(t *testing.T) {
-	t.Setenv("CHARACTER_SUMMARY_MAX_CHUNK_CHARS", "18")
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "35")
+	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "18")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "35")
 	maxChunkChars, maxBatchChars := extractionLimits()
 	alt := "挿絵の人物"
 	title := "人物画"

@@ -482,7 +482,7 @@ func (r *Runtime) log(stage string, startedAt time.Time, fields ...any) {
 }
 
 func extractionTimingLogEnabled() bool {
-	return envWithFallback("VIEWER_EXTRACTION_TIMING_LOG", "VIEWER_CHARACTER_SUMMARY_TIMING_LOG") == "1"
+	return strings.TrimSpace(os.Getenv("VIEWER_EXTRACTION_TIMING_LOG")) == "1"
 }
 
 func FormatTimingFields(fields ...any) string {

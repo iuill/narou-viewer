@@ -54,11 +54,7 @@ const (
 )
 
 func extractionTimingLogEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("VIEWER_EXTRACTION_TIMING_LOG"))
-	if value == "" {
-		value = strings.TrimSpace(os.Getenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG"))
-	}
-	return value == "1"
+	return strings.TrimSpace(os.Getenv("VIEWER_EXTRACTION_TIMING_LOG")) == "1"
 }
 
 func logExtractionTiming(stage string, startedAt time.Time, fields ...any) {
@@ -905,12 +901,11 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request) 
 	startedAt := time.Now()
 	emittedBatchTiming := false
 	options.BatchProgressSink = func(progress extractionBatchProgress) {
-		switch progress.Phase {
-		case "start":
-			_ = writeStreamEvent(playgroundBatchStatusEvent(progress.Batch))
-		case "complete":
+		if progress.Phase == "complete" {
 			emittedBatchTiming = true
-			_ = writeStreamEvent(extractionBatchTimingEvent(progress))
+		}
+		if event := extractionPlaygroundProgressEvent(progress); event != nil {
+			_ = writeStreamEvent(event)
 		}
 	}
 	result, err := s.extractionResult(r.Context(), novelID, upToEpisodeIndex, options)
@@ -1440,6 +1435,17 @@ func playgroundStatusEvent(stage string, message string, progress int, step int)
 		"progress":  progress,
 		"step":      step,
 		"stepCount": 4,
+	}
+}
+
+func extractionPlaygroundProgressEvent(progress extractionBatchProgress) map[string]any {
+	switch progress.Phase {
+	case "start", "parallelStart":
+		return playgroundBatchStatusEvent(progress.Batch)
+	case "complete":
+		return extractionBatchTimingEvent(progress)
+	default:
+		return nil
 	}
 }
 

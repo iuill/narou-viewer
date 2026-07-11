@@ -47,6 +47,7 @@
 ## 移行互換
 
 - settings は `extraction_strategy_models` を保存し、旧 `character_summary_strategy_models` は read fallback のみ行う。
-- 環境変数は `EXTRACTION_*` / `VIEWER_EXTRACTION_TIMING_LOG` を優先し、旧 `CHARACTER_SUMMARY_*` / `VIEWER_CHARACTER_SUMMARY_TIMING_LOG` は read fallback として残す。
+- 環境変数は `EXTRACTION_*` / `VIEWER_EXTRACTION_TIMING_LOG` のみを使用する。旧 `CHARACTER_SUMMARY_*` / `VIEWER_CHARACTER_SUMMARY_TIMING_LOG` を使用している `.env.local` は利用者側で更新する。
 - 起動時に旧 `state/character_jobs` を `state/extraction_jobs` へ best-effort rename し、clear/reset は新旧両方を削除する。
 - 旧 usage row の feature 名は表示互換のため読み取れる。
+- settings / job state の旧名称互換は移行猶予後に [#2](https://github.com/iuill/narou-viewer/issues/2) で削除する。

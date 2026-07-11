@@ -470,7 +470,10 @@ func (r *usageRecorder) UseActualRequests(requests []ai.UsageRequest) {
 	if r == nil || requests == nil {
 		return
 	}
-	r.Requests = requests
+	r.Requests = append([]ai.UsageRequest{}, requests...)
+	for index := range r.Requests {
+		r.Requests[index].RequestIndex = index
+	}
 }
 
 func (r *usageRecorder) Finish(err error) {

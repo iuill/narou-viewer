@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,7 +79,7 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
-	extracted, rawTerms, usageRequests, unresolved, err := r.extractParallelIdentityCandidates(ctx, config, novelID, upToEpisodeIndex, seedTerms, runtimeBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidates(ctx, config, novelID, upToEpisodeIndex, seedTerms, runtimeBatches, progressSink, initialUnresolved)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), usageRequests, err
 	}
@@ -92,6 +93,7 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	if err != nil {
 		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
 	}
+	clusters = mergeParallelIdentityProposalClusters(clusters, candidates, mergeProposals)
 	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, allocator)
 	generated = core.MergeGeneratedCharactersByID(generated)
 	generated = allocator.Assign(generated)
@@ -125,7 +127,7 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), discoveryUsage, err
 	}
-	extracted, rawTerms, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved)
 	usageRequests = append(discoveryUsage, usageRequests...)
 	for index := range usageRequests {
 		usageRequests[index].RequestIndex = index
@@ -144,6 +146,7 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
 	}
+	clusters = mergeParallelIdentityProposalClusters(clusters, candidates, mergeProposals)
 	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, allocator)
 	generated = core.MergeGeneratedCharactersByID(generated)
 	generated = allocator.Assign(generated)
@@ -191,13 +194,14 @@ func renumberParallelIdentityRuntimeBatches(values []extractionBatch) []extracti
 }
 
 type parallelIdentityExtractionResult struct {
-	RequestIndex int
-	Batch        extractionBatch
-	Candidates   []parallelIdentityCandidate
-	Unresolved   []extractionUnresolvedMention
-	Terms        []terms.GeneratedTerm
-	Usage        ai.UsageRequest
-	Err          error
+	RequestIndex   int
+	Batch          extractionBatch
+	Candidates     []parallelIdentityCandidate
+	MergeProposals []core.MergeProposal
+	Unresolved     []extractionUnresolvedMention
+	Terms          []terms.GeneratedTerm
+	Usage          ai.UsageRequest
+	Err            error
 }
 
 type parallelIdentityLLMStartLimiter struct {
@@ -238,7 +242,7 @@ func (l *parallelIdentityLLMStartLimiter) Wait(ctx context.Context) error {
 }
 
 func parallelIdentityLLMConcurrency() int {
-	concurrency := positiveEnvIntWithFallback("EXTRACTION_LLM_CONCURRENCY", "CHARACTER_SUMMARY_LLM_CONCURRENCY", defaultParallelIdentityLLMConcurrency)
+	concurrency := positiveEnvInt("EXTRACTION_LLM_CONCURRENCY", defaultParallelIdentityLLMConcurrency)
 	if concurrency > maxParallelIdentityLLMConcurrency {
 		return maxParallelIdentityLLMConcurrency
 	}
@@ -246,7 +250,7 @@ func parallelIdentityLLMConcurrency() int {
 }
 
 func parallelIdentityLLMStartInterval() time.Duration {
-	raw := envWithFallback("EXTRACTION_LLM_START_INTERVAL_MS", "CHARACTER_SUMMARY_LLM_START_INTERVAL_MS")
+	raw := strings.TrimSpace(os.Getenv("EXTRACTION_LLM_START_INTERVAL_MS"))
 	if raw == "" {
 		return time.Duration(defaultParallelIdentityLLMStartIntervalMS) * time.Millisecond
 	}
@@ -258,11 +262,11 @@ func parallelIdentityLLMStartInterval() time.Duration {
 }
 
 func parallelIdentityMaxReduceItems() int {
-	return positiveEnvIntWithFallback("EXTRACTION_PARALLEL_MAX_REDUCE_ITEMS", "CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_ITEMS", defaultParallelIdentityMaxReduceItems)
+	return positiveEnvInt("EXTRACTION_PARALLEL_MAX_REDUCE_ITEMS", defaultParallelIdentityMaxReduceItems)
 }
 
 func parallelIdentityMaxReduceTokens() int {
-	return positiveEnvIntWithFallback("EXTRACTION_PARALLEL_MAX_REDUCE_TOKENS", "CHARACTER_SUMMARY_PARALLEL_MAX_REDUCE_TOKENS", defaultParallelIdentityMaxReduceTokens)
+	return positiveEnvInt("EXTRACTION_PARALLEL_MAX_REDUCE_TOKENS", defaultParallelIdentityMaxReduceTokens)
 }
 
 func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, run func(context.Context, int) error) error {
@@ -322,11 +326,11 @@ func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, run func(cont
 	return firstErr
 }
 
-func (r *Runtime) extractParallelIdentityCandidates(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
+func (r *Runtime) extractParallelIdentityCandidates(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
 	return r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, nil, knownTerms, batches, progressSink, initialUnresolved)
 }
 
-func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
+func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
 	results := make([]parallelIdentityExtractionResult, len(batches))
 	var sinkMu sync.Mutex
 	completedCount := 0
@@ -352,6 +356,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		if err == nil {
 			extraction.Unresolved = result.Delta.UnresolvedMentions
 			extraction.Terms = result.Delta.Terms
+			extraction.MergeProposals = result.Delta.MergeProposals
 			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
 		}
 		results[index] = extraction
@@ -386,6 +391,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	candidates := []parallelIdentityCandidate{}
 	usageRequests := []ai.UsageRequest{}
 	rawTerms := []terms.GeneratedTerm{}
+	mergeProposals := []core.MergeProposal{}
 	unresolved := append([]characters.GeneratedUnresolvedMention{}, initialUnresolved...)
 	for _, result := range results {
 		if result.Usage.Kind != "" {
@@ -395,13 +401,14 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 			continue
 		}
 		candidates = append(candidates, result.Candidates...)
+		mergeProposals = append(mergeProposals, result.MergeProposals...)
 		unresolved = mergeGeneratedUnresolvedMentions(unresolved, result.Unresolved)
 		rawTerms = append(rawTerms, result.Terms...)
 	}
 	if runErr != nil {
-		return nil, nil, usageRequests, unresolved, runErr
+		return nil, nil, nil, usageRequests, unresolved, runErr
 	}
-	return candidates, rawTerms, usageRequests, unresolved, nil
+	return candidates, rawTerms, mergeProposals, usageRequests, unresolved, nil
 }
 
 func extractionBatchBoundary(batch extractionBatch) string {
@@ -507,6 +514,46 @@ func generatedCharacterMapByID(values []characters.GeneratedCharacter) map[strin
 		if id != "" {
 			result[id] = value
 		}
+	}
+	return result
+}
+
+func mergeParallelIdentityProposalClusters(clusters []parallelIdentityCluster, candidates []parallelIdentityCandidate, proposals []core.MergeProposal) []parallelIdentityCluster {
+	proposalClusters := parallelIdentityProposalClusters(candidates, proposals)
+	if len(proposalClusters) == 0 {
+		return clusters
+	}
+	return mergeOverlappingParallelIdentityClusters(append(clusters, proposalClusters...))
+}
+
+func parallelIdentityProposalClusters(candidates []parallelIdentityCandidate, proposals []core.MergeProposal) []parallelIdentityCluster {
+	localIDsByCharacterID := map[string][]string{}
+	for _, candidate := range candidates {
+		characterID := strings.TrimSpace(candidate.Character.CharacterID)
+		localID := strings.TrimSpace(candidate.LocalID)
+		if characterID == "" || localID == "" {
+			continue
+		}
+		localIDsByCharacterID[characterID] = append(localIDsByCharacterID[characterID], localID)
+	}
+	result := make([]parallelIdentityCluster, 0, len(proposals))
+	for _, proposal := range proposals {
+		sourceID := strings.TrimSpace(proposal.SourceCharacterID)
+		targetID := strings.TrimSpace(proposal.TargetCharacterID)
+		if proposal.Confidence < core.MergeAutoApplyConfidence || sourceID == "" || targetID == "" || sourceID == targetID {
+			continue
+		}
+		sourceLocalIDs := localIDsByCharacterID[sourceID]
+		targetLocalIDs := localIDsByCharacterID[targetID]
+		if len(sourceLocalIDs) == 0 || len(targetLocalIDs) == 0 {
+			continue
+		}
+		localIDs := append(append([]string{}, sourceLocalIDs...), targetLocalIDs...)
+		result = append(result, parallelIdentityCluster{
+			LocalIDs:   normalizeParallelIdentityLocalIDs(localIDs),
+			Confidence: proposal.Confidence,
+			Reason:     strings.TrimSpace(proposal.Reason),
+		})
 	}
 	return result
 }

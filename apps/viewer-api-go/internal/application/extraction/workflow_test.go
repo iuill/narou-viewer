@@ -3,6 +3,7 @@ package extraction
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -274,6 +275,38 @@ func TestWorkflowGenerateAndSaveOpenRouterRecordsUsageAndSaves(t *testing.T) {
 	}
 	if run.ProfileID == nil || *run.ProfileID != "profile-a" {
 		t.Fatalf("usage profile = %#v, want profile-a", run.ProfileID)
+	}
+}
+
+func TestUsageRecorderReindexesRuntimeRequestsBeforePersistence(t *testing.T) {
+	recorder := newUsageRecorder(context.Background(), nil, "test", "novel-a", "2")
+	recorder.UseActualRequests([]ai.UsageRequest{
+		{RequestIndex: 0, Kind: "extraction_batch", TotalTokens: 10},
+		{RequestIndex: 0, Kind: "extraction_batch", TotalTokens: 12},
+	})
+	if len(recorder.Requests) != 2 || recorder.Requests[0].RequestIndex != 0 || recorder.Requests[1].RequestIndex != 1 {
+		t.Fatalf("runtime requests were not reindexed: %+v", recorder.Requests)
+	}
+	dbPath := filepath.Join(t.TempDir(), "ai_usage.sqlite")
+	if err := ai.SaveUsageRun(dbPath, ai.UsageRun{
+		RunID:        "run-split",
+		Feature:      "extraction",
+		WorkflowName: "extraction",
+		Status:       "failed",
+		StartedAt:    "2026-01-01T00:00:00Z",
+		FinishedAt:   "2026-01-01T00:00:01Z",
+		RequestCount: len(recorder.Requests),
+		TotalTokens:  22,
+		Requests:     recorder.Requests,
+	}); err != nil {
+		t.Fatalf("SaveUsageRun returned error: %v", err)
+	}
+	loaded, ok, err := ai.LoadUsageRun(dbPath, "run-split")
+	if err != nil || !ok {
+		t.Fatalf("LoadUsageRun failed: ok=%v err=%v", ok, err)
+	}
+	if len(loaded.Requests) != 2 || loaded.Requests[0].RequestIndex != 0 || loaded.Requests[1].RequestIndex != 1 {
+		t.Fatalf("persisted requests = %+v, want indexes 0,1", loaded.Requests)
 	}
 }
 

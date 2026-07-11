@@ -591,7 +591,7 @@ func readerAssistantErrorMessage(err error) string {
 
 func resolveExtractionBatchBudget(ctx context.Context, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) extractionBatchBudget {
 	fallbackTokens := extraction.TokensFromChars(fallbackMaxBatchChars)
-	if configuredTokens := extraction.PositiveEnvIntWithFallback("EXTRACTION_MAX_BATCH_TOKENS", "CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
+	if configuredTokens := extraction.PositiveEnvInt("EXTRACTION_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
 		return extractionBatchBudget{MaxTextTokens: configuredTokens}
 	}
 	budget := extractionBatchBudget{MaxTextChars: fallbackMaxBatchChars, MaxTextTokens: fallbackTokens}

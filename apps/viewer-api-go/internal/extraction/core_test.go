@@ -12,8 +12,8 @@ import (
 )
 
 func TestExtractionLimitsPreferNewEnvironmentAndFallbackToLegacy(t *testing.T) {
-	t.Setenv("CHARACTER_SUMMARY_MAX_CHUNK_CHARS", "20")
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "40")
+	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "20")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "40")
 	chunk, batch := Limits()
 	if chunk != 20 || batch != 40 {
 		t.Fatalf("legacy fallback limits = (%d, %d)", chunk, batch)
@@ -255,12 +255,12 @@ func TestExtractionCandidateCardsUseFullNameHistory(t *testing.T) {
 }
 
 func TestExtractionHistoryHelpers(t *testing.T) {
-	t.Setenv("CHARACTER_SUMMARY_TEST_INT", "bad")
-	if got := PositiveEnvInt("CHARACTER_SUMMARY_TEST_INT", 7); got != 7 {
+	t.Setenv("EXTRACTION_TEST_INT", "bad")
+	if got := PositiveEnvInt("EXTRACTION_TEST_INT", 7); got != 7 {
 		t.Fatalf("invalid env int should use fallback, got %d", got)
 	}
-	t.Setenv("CHARACTER_SUMMARY_TEST_INT", "11")
-	if got := PositiveEnvInt("CHARACTER_SUMMARY_TEST_INT", 7); got != 11 {
+	t.Setenv("EXTRACTION_TEST_INT", "11")
+	if got := PositiveEnvInt("EXTRACTION_TEST_INT", 7); got != 11 {
 		t.Fatalf("positive env int should be used, got %d", got)
 	}
 	if EstimateTokenCount("") != 0 || EstimateTokenCount("abc") <= 0 {

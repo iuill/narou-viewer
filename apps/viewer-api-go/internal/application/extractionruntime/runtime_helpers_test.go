@@ -34,7 +34,7 @@ func TestRuntimeHelperCoverage(t *testing.T) {
 }
 
 func TestExtractionTimingLogEnvironmentFallback(t *testing.T) {
-	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "1")
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "1")
 	if !extractionTimingLogEnabled() {
 		t.Fatal("legacy timing setting should remain readable")
 	}
