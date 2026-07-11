@@ -2,6 +2,11 @@
 set -euo pipefail
 
 source_root="$(git rev-parse --show-toplevel)"
+if ! command -v betterleaks >/dev/null 2>&1; then
+  bash "$source_root/scripts/install-betterleaks.sh"
+  export PATH="${HOME}/.local/bin:${PATH}"
+fi
+real_betterleaks="$(command -v betterleaks)"
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
@@ -58,7 +63,7 @@ if [[ -n "${FAKE_LATEST_TARGET_URL:-}" ]]; then
   exit 0
 fi
 if [[ -n "${EXPECT_STATUS_TARGET_URL:-}" ]]; then
-  [[ " $* " == *" context=sensitive-information/metadata-advisory "* ]]
+  [[ " $* " == *" context=${EXPECT_STATUS_CONTEXT:-sensitive-information/metadata-advisory} "* ]]
   [[ " $* " == *" target_url=${EXPECT_STATUS_TARGET_URL} "* ]]
   exit 0
 fi
@@ -130,6 +135,10 @@ fi
 GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
   PATH="$fake_bin:$PATH" bash "$source_root/scripts/update-sensitive-status.sh" \
   1111111111111111111111111111111111111111 pending test "$status_target"
+GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
+  EXPECT_STATUS_CONTEXT=sensitive-information/commits STATUS_CONTEXT=sensitive-information/commits \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/update-sensitive-status.sh" \
+  1111111111111111111111111111111111111111 pending test "$status_target"
 
 # A clean PR cannot overwrite a dirty PR when both share the same head SHA.
 prs_json="$tmpdir/prs.json"
@@ -176,6 +185,19 @@ scan_passes() {
 scan_fails() {
   if scan_passes "$@"; then
     echo "expected sensitive information scan to fail: $*" >&2
+    return 1
+  fi
+}
+
+actual_scan_passes() {
+  local repo="$1"
+  shift
+  (cd "$repo" && PATH="$(dirname "$real_betterleaks"):$PATH" bash ./scripts/scan-sensitive-changes.sh "$@") >/dev/null 2>&1
+}
+
+actual_scan_fails() {
+  if actual_scan_passes "$@"; then
+    echo "expected real Betterleaks scan to fail: $*" >&2
     return 1
   fi
 }
@@ -227,6 +249,34 @@ printf '\0%s\n' "$public_ip_b" >"$repo/allowed.dat"
 git -C "$repo" add allowed.dat
 scan_fails "$repo" staged
 
+# Pinned Betterleaks must receive printable SQLite strings as text in every Git mode.
+repo="$tmpdir/sqlite-binary"
+remote="$tmpdir/sqlite-binary.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf '*.sqlite binary\n' >"$repo/.gitattributes"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+slack_prefix="xoxb"
+slack_suffix="abcdefghijklmnopqrstuvwx"
+slack_token="${slack_prefix}-123456789012-123456789012-${slack_suffix}"
+sqlite3 "$repo/synthetic.sqlite" \
+  "create table synthetic(value text); insert into synthetic values('${slack_token}');"
+git -C "$repo" add synthetic.sqlite
+actual_scan_fails "$repo" staged
+commit_all "$repo" sqlite-secret
+local_sha="$(git -C "$repo" rev-parse HEAD)"
+actual_scan_fails "$repo" range "$base_sha" HEAD
+actual_scan_fails "$repo" history
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
+  actual_scan_passes "$repo" pre-push origin; then
+  echo "expected real Betterleaks SQLite pre-push scan to fail" >&2
+  exit 1
+fi
+
 # betterleaks:allow cannot suppress findings in staged, range, pre-push, or history scans.
 repo="$tmpdir/allow-marker"
 remote="$tmpdir/allow-marker.git"
@@ -274,6 +324,46 @@ git -C "$repo" switch -q main
 printf 'main\n' >"$repo/main.txt"
 commit_all "$repo" main
 git -C "$repo" merge -q --no-ff feature -m 'SECRET_TEST_TOKEN in a merge message'
+scan_fails "$repo" range "$base_sha" HEAD
+
+# Author and committer identities are scanned for ordinary and merge commits.
+repo="$tmpdir/commit-identities"
+remote="$tmpdir/commit-identities.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+printf 'still safe\n' >"$repo/example.txt"
+git -C "$repo" add example.txt
+GIT_AUTHOR_NAME=SECRET_TEST_TOKEN GIT_AUTHOR_EMAIL=test@example.invalid \
+  GIT_COMMITTER_NAME=committer GIT_COMMITTER_EMAIL=test@example.invalid \
+  git -C "$repo" commit -qm 'safe identity test'
+local_sha="$(git -C "$repo" rev-parse HEAD)"
+scan_fails "$repo" range "$base_sha" HEAD
+scan_fails "$repo" history
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
+  scan_passes "$repo" pre-push origin; then
+  echo "expected commit identity pre-push scan to fail" >&2
+  exit 1
+fi
+
+repo="$tmpdir/merge-identity"
+new_repo "$repo"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" switch -qc feature
+printf 'feature\n' >"$repo/feature.txt"
+commit_all "$repo" feature
+git -C "$repo" switch -q main
+printf 'main\n' >"$repo/main.txt"
+commit_all "$repo" main
+GIT_AUTHOR_NAME=author GIT_AUTHOR_EMAIL=test@example.invalid \
+  GIT_COMMITTER_NAME=SECRET_TEST_TOKEN GIT_COMMITTER_EMAIL=test@example.invalid \
+  git -C "$repo" merge -q --no-ff feature -m 'safe merge identity test'
 scan_fails "$repo" range "$base_sha" HEAD
 
 # The commit-msg hook scans Betterleaks findings and public IPv4 addresses.

@@ -22,7 +22,9 @@ Dev Container image には固定版の Betterleaks が含まれ、`postCreateCom
 
 PR の機微情報検査は権限なしの `.github/workflows/sensitive-information-events.yml` で event と PR 番号を受け、`workflow_run` で起動する default branch 版 scanner へ渡します。後段は PR head を checkoutせずcommit objectとして検査します。PR本文・タイトル・通常コメント・review・diff上のreview commentを追加・編集・削除した場合も、同じhead SHAを持つopenなmain向けPRすべてをBetterleaksのGitHub sourceで再検査します。Betterleaksのallow markerと外部validationは有効にしません。
 
-後段workflowはApp tokenを扱う`invalidate`、App credentialを一切持たず未信頼PRデータを解析する`scan`、新しいrunnerでApp tokenを再生成する`publish`に分離します。専用GitHub Appはcommit status `sensitive-information/metadata-advisory`を発行しますが、Actionsだけではmetadata編集直後の競合窓を完全に閉じられないため、このstatusをRulesetのrequired checkにしてはいけません。repositoryへ入るcommit・binary blob・commit messageは通常CIとGit hookの必須検査で防ぎ、mutableなPR metadataはadvisory通知として扱います。
+後段workflowはApp tokenを扱う`invalidate`、App credentialを一切持たず未信頼PRデータを解析する`scan`、新しいrunnerでApp tokenを再生成する`publish`に分離します。専用GitHub Appは`opened`・`synchronize`・`reopened`時にcommit status `sensitive-information/commits`を発行し、これをrequired gateとして使用します。commitのpatch・path・message・author／committer identityに加え、Git属性でbinary指定されたblobまたはNULを含むblobからprintable stringsを抽出して検査します。
+
+PR metadataには別context `sensitive-information/metadata-advisory`を使用します。Actionsだけではmetadata編集直後の競合窓を完全に閉じられないため、こちらをRulesetのrequired checkにしてはいけません。通常の`pull_request` CIにある同名jobはdefense in depthであり、trustedなsecurity boundaryはSecret Guard Appだけが発行する`commits` statusです。
 
 ### Secret Guard GitHub App の初期設定
 
@@ -35,7 +37,7 @@ Enterprise限定のRequired Workflowは使用しません。個人accountのDeve
 5. App設定画面のClient IDをrepository variable `SECRET_GUARD_APP_CLIENT_ID`へ登録する。
 6. App設定画面の**Generate a private key**で`.pem`を一度生成し、その内容全体をrepository secret `SECRET_GUARD_APP_PRIVATE_KEY`へ登録する。秘密鍵ファイルはrepositoryや共有storageへ置かず、secret登録後にlocalから削除する。
 7. このworkflowがdefault branchへ入った後、**Sensitive Information Events** workflowをPR番号付きで手動実行し、App名義のadvisory statusが成功することを確認する。
-8. `sensitive-information/metadata-advisory`はRulesetのrequired statusへ追加しない。merge gateには通常CIのcommit検査を使用する。
+8. repository rulesetで`sensitive-information/commits`をrequired statusに追加し、expected sourceを作成したSecret Guard Appに固定する。`sensitive-information/metadata-advisory`はrequired statusへ追加しない。
 
 Appの秘密鍵を更新する場合は、新しい鍵を先に生成してrepository secretを更新し、手動scanの成功後に古い鍵をApp設定画面から削除します。
 

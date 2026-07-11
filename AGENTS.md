@@ -36,7 +36,7 @@
 
 - Dev Container では post-create 時に `.githooks/` の `pre-commit` / `commit-msg` / `pre-push` が自動で有効になる。Dev Container 外では Betterleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行する。
 - `pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を Betterleaks と repository 固有ルールで検査する。検出を `--no-verify` で回避せず、false positive はルール側で明示的に解消する。
-- Betterleaksの`gitleaks:allow` / `betterleaks:allow` markerは信頼せず、すべての検査経路で無効化する。PR metadataは専用GitHub Appによるadvisory検査とし、required statusにはしない。App秘密鍵をPR eventや未信頼データを解析するrunnerへ渡さない。
+- Betterleaksの`gitleaks:allow` / `betterleaks:allow` markerは信頼せず、すべての検査経路で無効化する。専用GitHub Appが発行する`sensitive-information/commits`をrequired gate、PR metadataをadvisory検査とする。App秘密鍵をPR eventや未信頼データを解析するrunnerへ渡さない。
 - 変更前に、影響を受けるファイルを確認してから手を入れる。
 - 変更範囲は絞る。依頼に直接関係しない大規模リファクタは避ける。
 - 既存の命名、構成、責務分割を尊重する。

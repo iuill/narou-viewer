@@ -39,7 +39,8 @@ scan_commit_messages() (
   local message_file
   message_file="$(mktemp)"
   trap 'rm -f "$message_file"' EXIT
-  git log --format=%B "$@" >"$message_file"
+  git log --format='author-name: %an%nauthor-email: %ae%ncommitter-name: %cn%ncommitter-email: %ce%nmessage:%n%B' \
+    "$@" >"$message_file"
   scan_message_file "$message_file"
 )
 
@@ -48,33 +49,65 @@ declare -A scanned_binary_candidates=()
 scan_binary_blob_if_needed() (
   local object_id="$1"
   local path="$2"
+  local attribute_binary="$3"
   local blob_file
   blob_file="$(mktemp)"
   trap 'rm -f "$blob_file"' EXIT
   git cat-file blob "$object_id" >"$blob_file"
-  if ! head -c 8000 "$blob_file" | LC_ALL=C od -An -v -t x1 | grep ' 00' >/dev/null; then
+  if [[ "$attribute_binary" != "1" ]] &&
+    ! head -c 8000 "$blob_file" | LC_ALL=C od -An -v -t x1 | grep ' 00' >/dev/null; then
     exit 0
   fi
   echo "binary blobを検査します: $path" >&2
   tr '\000' '\n' <"$blob_file" | bash ./scripts/check-sensitive-content.sh
-  run_betterleaks stdin --redact=100 --no-banner <"$blob_file"
+  {
+    printf 'extracted printable strings from binary blob:\n'
+    LC_ALL=C strings -a -n 4 "$blob_file"
+  } | run_betterleaks stdin --redact=100 --no-banner
 )
 
+scan_raw_blob() {
+  local attr_source="$1"
+  local header="$2"
+  local path="$3"
+  local old_mode new_mode old_object new_object status diff_attr attribute_binary cache_key
+  read -r old_mode new_mode old_object new_object status <<<"${header#:}"
+  [[ "$new_mode" == "160000" || "$new_object" =~ ^0+$ ]] && return
+  if [[ "$attr_source" == ":cached" ]]; then
+    diff_attr="$(git check-attr --cached diff -- "$path")"
+  else
+    diff_attr="$(git check-attr --source="$attr_source" diff -- "$path")"
+  fi
+  attribute_binary=0
+  [[ "$diff_attr" == *': diff: unset' ]] && attribute_binary=1
+  cache_key="${new_object}:${attribute_binary}"
+  [[ -n "${scanned_binary_candidates[$cache_key]:-}" ]] && return
+  scanned_binary_candidates[$cache_key]=1
+  scan_binary_blob_if_needed "$new_object" "$path" "$attribute_binary"
+}
+
 scan_changed_raw() {
-  local header path old_mode new_mode old_object new_object status
+  local attr_source="$1"
+  local header path
   while IFS= read -r -d '' header && IFS= read -r -d '' path; do
-    read -r old_mode new_mode old_object new_object status <<<"${header#:}"
-    [[ "$new_mode" == "160000" || "$new_object" =~ ^0+$ ]] && continue
-    [[ -n "${scanned_binary_candidates[$new_object]:-}" ]] && continue
-    scanned_binary_candidates[$new_object]=1
-    scan_binary_blob_if_needed "$new_object" "$path"
+    scan_raw_blob "$attr_source" "$header" "$path"
   done
 }
 
 scan_binary_commits() {
-  scan_changed_raw < <(
+  local record path attr_source=""
+  while IFS= read -r -d '' record; do
+    record="${record#$'\n'}"
+    if [[ "$record" =~ ^C([0-9a-f]{40})$ ]]; then
+      attr_source="${BASH_REMATCH[1]}"
+      continue
+    fi
+    [[ "$record" == :* && -n "$attr_source" ]] || continue
+    IFS= read -r -d '' path
+    scan_raw_blob "$attr_source" "$record" "$path"
+  done < <(
     git log --root --diff-merges=remerge --no-renames --raw --no-abbrev \
-      --format= -z --diff-filter=ACMR "$@"
+      --format='C%H' -z --diff-filter=ACMR "$@"
   )
 }
 
@@ -103,7 +136,7 @@ case "$mode" in
     git diff --cached --no-renames --name-only --diff-filter=ACMR -z |
       bash ./scripts/check-sensitive-paths.sh --stdin0
     git diff --cached --unified=0 --no-ext-diff --no-color | check_added_content
-    scan_changed_raw < <(
+    scan_changed_raw ":cached" < <(
       git diff --cached --no-renames --raw --no-abbrev -z --diff-filter=ACMR
     )
     run_betterleaks git --staged --redact=100 --no-banner .

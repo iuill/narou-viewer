@@ -37,10 +37,14 @@ jobs:
       - name: Validate pull request number
         env:
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_ACTION: ${{ github.event.action || 'manual' }}
         run: |
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
           mkdir event
           printf '%s\n' "$PR_NUMBER" > event/pr-number
+          printf '%s\n' "$SOURCE_EVENT" > event/source-event
+          printf '%s\n' "$SOURCE_ACTION" > event/source-action
 
       - name: Debounce consecutive metadata events
         run: sleep 5
@@ -49,5 +53,5 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
         with:
           name: sensitive-information-event
-          path: event/pr-number
+          path: event/
           retention-days: 1
