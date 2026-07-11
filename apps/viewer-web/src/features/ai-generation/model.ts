@@ -44,6 +44,9 @@ export type AiGenerationSettingsLike = {
     extractionStrategyModels?: {
       nameDiscoveryModelId?: string | null;
     };
+    extractionRuntime?: {
+      parallelRequestConcurrency?: number;
+    };
   };
 };
 
@@ -86,6 +89,10 @@ export type ExtractionStrategyModelsDraft = {
   nameDiscoveryModelId: string;
 };
 
+export type ExtractionRuntimeDraft = {
+  parallelRequestConcurrency: number;
+};
+
 export type AiGenerationJobStatus = "queued" | "running" | "completed" | "failed";
 export type AiGenerationJobFilter = "active" | "failed" | "completed";
 export type AiGenerationHelpKey =
@@ -97,6 +104,7 @@ export type AiGenerationHelpKey =
   | "apiKeySource"
   | "modelId"
   | "nameDiscoveryModelId"
+  | "parallelRequestConcurrency"
   | "providerOrder"
   | "allowFallbacks"
   | "requireParameters";

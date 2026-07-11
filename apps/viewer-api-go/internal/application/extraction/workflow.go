@@ -340,7 +340,7 @@ func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usag
 			return Result{}, ErrLegacyExtractionStateIncomplete
 		}
 	}
-	identityRegistry := append([]characters.GeneratedCharacter{}, seedGenerated...)
+	identityRegistry := core.ApplyIdentityMergeEvents(seedGenerated, seedIdentityMergeEvents, upToEpisodeIndex)
 	reprocessFromEpisodeIndex, err := w.ports.ReprocessFromEpisode(ctx, novelID, processedIndex, upToEpisodeIndex)
 	if err != nil {
 		return Result{}, err

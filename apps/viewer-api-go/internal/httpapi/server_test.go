@@ -5332,6 +5332,14 @@ func TestServerAIGenerationSettingsIncludesOpenRouterModelInfo(t *testing.T) {
 }
 
 func TestAIGenerationSettingsParserHelpers(t *testing.T) {
+	if runtime, ok := parseAIExtractionRuntime(map[string]any{"parallelRequestConcurrency": float64(4)}); !ok || runtime.ParallelRequestConcurrency != 4 {
+		t.Fatalf("unexpected extraction runtime parse: %+v %v", runtime, ok)
+	}
+	for _, invalid := range []any{nil, map[string]any{}, map[string]any{"parallelRequestConcurrency": 0.0}, map[string]any{"parallelRequestConcurrency": 21.0}, map[string]any{"parallelRequestConcurrency": 1.5}} {
+		if _, ok := parseAIExtractionRuntime(invalid); ok {
+			t.Fatalf("invalid extraction runtime should be rejected: %+v", invalid)
+		}
+	}
 	if shared, ok := parseAISharedProviders(map[string]any{"openrouter": map[string]any{"apiKey": nil}}); !ok || shared.OpenRouter.APIKey != nil {
 		t.Fatalf("unexpected shared providers parse: %+v %v", shared, ok)
 	}

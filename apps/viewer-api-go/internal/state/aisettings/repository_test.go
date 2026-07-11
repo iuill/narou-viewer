@@ -28,6 +28,7 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 		ExtractionStrategyModels: &AIExtractionStrategyModelsInput{
 			NameDiscoveryModelID: &nameDiscoveryModelID,
 		},
+		ExtractionRuntime: &AIExtractionRuntimeInput{ParallelRequestConcurrency: 4},
 		SharedProviders: &AISharedProvidersInput{
 			OpenRouter:  AIProviderCredentialInput{APIKey: &sharedKey, APIKeySet: true},
 			GoogleBooks: AIProviderCredentialInput{APIKey: &googleBooksKey, APIKeySet: true},
@@ -71,6 +72,9 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	if settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID == nil || *settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID != nameDiscoveryModelID {
 		t.Fatalf("unexpected character summary strategy models: %+v", settings.Settings.ExtractionStrategyModels)
 	}
+	if settings.Settings.ExtractionRuntime.ParallelRequestConcurrency != 4 {
+		t.Fatalf("unexpected extraction runtime settings: %+v", settings.Settings.ExtractionRuntime)
+	}
 	if !settings.Settings.SharedProviders.OpenRouter.HasAPIKey || settings.Settings.SharedProviders.OpenRouter.APIKeyMasked == nil {
 		t.Fatalf("shared provider key metadata was not exposed safely: %+v", settings.Settings.SharedProviders.OpenRouter)
 	}
@@ -100,6 +104,9 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	}
 	if !strings.Contains(rawText, "name_discovery_model_id: openai/gpt-5-nano") {
 		t.Fatalf("AI settings yaml did not persist character summary strategy model: %s", raw)
+	}
+	if !strings.Contains(rawText, "parallel_request_concurrency: 4") {
+		t.Fatalf("AI settings yaml did not persist extraction concurrency: %s", raw)
 	}
 	info, err := os.Stat(filepath.Join(dataDir, "state", FileName))
 	if err != nil {
@@ -144,6 +151,9 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 		!resolvedConfig.AllowFallbacks ||
 		resolvedConfig.RequireParameters {
 		t.Fatalf("unexpected resolved active config: %+v", resolvedConfig)
+	}
+	if resolvedConfig.ExtractionParallelConcurrency != 4 {
+		t.Fatalf("resolved extraction concurrency = %d, want 4", resolvedConfig.ExtractionParallelConcurrency)
 	}
 
 	renamedLabel := "Custom Renamed"

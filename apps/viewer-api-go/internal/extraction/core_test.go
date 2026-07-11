@@ -492,6 +492,30 @@ func TestExtractionResponseRejectsEpisodeIndexesOutsideCurrentBatch(t *testing.T
 	}
 }
 
+func TestExtractionResponseRejectsInvalidTermEpisodeIndexesBeforeFallback(t *testing.T) {
+	for _, field := range []string{"reading", "category", "description"} {
+		for _, episodeIndex := range []string{"", "unknown"} {
+			t.Run(field+"_"+episodeIndex, func(t *testing.T) {
+				reading := `null`
+				categoryEpisode := "20"
+				descriptionEpisode := "20"
+				switch field {
+				case "reading":
+					reading = `{"text":"ていこく","episodeIndex":"` + episodeIndex + `"}`
+				case "category":
+					categoryEpisode = episodeIndex
+				case "description":
+					descriptionEpisode = episodeIndex
+				}
+				raw := []byte(`{"processedUpToEpisodeIndex":"20","characters":[],"terms":[{"term":"帝国評議会","reading":` + reading + `,"category":{"value":"organization","episodeIndex":"` + categoryEpisode + `"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"` + descriptionEpisode + `"}]}]}`)
+				if _, err := NormalizeOpenRouterResponseForEpisodes(raw, "novel-1", "20", []string{"20"}); err == nil || !strings.Contains(err.Error(), "term schema") {
+					t.Fatalf("invalid raw term episodeIndex should fail closed: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestValidateDeltaEpisodeIndexesAcceptsCompleteInBatchDelta(t *testing.T) {
 	textVersions := []characters.GeneratedTextVersion{{Text: "情報", EpisodeIndex: "5"}}
 	historyVersions := []characters.GeneratedHistoryVersion{{Text: "説明", EpisodeIndex: "5"}}

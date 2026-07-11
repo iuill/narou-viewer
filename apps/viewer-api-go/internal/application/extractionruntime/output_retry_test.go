@@ -33,6 +33,32 @@ func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenRouterBatchRetriesInvalidTermEpisodeIndex(t *testing.T) {
+	invalid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"unknown"}]}]}`
+	valid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"20"}]}]}`
+	openrouter := newExtractionOpenRouterTestServer(t, invalid, valid)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+	if err != nil || len(result.Delta.Terms) != 1 || result.Delta.Terms[0].DescriptionHistory[0].EpisodeIndex != "20" {
+		t.Fatalf("term contract retry should recover with valid episode: result=%+v err=%v", result, err)
+	}
+	if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
+		t.Fatalf("term retry usage should include both responses: %+v", result.Usage)
+	}
+
+	failedServer := newExtractionOpenRouterTestServer(t, invalid, invalid)
+	defer failedServer.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", failedServer.URL)
+	failed, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+	if err == nil || failed.Usage.TotalTokens != 36 {
+		t.Fatalf("repeated invalid term output should fail with both usage records: result=%+v err=%v", failed, err)
+	}
+}
+
 func TestGenerateOpenRouterBatchRetriesTruncatedModelOutput(t *testing.T) {
 	call := 0
 	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

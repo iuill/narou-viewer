@@ -245,6 +245,13 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 		}
 		update.ExtractionStrategyModels = &strategyModels
 	}
+	if rawRuntime, ok := body["extractionRuntime"]; ok {
+		runtime, ok := parseAIExtractionRuntime(rawRuntime)
+		if !ok {
+			return update, "extractionRuntime is invalid."
+		}
+		update.ExtractionRuntime = &runtime
+	}
 	if rawProfiles, ok := body["profiles"]; ok {
 		profiles, ok := rawProfiles.([]any)
 		if !ok {
@@ -264,6 +271,18 @@ func parseAIGenerationSettingsUpdate(body map[string]any) (store.AIGenerationSet
 		}
 	}
 	return update, ""
+}
+
+func parseAIExtractionRuntime(value any) (store.AIExtractionRuntimeInput, bool) {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return store.AIExtractionRuntimeInput{}, false
+	}
+	raw, ok := record["parallelRequestConcurrency"].(float64)
+	if !ok || raw < 1 || raw > 20 || raw != float64(int(raw)) {
+		return store.AIExtractionRuntimeInput{}, false
+	}
+	return store.AIExtractionRuntimeInput{ParallelRequestConcurrency: int(raw)}, true
 }
 
 func parseAIExtractionStrategyModels(value any) (store.AIExtractionStrategyModelsInput, bool) {
@@ -608,7 +627,9 @@ func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
 			ProgressStage:             record.Job.ProgressStage,
 			CurrentBatchIndex:         record.Job.CurrentBatchIndex,
 			BatchCount:                record.Job.BatchCount,
+			CompletedBatchCount:       record.Job.CompletedBatchCount,
 			GeneratedCharacterCount:   record.Job.GeneratedCharacterCount,
+			GeneratedTermCount:        record.Job.GeneratedTermCount,
 			CreatedAt:                 record.Job.CreatedAt,
 			StartedAt:                 record.Job.StartedAt,
 			FinishedAt:                record.Job.FinishedAt,

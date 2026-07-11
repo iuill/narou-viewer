@@ -18,6 +18,7 @@ type ResolvedAIGenerationConfig struct {
 	RequireParameters              bool
 	SystemPrompt                   *string
 	ExtractionNameDiscoveryModelID string
+	ExtractionParallelConcurrency  int
 }
 
 type AIGenerationTransientConfig struct {
@@ -142,6 +143,7 @@ func resolveAIGenerationConfigFromDocument(doc aiGenerationSettingsDocument, pro
 		RequireParameters:              requireParameters,
 		SystemPrompt:                   systemPrompt,
 		ExtractionNameDiscoveryModelID: stringValue(doc.ExtractionStrategyModels.NameDiscoveryModelID),
+		ExtractionParallelConcurrency:  normalizeParallelRequestConcurrency(doc.ExtractionRuntime.ParallelRequestConcurrency),
 	}, nil
 }
 

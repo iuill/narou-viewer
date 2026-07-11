@@ -10,6 +10,7 @@ import {
   toAiGenerationProfileDraft,
   toAiGenerationSharedProviderDraft,
   type ExtractionStrategyModelsDraft,
+  type ExtractionRuntimeDraft,
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft
@@ -45,6 +46,9 @@ export function useAiSettings({
   const [profileDrafts, setProfileDrafts] = useState<AiGenerationProfileDraft[]>([]);
   const [extractionStrategyModelsDraft, setExtractionStrategyModelsDraft] = useState<ExtractionStrategyModelsDraft>({
     nameDiscoveryModelId: ""
+  });
+  const [extractionRuntimeDraft, setExtractionRuntimeDraft] = useState<ExtractionRuntimeDraft>({
+    parallelRequestConcurrency: 3
   });
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [editingProfileId, setEditingProfileId] = useState("");
@@ -87,6 +91,9 @@ export function useAiSettings({
     setProfileDrafts(nextDrafts);
     setExtractionStrategyModelsDraft({
       nameDiscoveryModelId: nextSettings.settings.extractionStrategyModels?.nameDiscoveryModelId ?? ""
+    });
+    setExtractionRuntimeDraft({
+      parallelRequestConcurrency: nextSettings.settings.extractionRuntime?.parallelRequestConcurrency ?? 3
     });
     const nextSelectedProfileId = nextSettings.settings.selectedProfileId ?? nextSettings.settings.profiles[0]?.id ?? "";
     setSelectedProfileId(nextSelectedProfileId);
@@ -201,6 +208,9 @@ export function useAiSettings({
         })),
         extractionStrategyModels: {
           nameDiscoveryModelId: extractionStrategyModelsDraft.nameDiscoveryModelId.trim() || null
+        },
+        extractionRuntime: {
+          parallelRequestConcurrency: extractionRuntimeDraft.parallelRequestConcurrency
         }
       });
       setSettings(nextSettings);
@@ -217,6 +227,7 @@ export function useAiSettings({
     }
   }, [
     extractionStrategyModelsDraft.nameDiscoveryModelId,
+    extractionRuntimeDraft.parallelRequestConcurrency,
     profileDrafts,
     refreshRuntimeStatus,
     selectedProfileId,
@@ -230,6 +241,7 @@ export function useAiSettings({
     applySettings,
     changePreferredMode,
     extractionStrategyModelsDraft,
+    extractionRuntimeDraft,
     editingProfileId,
     isModeSaving,
     isSettingsLoading,
@@ -246,6 +258,7 @@ export function useAiSettings({
     setProfileDrafts,
     setSelectedProfileId,
     setExtractionStrategyModelsDraft,
+    setExtractionRuntimeDraft,
     settings,
     settingsError,
     sharedGoogleBooksDraft,

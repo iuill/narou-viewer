@@ -8,6 +8,6 @@ export default defineProject({
     name: "viewer-web",
     root: rootDir,
     environment: "node",
-    include: ["tests/**/*.test.ts"]
+    include: ["tests/**/*.test.{ts,tsx}"]
   }
 });

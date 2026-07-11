@@ -36,6 +36,7 @@ type workflowFakePorts struct {
 	saveTerms              bool
 	removedCheckpoint      bool
 	builtGenerated         bool
+	builtPreviewCharacters []characters.GeneratedCharacter
 	loadedPreview          bool
 	recordedUsage          []ai.UsageRun
 	generateErr            error
@@ -216,8 +217,9 @@ func (p *workflowFakePorts) SaveGeneratedTerms(_ string, _ string, generated []t
 	return p.saveTermsErr
 }
 
-func (p *workflowFakePorts) BuildGeneratedPreview(_ string, _ string, _ []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ []string, _ characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
+func (p *workflowFakePorts) BuildGeneratedPreview(_ string, _ string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ []string, _ characters.SaveGeneratedSummaryOptions) (characters.SummaryResponse, error) {
 	p.builtGenerated = true
+	p.builtPreviewCharacters = append([]characters.GeneratedCharacter{}, generated...)
 	p.generatedEpisodes = append([]characters.HeuristicEpisode{}, episodes...)
 	return characters.SummaryResponse{Status: "ready"}, nil
 }
@@ -482,6 +484,39 @@ func TestWorkflowGeneratePreviewExistingSummaryLoadsPreviewWithoutUsage(t *testi
 	}
 	if len(ports.recordedUsage) != 0 {
 		t.Fatalf("recordedUsage length = %d, want 0", len(ports.recordedUsage))
+	}
+}
+
+func TestWorkflowPreviewReusesIDFromMergedIdentityRegistry(t *testing.T) {
+	processed := "20"
+	ports := &workflowFakePorts{
+		settings:       ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},
+		config:         &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"},
+		processedIndex: &processed,
+		hasExisting:    true,
+		reprocessFrom:  "21",
+		seedBeforeSet:  true,
+		inputs:         workflowInputsWithEpisodes("21"),
+		seed: []characters.GeneratedCharacter{
+			{CharacterID: "char_black_knight", CanonicalName: "Alice", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", NameHistory: []characters.GeneratedTextVersion{{Text: "Alice", EpisodeIndex: "1"}}},
+			{CharacterID: "char_alice", CanonicalName: "Alice", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2", NameHistory: []characters.GeneratedTextVersion{{Text: "Alice", EpisodeIndex: "2"}}},
+		},
+		seedEvents: []characters.GeneratedIdentityMergeEvent{{SourceCharacterID: "char_black_knight", TargetCharacterID: "char_alice", EffectiveEpisodeIndex: "20"}},
+	}
+	if _, err := NewWorkflow(ports).GeneratePreview(context.Background(), "novel-a", "21", nil, "serial", nil, []string{"21"}, nil); err != nil {
+		t.Fatalf("GeneratePreview returned error: %v", err)
+	}
+	found := false
+	for _, character := range ports.builtPreviewCharacters {
+		if character.CanonicalName == "Alice" {
+			found = true
+			if character.CharacterID != "char_alice" {
+				t.Fatalf("preview should reuse merged target ID: %+v", character)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("generated preview character was not captured: %+v", ports.builtPreviewCharacters)
 	}
 }
 

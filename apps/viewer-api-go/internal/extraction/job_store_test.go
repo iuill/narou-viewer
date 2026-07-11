@@ -28,6 +28,7 @@ progress: 100
 progress_stage: completed
 current_batch_index: 2
 batch_count: 2
+completed_batch_count: 2
 generated_character_count: 4
 created_at: 2026-01-01T00:00:00Z
 started_at: 2026-01-01T00:00:01Z
@@ -55,6 +56,7 @@ created_at: 2026-01-02T00:00:00Z
 	}
 	if jobs[0].Progress == nil || *jobs[0].Progress != 100 || jobs[0].ProgressStage == nil || *jobs[0].ProgressStage != "completed" ||
 		jobs[0].CurrentBatchIndex == nil || *jobs[0].CurrentBatchIndex != 2 || jobs[0].BatchCount == nil || *jobs[0].BatchCount != 2 ||
+		jobs[0].CompletedBatchCount == nil || *jobs[0].CompletedBatchCount != 2 ||
 		jobs[0].GeneratedCharacterCount == nil || *jobs[0].GeneratedCharacterCount != 4 {
 		t.Fatalf("job progress metadata should round-trip from yaml: %+v", jobs[0])
 	}
@@ -64,6 +66,7 @@ created_at: 2026-01-02T00:00:00Z
 	progressStage := "batch"
 	currentBatchIndex := 1
 	batchCount := 2
+	completedBatchCount := 1
 	generatedCharacterCount := 3
 	if err := SaveJob(stateDir, "novel-1", Job{
 		JobID:                     "go-job-new",
@@ -74,6 +77,7 @@ created_at: 2026-01-02T00:00:00Z
 		ProgressStage:             &progressStage,
 		CurrentBatchIndex:         &currentBatchIndex,
 		BatchCount:                &batchCount,
+		CompletedBatchCount:       &completedBatchCount,
 		GeneratedCharacterCount:   &generatedCharacterCount,
 		CreatedAt:                 createdAt,
 	}); err != nil {
@@ -88,6 +92,7 @@ created_at: 2026-01-02T00:00:00Z
 	}
 	if jobs[0].Progress == nil || *jobs[0].Progress != progress || jobs[0].ProgressStage == nil || *jobs[0].ProgressStage != progressStage ||
 		jobs[0].CurrentBatchIndex == nil || *jobs[0].CurrentBatchIndex != currentBatchIndex || jobs[0].BatchCount == nil || *jobs[0].BatchCount != batchCount ||
+		jobs[0].CompletedBatchCount == nil || *jobs[0].CompletedBatchCount != completedBatchCount ||
 		jobs[0].GeneratedCharacterCount == nil || *jobs[0].GeneratedCharacterCount != generatedCharacterCount {
 		t.Fatalf("saved job progress metadata should be loaded: %+v", jobs[0])
 	}
@@ -138,6 +143,13 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	writeFile(t, filepath.Join(checkpointDir, "target.json"), `{"schemaVersion":1,"novelId":"novel-1"}`)
 	writeFile(t, filepath.Join(checkpointDir, "other.json"), `{"schemaVersion":1,"novelId":"novel-2"}`)
 	writeFile(t, filepath.Join(checkpointDir, "broken.json"), `{`)
+	conflictDir := filepath.Join(stateDir, "extraction_jobs", "legacy_conflicts")
+	if err := os.MkdirAll(conflictDir, 0o755); err != nil {
+		t.Fatalf("mkdir conflict dir: %v", err)
+	}
+	writeFile(t, filepath.Join(conflictDir, "target.yaml"), "novel_id: novel-1\n")
+	writeFile(t, filepath.Join(conflictDir, "other.yaml"), "novel_id: novel-2\n")
+	writeFile(t, filepath.Join(conflictDir, "target.json"), `{"novelId":"novel-1"}`)
 
 	result, err := PruneNovelState(stateDir, "novel-1")
 	if err != nil {
@@ -153,6 +165,8 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 		filepath.Join(stateDir, "extraction_jobs", "job-target.yaml"),
 		filepath.Join(stateDir, "extraction_jobs", "index", "novel-1.yaml"),
 		filepath.Join(checkpointDir, "target.json"),
+		filepath.Join(conflictDir, "target.yaml"),
+		filepath.Join(conflictDir, "target.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("target file should be removed: path=%s err=%v", path, err)
@@ -161,7 +175,7 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if jobs, ok, err := LoadJobs(stateDir, "novel-2"); err != nil || !ok || len(jobs) != 1 || jobs[0].JobID != "job-other" {
 		t.Fatalf("other novel jobs should remain: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
-	for _, path := range []string{filepath.Join(checkpointDir, "other.json"), filepath.Join(checkpointDir, "broken.json")} {
+	for _, path := range []string{filepath.Join(checkpointDir, "other.json"), filepath.Join(checkpointDir, "broken.json"), filepath.Join(conflictDir, "other.yaml")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("non-target checkpoint should remain: path=%s err=%v", path, err)
 		}

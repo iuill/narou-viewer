@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { ReaderFloatingPanel } from "./ReaderFloatingPanel";
 import { ReaderExtractionTabs } from "./ReaderExtractionTabs";
 import { ReaderExtractionControls } from "./ReaderExtractionControls";
@@ -39,6 +40,7 @@ const CATEGORY_LABELS: Record<TermCategory, string> = {
   event: "出来事",
   other: "その他",
 };
+const CATEGORY_ORDER: TermCategory[] = ["organization", "place", "item", "skill", "race", "event", "other"];
 
 export function ReaderTermListPanel({
   activeJobs,
@@ -64,8 +66,17 @@ export function ReaderTermListPanel({
   requestedGenerationStrategy,
   requestedUpToEpisodeIndex,
 }: Props) {
+  const [selectedCategory, setSelectedCategory] = useState<"all" | TermCategory>("all");
   const displayedBoundary =
-    data?.processedUpToEpisodeIndex ?? data?.upToEpisodeIndex ?? null;
+    data?.status === "partial"
+      ? (data.processedUpToEpisodeIndex ?? data.upToEpisodeIndex)
+      : (data?.upToEpisodeIndex ?? null);
+  const visibleTerms = useMemo(() => {
+    if (data?.status !== "ready" && data?.status !== "partial") {
+      return [];
+    }
+    return data.terms.filter((term) => selectedCategory === "all" || term.category === selectedCategory);
+  }, [data, selectedCategory]);
   return (
     <ReaderFloatingPanel
       ariaLabel="人物・用語一覧"
@@ -119,27 +130,55 @@ export function ReaderTermListPanel({
       />
       {data?.status === "ready" || data?.status === "partial" ? (
         data.terms.length > 0 ? (
-          <div className="reader-term-cards">
-            {data.terms.map((term) => (
-              <article
-                className="reader-panel-card reader-term-card"
-                key={term.term}
-              >
-                <header>
-                  <div className="reader-term-title">
-                    <strong>{term.term}</strong>
-                    {term.reading ? <span>{term.reading}</span> : null}
-                  </div>
-                  <span
-                    className={`reader-panel-chip reader-term-category is-${term.category}`}
+          <section className="reader-term-list">
+            <div className="panel-header compact reader-extraction-list-header">
+              <div>
+                <h3>一覧</h3>
+                <p>
+                  第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点 / {visibleTerms.length} / {data.terms.length} 用語
+                </p>
+              </div>
+              <label className="reader-extraction-filter">
+                <span>カテゴリ</span>
+                <select
+                  onChange={(event) => setSelectedCategory(event.target.value as "all" | TermCategory)}
+                  value={selectedCategory}
+                >
+                  <option value="all">すべて</option>
+                  {CATEGORY_ORDER.map((category) => (
+                    <option key={category} value={category}>
+                      {CATEGORY_LABELS[category]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {visibleTerms.length > 0 ? (
+              <div className="reader-term-cards">
+                {visibleTerms.map((term) => (
+                  <article
+                    className="reader-panel-card reader-term-card"
+                    key={term.term}
                   >
-                    {CATEGORY_LABELS[term.category]}
-                  </span>
-                </header>
-                <p>{term.description}</p>
-              </article>
-            ))}
-          </div>
+                    <header>
+                      <div className="reader-term-title">
+                        <strong>{term.term}</strong>
+                        {term.reading ? <span>{term.reading}</span> : null}
+                      </div>
+                      <span
+                        className={`reader-panel-chip reader-term-category is-${term.category}`}
+                      >
+                        {CATEGORY_LABELS[term.category]}
+                      </span>
+                    </header>
+                    <p>{term.description}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="message">このカテゴリに一致する用語はありません。</p>
+            )}
+          </section>
         ) : (
           <p className="reader-panel-card reader-panel-card--compact">
             この話数までに表示できる固有用語はありません。

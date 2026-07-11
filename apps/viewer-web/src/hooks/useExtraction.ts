@@ -1,6 +1,7 @@
 import {
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -69,6 +70,11 @@ type UseExtractionResult = {
   setRequestedUpToEpisodeIndex: Dispatch<SetStateAction<string>>;
 };
 
+type ExtractionSelectionScope = {
+  novelId: string | null;
+  token: object;
+};
+
 export function useExtraction({
   currentTocEpisodeIndex,
   formatEpisodeOrderLabel,
@@ -95,6 +101,14 @@ export function useExtraction({
   const [isClearing, setIsClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestSeqRef = useRef(0);
+  const selectionScope = useMemo<ExtractionSelectionScope>(
+    () => ({ novelId: selectedNovelId, token: {} }),
+    [selectedNovelId],
+  );
+  const selectionScopeRef = useRef<ExtractionSelectionScope>(selectionScope);
+  useLayoutEffect(() => {
+    selectionScopeRef.current = selectionScope;
+  }, [selectionScope]);
 
   const defaultUpToEpisodeIndex = useMemo(() => {
     const episodeOrder = currentTocEpisodeIndex + (includeCurrentEpisode ? 1 : 0);
@@ -170,8 +184,9 @@ export function useExtraction({
   async function load(
     targetUpToEpisodeIndex: EpisodeIndex,
     options?: { background?: boolean },
+    scope: ExtractionSelectionScope = selectionScope,
   ) {
-    if (!selectedNovelId) {
+    if (!scope.novelId || scope.token !== selectionScopeRef.current.token) {
       return;
     }
 
@@ -189,7 +204,7 @@ export function useExtraction({
     setError(null);
 
     try {
-      const novelId = selectedNovelId;
+      const novelId = scope.novelId;
       const [initialSummary, initialTerms, nextJobs] = await Promise.all([
         fetchCharacterSummary(novelId, targetUpToEpisodeIndex),
         fetchTerms(novelId, targetUpToEpisodeIndex),
@@ -222,7 +237,7 @@ export function useExtraction({
         );
       }
 
-      if (requestSeq !== requestSeqRef.current) {
+      if (scope.token !== selectionScopeRef.current.token || requestSeq !== requestSeqRef.current) {
         return;
       }
 
@@ -231,7 +246,7 @@ export function useExtraction({
       setJobs(nextJobs);
       setNotice(notices.length > 0 ? notices.join(" ") : null);
     } catch (loadError) {
-      if (requestSeq !== requestSeqRef.current) {
+      if (scope.token !== selectionScopeRef.current.token || requestSeq !== requestSeqRef.current) {
         return;
       }
 
@@ -246,7 +261,7 @@ export function useExtraction({
         setNotice(null);
       }
     } finally {
-      if (requestSeq === requestSeqRef.current) {
+      if (scope.token === selectionScopeRef.current.token && requestSeq === requestSeqRef.current) {
         setIsLoading(false);
       }
     }
@@ -266,6 +281,7 @@ export function useExtraction({
     setTermsData(null);
     setJobs(null);
     setError(null);
+    setNotice(null);
     setRequestedUpToEpisodeIndex("");
     setRequestedGenerationStrategy("parallel_identity");
     setIncludeCurrentEpisodeState(false);
@@ -370,33 +386,52 @@ export function useExtraction({
       return;
     }
 
+    const scope = selectionScope;
+    const novelId = scope.novelId;
+    if (!novelId) {
+      return;
+    }
     const refreshTarget =
       requestedUpToEpisodeActualIndex ?? defaultUpToEpisodeActualIndex;
     setIsClearing(true);
     setError(null);
 
     try {
-      const result = await clearExtraction(selectedNovelId);
+      const result = await clearExtraction(novelId);
+      if (scope.token !== selectionScopeRef.current.token) {
+        return;
+      }
       setReaderNotice(result.message);
       setNotice(null);
       setJobs({ jobs: [] });
       if (refreshTarget) {
-        await load(refreshTarget);
+        await load(refreshTarget, undefined, scope);
       } else {
         setData(null);
         setTermsData(null);
       }
     } catch (clearError) {
+      if (scope.token !== selectionScopeRef.current.token) {
+        return;
+      }
       setError(
         clearError instanceof Error ? clearError.message : "Unknown error",
       );
     } finally {
-      setIsClearing(false);
+      if (scope.token === selectionScopeRef.current.token) {
+        setIsClearing(false);
+      }
     }
   }
 
   async function handleGenerate() {
     if (!selectedNovelId) {
+      return;
+    }
+
+    const scope = selectionScope;
+    const novelId = scope.novelId;
+    if (!novelId) {
       return;
     }
 
@@ -414,18 +449,26 @@ export function useExtraction({
     setError(null);
 
     try {
-      const result = await submitExtraction(selectedNovelId, {
+      const result = await submitExtraction(novelId, {
         upToEpisodeIndex: requestedUpToEpisodeActualIndex,
         generationStrategy: requestedGenerationStrategy,
       });
+      if (scope.token !== selectionScopeRef.current.token) {
+        return;
+      }
       setReaderNotice(result.message);
-      await load(requestedUpToEpisodeActualIndex);
+      await load(requestedUpToEpisodeActualIndex, undefined, scope);
     } catch (submitError) {
+      if (scope.token !== selectionScopeRef.current.token) {
+        return;
+      }
       setError(
         submitError instanceof Error ? submitError.message : "Unknown error",
       );
     } finally {
-      setIsSubmitting(false);
+      if (scope.token === selectionScopeRef.current.token) {
+        setIsSubmitting(false);
+      }
     }
   }
 

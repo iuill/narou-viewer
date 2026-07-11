@@ -13,6 +13,7 @@ type Job struct {
 	ProgressStage             *string `json:"progressStage,omitempty"`
 	CurrentBatchIndex         *int    `json:"currentBatchIndex,omitempty"`
 	BatchCount                *int    `json:"batchCount,omitempty"`
+	CompletedBatchCount       *int    `json:"completedBatchCount,omitempty"`
 	GeneratedCharacterCount   *int    `json:"generatedCharacterCount,omitempty"`
 	GeneratedTermCount        *int    `json:"generatedTermCount,omitempty"`
 	CreatedAt                 string  `json:"createdAt"`
@@ -37,6 +38,7 @@ type jobDocument struct {
 	ProgressStage             *string `yaml:"progress_stage,omitempty"`
 	CurrentBatchIndex         *int    `yaml:"current_batch_index,omitempty"`
 	BatchCount                *int    `yaml:"batch_count,omitempty"`
+	CompletedBatchCount       *int    `yaml:"completed_batch_count,omitempty"`
 	GeneratedCharacterCount   *int    `yaml:"generated_character_count,omitempty"`
 	GeneratedTermCount        *int    `yaml:"generated_term_count,omitempty"`
 	CreatedAt                 string  `yaml:"created_at"`

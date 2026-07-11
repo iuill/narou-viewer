@@ -106,15 +106,19 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		}
 		switch progress.Phase {
 		case "parallelStart":
-			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil, nil)
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
+			SetExtractionJobCompletedBatchCount(&job, progress.CompletedBatchCount)
 		case "start":
-			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.Batch.BatchIndex-1, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil, nil)
+			completedBatches := progress.Batch.BatchIndex - 1
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
+			SetExtractionJobCompletedBatchCount(&job, completedBatches)
 		case "complete":
 			completedBatches := progress.Batch.BatchIndex
 			if progress.CompletedBatchCount > 0 {
 				completedBatches = progress.CompletedBatchCount
 			}
 			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batchComplete", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, &progress.MergedCharacterCount, &progress.MergedTermCount)
+			SetExtractionJobCompletedBatchCount(&job, completedBatches)
 		default:
 			return
 		}
@@ -152,6 +156,9 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 	job.FinishedAt = &finishedAt
 	job.ErrorMessage = nil
 	SetExtractionJobProgress(&job, 100, "completed", job.CurrentBatchIndex, job.BatchCount, &counts.CharacterCount, &counts.TermCount)
+	if job.BatchCount != nil {
+		SetExtractionJobCompletedBatchCount(&job, *job.BatchCount)
+	}
 	saveStartedAt := time.Now()
 	err := p.store.Save(novelID, job)
 	status := "ok"
@@ -216,6 +223,16 @@ func SetExtractionJobProgress(job *extractdomain.Job, progress int, stage string
 	job.BatchCount = batchCount
 	job.GeneratedCharacterCount = generatedCharacterCount
 	job.GeneratedTermCount = generatedTermCount
+}
+
+func SetExtractionJobCompletedBatchCount(job *extractdomain.Job, completedBatchCount int) {
+	if completedBatchCount < 0 {
+		completedBatchCount = 0
+	}
+	if job.BatchCount != nil && completedBatchCount > *job.BatchCount {
+		completedBatchCount = *job.BatchCount
+	}
+	job.CompletedBatchCount = &completedBatchCount
 }
 
 func ExtractionJobBatchProgressPercent(completedBatches int, batchCount int) int {

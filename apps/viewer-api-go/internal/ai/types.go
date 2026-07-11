@@ -15,10 +15,15 @@ type SettingsMetadata struct {
 	SharedProviders          SharedProviders          `json:"sharedProviders"`
 	Profiles                 []Profile                `json:"profiles"`
 	ExtractionStrategyModels ExtractionStrategyModels `json:"extractionStrategyModels"`
+	ExtractionRuntime        ExtractionRuntime        `json:"extractionRuntime"`
 }
 
 type ExtractionStrategyModels struct {
 	NameDiscoveryModelID *string `json:"nameDiscoveryModelId"`
+}
+
+type ExtractionRuntime struct {
+	ParallelRequestConcurrency int `json:"parallelRequestConcurrency"`
 }
 
 type SharedProviders struct {
@@ -136,7 +141,9 @@ type Job struct {
 	ProgressStage             *string `json:"progressStage,omitempty"`
 	CurrentBatchIndex         *int    `json:"currentBatchIndex,omitempty"`
 	BatchCount                *int    `json:"batchCount,omitempty"`
+	CompletedBatchCount       *int    `json:"completedBatchCount,omitempty"`
 	GeneratedCharacterCount   *int    `json:"generatedCharacterCount,omitempty"`
+	GeneratedTermCount        *int    `json:"generatedTermCount,omitempty"`
 	CreatedAt                 string  `json:"createdAt"`
 	StartedAt                 *string `json:"startedAt"`
 	FinishedAt                *string `json:"finishedAt"`
@@ -184,6 +191,7 @@ func DefaultSettings(preferredMode string) SettingsResponse {
 				},
 			},
 			ExtractionStrategyModels: ExtractionStrategyModels{},
+			ExtractionRuntime:        ExtractionRuntime{ParallelRequestConcurrency: 3},
 		},
 	}
 }

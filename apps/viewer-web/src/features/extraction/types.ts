@@ -33,6 +33,7 @@ export type ExtractionJobSummary = {
     | string;
   currentBatchIndex?: number;
   batchCount?: number;
+  completedBatchCount?: number;
   generatedCharacterCount?: number;
   generatedTermCount?: number;
   createdAt: string;

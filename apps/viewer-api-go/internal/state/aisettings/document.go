@@ -18,6 +18,7 @@ type aiGenerationSettingsDocument struct {
 	SharedProviders               aiSharedProvidersDocument          `yaml:"shared_providers"`
 	Profiles                      []aiGenerationProfileRecord        `yaml:"profiles"`
 	ExtractionStrategyModels      aiExtractionStrategyModelsDocument `yaml:"extraction_strategy_models,omitempty"`
+	ExtractionRuntime             aiExtractionRuntimeDocument        `yaml:"extraction_runtime,omitempty"`
 	LegacyCharacterStrategyModels aiExtractionStrategyModelsDocument `yaml:"character_summary_strategy_models,omitempty"`
 }
 
@@ -38,6 +39,10 @@ type aiAPIKeyDocument struct {
 
 type aiExtractionStrategyModelsDocument struct {
 	NameDiscoveryModelID *string `yaml:"name_discovery_model_id,omitempty"`
+}
+
+type aiExtractionRuntimeDocument struct {
+	ParallelRequestConcurrency int `yaml:"parallel_request_concurrency"`
 }
 
 type aiGenerationProfileRecord struct {
@@ -108,6 +113,7 @@ func emptyAiGenerationSettingsDocument() aiGenerationSettingsDocument {
 				UpdatedAt:         nil,
 			},
 		},
+		ExtractionRuntime: aiExtractionRuntimeDocument{ParallelRequestConcurrency: 3},
 	}
 }
 
@@ -127,6 +133,9 @@ func normalizeAIGenerationSettingsDocument(raw aiGenerationSettingsDocument) aiG
 	}
 	doc.ExtractionStrategyModels = aiExtractionStrategyModelsDocument{
 		NameDiscoveryModelID: normalizeStringPtr(strategyModels.NameDiscoveryModelID),
+	}
+	doc.ExtractionRuntime = aiExtractionRuntimeDocument{
+		ParallelRequestConcurrency: normalizeParallelRequestConcurrency(raw.ExtractionRuntime.ParallelRequestConcurrency),
 	}
 	profiles := make([]aiGenerationProfileRecord, 0, len(raw.Profiles))
 	for _, profile := range raw.Profiles {
@@ -215,8 +224,21 @@ func toAIGenerationSettingsResponse(doc aiGenerationSettingsDocument) ai.Setting
 			ExtractionStrategyModels: ai.ExtractionStrategyModels{
 				NameDiscoveryModelID: normalizeStringPtr(doc.ExtractionStrategyModels.NameDiscoveryModelID),
 			},
+			ExtractionRuntime: ai.ExtractionRuntime{
+				ParallelRequestConcurrency: normalizeParallelRequestConcurrency(doc.ExtractionRuntime.ParallelRequestConcurrency),
+			},
 		},
 	}
+}
+
+func normalizeParallelRequestConcurrency(value int) int {
+	if value < 1 {
+		return 3
+	}
+	if value > 20 {
+		return 20
+	}
+	return value
 }
 
 func normalizeAIAPIKeyDocument(value aiAPIKeyDocument) aiAPIKeyDocument {

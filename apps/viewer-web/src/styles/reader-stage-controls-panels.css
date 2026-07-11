@@ -1320,28 +1320,29 @@
 }
 
 .reader-character-job-list,
-.reader-character-list {
+.reader-character-list,
+.reader-term-list {
   display: grid;
   gap: 8px;
 }
 
-.reader-character-list-header {
+.reader-extraction-list-header {
   align-items: end;
   margin-bottom: 0;
 }
 
-.reader-character-filter {
+.reader-extraction-filter {
   display: grid;
   gap: 4px;
   min-width: 180px;
 }
 
-.reader-character-filter span {
+.reader-extraction-filter span {
   font-size: 0.78rem;
   color: var(--text-soft);
 }
 
-.reader-character-filter select {
+.reader-extraction-filter select {
   height: 2.35rem;
   min-height: 2.35rem;
   padding: 0.45rem 0.7rem;

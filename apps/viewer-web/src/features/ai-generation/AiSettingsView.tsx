@@ -5,6 +5,7 @@ import {
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft,
+  type ExtractionRuntimeDraft,
   type ExtractionStrategyModelsDraft
 } from "./model";
 import type { AiGenerationSettingsResponse } from "./types";
@@ -26,6 +27,8 @@ export type AiSettingsViewProps = {
   aiGenerationProfileDrafts: AiGenerationProfileDraft[];
   extractionStrategyModelsDraft: ExtractionStrategyModelsDraft;
   onSetExtractionStrategyModelsDraft: (draft: ExtractionStrategyModelsDraft) => void;
+  extractionRuntimeDraft: ExtractionRuntimeDraft;
+  onSetExtractionRuntimeDraft: (draft: ExtractionRuntimeDraft) => void;
   defaultAiGenerationProfileDraft: AiGenerationProfileDraft | null;
   editingAiGenerationProfileId: string;
   onSelectEditingAiGenerationProfile: (profileId: string) => void;
@@ -55,6 +58,8 @@ export function AiSettingsView({
   aiGenerationProfileDrafts,
   extractionStrategyModelsDraft,
   onSetExtractionStrategyModelsDraft,
+  extractionRuntimeDraft,
+  onSetExtractionRuntimeDraft,
   defaultAiGenerationProfileDraft,
   editingAiGenerationProfileId,
   onSelectEditingAiGenerationProfile,
@@ -244,10 +249,44 @@ export function AiSettingsView({
           <section className="library-queue-section">
             <div className="panel-header compact library-queue-header">
               <div>
-                <h3>抽出モデル</h3>
-                <p>事前発見 + 並列抽出 + 補正で使う補助モデルを指定します。</p>
+                <h3>人物・用語抽出</h3>
+                <p>並列方式の同時リクエスト数と、事前発見で使う補助モデルを指定します。</p>
               </div>
             </div>
+            <label className="download-form-field">
+              <span>
+                並列処理数
+                <button
+                  aria-expanded={openAiGenerationHelpKey === "parallelRequestConcurrency"}
+                  aria-label="並列処理数の説明を表示"
+                  className="field-help"
+                  onClick={() => onToggleAiGenerationHelp("parallelRequestConcurrency")}
+                  type="button"
+                >
+                  i
+                </button>
+              </span>
+              <select
+                onChange={(event) =>
+                  onSetExtractionRuntimeDraft({
+                    ...extractionRuntimeDraft,
+                    parallelRequestConcurrency: Number(event.target.value)
+                  })
+                }
+                value={extractionRuntimeDraft.parallelRequestConcurrency}
+              >
+                {Array.from({ length: 20 }, (_, index) => index + 1).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              {openAiGenerationHelpKey === "parallelRequestConcurrency" ? (
+                <p className="field-help-text">
+                  並列抽出を選んだときに、人物・用語抽出のLLMリクエストを同時に実行する上限です。既定は3、最大20です。大きくすると速くなる場合がありますが、providerのrate limitや端末・サーバー負荷も増えます。順次抽出には適用されません。
+                </p>
+              ) : null}
+            </label>
             <label className="download-form-field">
               <span>
                 名前発見モデル

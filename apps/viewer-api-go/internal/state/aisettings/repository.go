@@ -42,6 +42,7 @@ type AIGenerationSettingsUpdate struct {
 	Profiles                 []AIProfileInput
 	ProfilesSet              bool
 	ExtractionStrategyModels *AIExtractionStrategyModelsInput
+	ExtractionRuntime        *AIExtractionRuntimeInput
 }
 
 type AISharedProvidersInput struct {
@@ -58,6 +59,10 @@ type AIProviderCredentialInput struct {
 
 type AIExtractionStrategyModelsInput struct {
 	NameDiscoveryModelID *string
+}
+
+type AIExtractionRuntimeInput struct {
+	ParallelRequestConcurrency int
 }
 
 type AIProfileInput struct {
@@ -116,6 +121,9 @@ func (r *Repository) PutAIGenerationSettings(input AIGenerationSettingsUpdate) (
 	}
 	if input.ExtractionStrategyModels != nil {
 		doc.ExtractionStrategyModels.NameDiscoveryModelID = normalizeStringPtr(input.ExtractionStrategyModels.NameDiscoveryModelID)
+	}
+	if input.ExtractionRuntime != nil {
+		doc.ExtractionRuntime.ParallelRequestConcurrency = normalizeParallelRequestConcurrency(input.ExtractionRuntime.ParallelRequestConcurrency)
 	}
 	if input.ProfilesSet {
 		existingProfiles := make(map[string]aiGenerationProfileRecord, len(doc.Profiles))

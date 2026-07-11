@@ -160,6 +160,36 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 			result.CheckpointsDeleted++
 		}
 	}
+	conflictRoot := filepath.Join(stateDir, "extraction_jobs", "legacy_conflicts")
+	_ = filepath.WalkDir(conflictRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return nil
+		}
+		matchesNovel := false
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".yaml", ".yml":
+			var doc struct {
+				NovelID string `yaml:"novel_id"`
+			}
+			if ok, err := readYAMLIfExists(path, &doc); err == nil && ok {
+				matchesNovel = doc.NovelID == novelID
+			}
+		case ".json":
+			raw, err := os.ReadFile(path)
+			if err == nil {
+				var doc struct {
+					NovelID string `json:"novelId"`
+				}
+				matchesNovel = json.Unmarshal(raw, &doc) == nil && doc.NovelID == novelID
+			}
+		}
+		if matchesNovel {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Printf("extraction: legacy conflict could not be pruned %s: %v", path, err)
+			}
+		}
+		return nil
+	})
 	return result, nil
 }
 
@@ -199,6 +229,7 @@ func (d jobDocument) toJob() Job {
 		ProgressStage:             d.ProgressStage,
 		CurrentBatchIndex:         d.CurrentBatchIndex,
 		BatchCount:                d.BatchCount,
+		CompletedBatchCount:       d.CompletedBatchCount,
 		GeneratedCharacterCount:   d.GeneratedCharacterCount,
 		GeneratedTermCount:        d.GeneratedTermCount,
 		CreatedAt:                 d.CreatedAt,
@@ -258,6 +289,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 		job.ProgressStage = &stage
 		job.CurrentBatchIndex = nil
 		job.BatchCount = nil
+		job.CompletedBatchCount = nil
 		job.GeneratedCharacterCount = nil
 		job.GeneratedTermCount = nil
 		if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
@@ -285,6 +317,7 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		ProgressStage:             job.ProgressStage,
 		CurrentBatchIndex:         job.CurrentBatchIndex,
 		BatchCount:                job.BatchCount,
+		CompletedBatchCount:       job.CompletedBatchCount,
 		GeneratedCharacterCount:   job.GeneratedCharacterCount,
 		GeneratedTermCount:        job.GeneratedTermCount,
 		CreatedAt:                 job.CreatedAt,

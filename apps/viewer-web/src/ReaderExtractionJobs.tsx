@@ -12,8 +12,8 @@ const EXTRACTION_JOB_STAGE_LABELS: Record<string, string> = {
   queued: "待機中",
   running: "実行中",
   preparing: "準備中",
-  batch: "batch 生成中",
-  batchComplete: "batch 完了",
+  batch: "人物・用語一覧を生成中",
+  batchComplete: "人物・用語一覧を反映中",
   completed: "完了",
   failed: "失敗",
   recovered: "再開待ち"
@@ -78,7 +78,11 @@ function ExtractionJobCard({
 function ExtractionJobProgress({ job }: { job: ExtractionJobSummary }) {
   const progress = clampProgress(job.progress);
   const batchLabel =
-    job.currentBatchIndex && job.batchCount ? `batch ${job.currentBatchIndex}/${job.batchCount}` : null;
+    typeof job.completedBatchCount === "number" && job.batchCount
+      ? `batch 完了 ${job.completedBatchCount}/${job.batchCount}`
+      : job.currentBatchIndex && job.batchCount
+        ? `batch 実行中 ${job.currentBatchIndex}/${job.batchCount}`
+        : null;
   const generatedLabel =
     typeof job.generatedCharacterCount === "number" ? `${job.generatedCharacterCount} 人まで反映` : null;
   const generatedTermLabel = typeof job.generatedTermCount === "number" ? `${job.generatedTermCount} 用語まで反映` : null;
@@ -91,7 +95,7 @@ function ExtractionJobProgress({ job }: { job: ExtractionJobSummary }) {
     <div className="reader-character-job-progress">
       {progress !== null ? (
         <div
-          aria-label={`生成進捗 ${progress}%`}
+          aria-label={`生成全体進捗 ${progress}%`}
           aria-valuemax={100}
           aria-valuemin={0}
           aria-valuenow={progress}
@@ -102,7 +106,7 @@ function ExtractionJobProgress({ job }: { job: ExtractionJobSummary }) {
         </div>
       ) : null}
       <p>
-        {progress !== null ? `${progress}%` : null}
+        {progress !== null ? `全体 ${progress}%` : null}
         {batchLabel ? `${progress !== null ? " / " : ""}${batchLabel}` : null}
         {generatedLabel ? `${progress !== null || batchLabel ? " / " : ""}${generatedLabel}` : null}
         {generatedTermLabel

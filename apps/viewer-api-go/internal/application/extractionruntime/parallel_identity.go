@@ -257,8 +257,11 @@ func (l *parallelIdentityLLMStartLimiter) Wait(ctx context.Context) error {
 	return nil
 }
 
-func parallelIdentityLLMConcurrency() int {
-	concurrency := positiveEnvInt("EXTRACTION_LLM_CONCURRENCY", defaultParallelIdentityLLMConcurrency)
+func parallelIdentityLLMConcurrency(config *store.ResolvedAIGenerationConfig) int {
+	concurrency := defaultParallelIdentityLLMConcurrency
+	if config != nil && config.ExtractionParallelConcurrency > 0 {
+		concurrency = config.ExtractionParallelConcurrency
+	}
 	if concurrency > maxParallelIdentityLLMConcurrency {
 		return maxParallelIdentityLLMConcurrency
 	}
@@ -285,14 +288,20 @@ func parallelIdentityMaxReduceTokens() int {
 	return positiveEnvInt("EXTRACTION_PARALLEL_MAX_REDUCE_TOKENS", defaultParallelIdentityMaxReduceTokens)
 }
 
-func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, run func(context.Context, int) error) error {
+func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, concurrency int, run func(context.Context, int) error) error {
 	if jobCount == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	sem := make(chan struct{}, parallelIdentityLLMConcurrency())
+	if concurrency < 1 {
+		concurrency = defaultParallelIdentityLLMConcurrency
+	}
+	if concurrency > maxParallelIdentityLLMConcurrency {
+		concurrency = maxParallelIdentityLLMConcurrency
+	}
+	sem := make(chan struct{}, concurrency)
 	startLimiter := newParallelIdentityLLMStartLimiter(parallelIdentityLLMStartInterval())
 	var wg sync.WaitGroup
 	var errMu sync.Mutex
@@ -356,7 +365,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	completedCount := 0
 	completedCandidateCount := 0
 	completedTermNames := map[string]bool{}
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), func(requestCtx context.Context, index int) error {
+	runErr := runParallelIdentityLLMJobs(ctx, len(batches), parallelIdentityLLMConcurrency(config), func(requestCtx context.Context, index int) error {
 		batch := batches[index]
 		boundary := extractionBatchBoundary(batch)
 		projectedCharacters := projectGeneratedCharactersAtBoundary(knownCharacters, boundary)
@@ -721,7 +730,7 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 		Err          error
 	}
 	results := make([]discoveryResult, len(batches))
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), func(requestCtx context.Context, index int) error {
+	runErr := runParallelIdentityLLMJobs(ctx, len(batches), parallelIdentityLLMConcurrency(config), func(requestCtx context.Context, index int) error {
 		names, usage, err := r.discoverParallelIdentityNamesForBatch(requestCtx, config, novelID, upToEpisodeIndex, index, batches[index])
 		results[index] = discoveryResult{RequestIndex: index, Names: names, Usage: usage, Err: err}
 		return err
@@ -1656,10 +1665,14 @@ func applyParallelIdentityCurrentProjectionToPersistence(persistence []character
 		if !ok {
 			continue
 		}
-		if name := strings.TrimSpace(projected.CanonicalName); name != "" && generatedCharacterNameEpisodeIndex(raw, name) == "" {
+		if name := strings.TrimSpace(projected.CanonicalName); name != "" {
+			episodeIndex := generatedCharacterNameEpisodeIndex(raw, name)
+			if episodeIndex == "" {
+				episodeIndex = effectiveEpisodeIndex
+			}
 			result[index].CanonicalName = name
-			result[index].CanonicalEpisodeIndex = effectiveEpisodeIndex
-			result[index].NameHistory = mergeGeneratedTextVersionLists(append(result[index].NameHistory, characters.GeneratedTextVersion{Text: name, EpisodeIndex: effectiveEpisodeIndex}))
+			result[index].CanonicalEpisodeIndex = episodeIndex
+			result[index].NameHistory = mergeGeneratedTextVersionLists(append(result[index].NameHistory, characters.GeneratedTextVersion{Text: name, EpisodeIndex: episodeIndex}))
 		}
 		for _, alias := range projected.Aliases {
 			name := strings.TrimSpace(alias.Text)

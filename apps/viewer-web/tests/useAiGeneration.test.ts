@@ -110,6 +110,9 @@ function createSettings(): AiGenerationSettingsResponse {
       ],
       extractionStrategyModels: {
         nameDiscoveryModelId: "openai/gpt-5-nano"
+      },
+      extractionRuntime: {
+        parallelRequestConcurrency: 4
       }
     }
   };
@@ -225,6 +228,7 @@ describe("useAiGeneration", () => {
     expect(latest?.selectedProfileId).toBe("profile-a");
     expect(latest?.profileDrafts).toHaveLength(1);
     expect(latest?.extractionStrategyModelsDraft.nameDiscoveryModelId).toBe("openai/gpt-5-nano");
+    expect(latest?.extractionRuntimeDraft.parallelRequestConcurrency).toBe(4);
     expect(latest?.activeJobs).toHaveLength(1);
     expect(latest?.playgroundNovelId).toBe("novel-a");
 

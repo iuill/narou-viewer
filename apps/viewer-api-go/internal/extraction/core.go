@@ -1025,6 +1025,9 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 }
 
 func NormalizeOpenRouterResponseForEpisodes(raw []byte, novelID string, fallbackEpisodeIndex string, allowedEpisodeIndexes []string) (Delta, error) {
+	if err := validateOpenRouterTermContract(raw); err != nil {
+		return Delta{}, err
+	}
 	delta, err := NormalizeOpenRouterResponse(raw, novelID, fallbackEpisodeIndex)
 	if err != nil {
 		return Delta{}, err
@@ -1033,6 +1036,72 @@ func NormalizeOpenRouterResponseForEpisodes(raw []byte, novelID string, fallback
 		return Delta{}, err
 	}
 	return delta, nil
+}
+
+func validateOpenRouterTermContract(raw []byte) error {
+	var payload struct {
+		Terms json.RawMessage `json:"terms"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.Terms == nil || string(payload.Terms) == "null" {
+		return extractionTermContractError()
+	}
+	var rawTerms []json.RawMessage
+	if err := json.Unmarshal(payload.Terms, &rawTerms); err != nil {
+		return extractionTermContractError()
+	}
+	for _, rawTerm := range rawTerms {
+		var item map[string]json.RawMessage
+		if err := json.Unmarshal(rawTerm, &item); err != nil || len(item) != 4 {
+			return extractionTermContractError()
+		}
+		for _, key := range []string{"term", "reading", "category", "descriptionHistory"} {
+			if item[key] == nil {
+				return extractionTermContractError()
+			}
+		}
+		var termText string
+		if err := json.Unmarshal(item["term"], &termText); err != nil || strings.TrimSpace(termText) == "" {
+			return extractionTermContractError()
+		}
+		if string(item["reading"]) != "null" {
+			if err := validateOpenRouterTermVersion(item["reading"], "text", false); err != nil {
+				return err
+			}
+		}
+		if err := validateOpenRouterTermVersion(item["category"], "value", true); err != nil {
+			return err
+		}
+		var descriptions []json.RawMessage
+		if err := json.Unmarshal(item["descriptionHistory"], &descriptions); err != nil || len(descriptions) == 0 {
+			return extractionTermContractError()
+		}
+		for _, description := range descriptions {
+			if err := validateOpenRouterTermVersion(description, "text", false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, category bool) error {
+	var item map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil {
+		return extractionTermContractError()
+	}
+	var value string
+	var episodeIndex string
+	if json.Unmarshal(item[valueKey], &value) != nil || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil || !isDigitsString(episodeIndex) {
+		return extractionTermContractError()
+	}
+	if category {
+		switch value {
+		case string(terms.CategoryOrganization), string(terms.CategoryPlace), string(terms.CategoryItem), string(terms.CategorySkill), string(terms.CategoryRace), string(terms.CategoryEvent), string(terms.CategoryOther):
+		default:
+			return extractionTermContractError()
+		}
+	}
+	return nil
 }
 
 func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) error {

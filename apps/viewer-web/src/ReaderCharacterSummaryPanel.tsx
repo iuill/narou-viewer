@@ -69,6 +69,10 @@ export function ReaderCharacterSummaryPanel({
   onSubmit
 }: Props) {
   const [selectedCategory, setSelectedCategory] = useState<"all" | CharacterImportanceCategory>("all");
+  const displayedBoundary =
+    data?.status === "partial"
+      ? (data.processedUpToEpisodeIndex ?? data.upToEpisodeIndex)
+      : (data?.upToEpisodeIndex ?? null);
   const visibleCharacters = useMemo(() => {
     if (data?.status !== "ready" && data?.status !== "partial") {
       return [];
@@ -131,14 +135,14 @@ export function ReaderCharacterSummaryPanel({
       {data?.status === "ready" || data?.status === "partial" ? (
         data.characters.length > 0 ? (
           <section className="reader-character-list">
-            <div className="panel-header compact reader-character-list-header">
+            <div className="panel-header compact reader-extraction-list-header">
               <div>
                 <h3>一覧</h3>
                 <p>
-                  第{formatEpisodeOrderLabel(data.processedUpToEpisodeIndex ?? data.upToEpisodeIndex)}話時点 / {visibleCharacters.length} / {data.characters.length} 人
+                  第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点 / {visibleCharacters.length} / {data.characters.length} 人
                 </p>
               </div>
-              <label className="reader-character-filter">
+              <label className="reader-extraction-filter">
                 <span>カテゴリ</span>
                 <select
                   onChange={(event) => setSelectedCategory(event.target.value as "all" | CharacterImportanceCategory)}

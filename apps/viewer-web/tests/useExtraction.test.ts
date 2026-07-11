@@ -6,6 +6,7 @@ import { JSDOM } from "jsdom";
 import { fetchCharacterSummary } from "../src/features/characters/api";
 import type { CharacterSummaryResponse } from "../src/features/characters/types";
 import {
+  clearExtraction,
   fetchExtractionJobs,
   submitExtraction,
 } from "../src/features/extraction/api";
@@ -27,6 +28,16 @@ vi.mock("../src/features/terms/api", () => ({ fetchTerms: vi.fn() }));
 
 type HookResult = ReturnType<typeof useExtraction>;
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
+}
+
 function installDom(): JSDOM {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -38,6 +49,7 @@ function installDom(): JSDOM {
   vi.stubGlobal("window", dom.window);
   vi.stubGlobal("document", dom.window.document);
   vi.stubGlobal("navigator", dom.window.navigator);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
   return dom;
 }
@@ -91,6 +103,42 @@ function createToc(): TocResponse {
         bodyStatus: "complete",
       },
     ],
+  };
+}
+
+function createTocForNovel(novelId: string): TocResponse {
+  return { ...createToc(), novelId, fetcherWorkId: novelId, title: `作品 ${novelId}` };
+}
+
+function renderSwitchableHookHarness(onRender: (result: HookResult) => void, notices: string[]) {
+  const rootElement = document.getElementById("root");
+  if (!rootElement) {
+    throw new Error("root element is missing");
+  }
+  const root = createRoot(rootElement);
+  function Harness({ novelId }: { novelId: string }) {
+    const result = useExtraction({
+      currentTocEpisodeIndex: 2,
+      formatEpisodeOrderLabel: (episodeIndex) => episodeIndex,
+      isOpen: true,
+      onClosePanel: vi.fn(),
+      onOpenPanel: vi.fn(),
+      onOpenTermsPanel: vi.fn(),
+      screenMode: "reader",
+      selectedNovelId: novelId,
+      setReaderNotice: (nextNotice) => {
+        if (typeof nextNotice !== "function" && nextNotice !== null) {
+          notices.push(nextNotice);
+        }
+      },
+      toc: createTocForNovel(novelId),
+    });
+    onRender(result);
+    return null;
+  }
+  return {
+    render: (novelId: string) => root.render(createElement(Harness, { novelId })),
+    root,
   };
 }
 
@@ -356,5 +404,127 @@ describe("useExtraction", () => {
     expect(fetchCharacterSummary).toHaveBeenCalledWith("novel-a", "3");
 
     await act(async () => root?.unmount());
+  });
+
+  it("does not write an old generation result after switching away and back", async () => {
+    installDom();
+    const submitA = deferred<Awaited<ReturnType<typeof submitExtraction>>>();
+    vi.mocked(submitExtraction).mockReturnValue(submitA.promise);
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchCharacterSummary).mockImplementation(async (novelId, episodeIndex) => ({
+      ...createReadySummary(episodeIndex),
+      novelId,
+    }));
+    vi.mocked(fetchTerms).mockImplementation(async (novelId, episodeIndex) => ({
+      ...createReadyTerms(episodeIndex),
+      novelId,
+    }));
+
+    let latest: HookResult | null = null;
+    const notices: string[] = [];
+    const harness = renderSwitchableHookHarness((result) => {
+      latest = result;
+    }, notices);
+    await act(async () => {
+      harness.render("novel-a");
+      await flushAsyncWork();
+      latest?.setRequestedUpToEpisodeIndex("2");
+      await flushAsyncWork();
+    });
+    let oldOperation!: Promise<void>;
+    await act(async () => {
+      oldOperation = latest?.handleGenerate() ?? Promise.resolve();
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      harness.render("novel-b");
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      harness.render("novel-a");
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+    const refreshCallsBeforeOldResult = vi.mocked(fetchCharacterSummary).mock.calls.length;
+    await act(async () => {
+      submitA.resolve({
+        jobId: "old-job-a",
+        generationStrategy: "parallel_identity",
+        message: "古い生成結果",
+        requestedUpToEpisodeIndex: "2",
+        status: "queued",
+      });
+      await oldOperation;
+      await flushAsyncWork();
+    });
+
+    expect(latest?.data?.novelId).toBe("novel-a");
+    expect(vi.mocked(fetchCharacterSummary)).toHaveBeenCalledTimes(refreshCallsBeforeOldResult);
+    expect(notices).not.toContain("古い生成結果");
+    expect(latest?.isSubmitting).toBe(false);
+    await act(async () => harness.root.unmount());
+  });
+
+  it("does not write an old clear result into the newly selected novel", async () => {
+    installDom();
+    const clearA = deferred<Awaited<ReturnType<typeof clearExtraction>>>();
+    vi.mocked(clearExtraction).mockReturnValue(clearA.promise);
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });
+    vi.mocked(fetchCharacterSummary).mockImplementation(async (novelId, episodeIndex) => ({
+      ...createReadySummary(episodeIndex),
+      novelId,
+    }));
+    vi.mocked(fetchTerms).mockImplementation(async (novelId, episodeIndex) => ({
+      ...createReadyTerms(episodeIndex),
+      novelId,
+    }));
+
+    let latest: HookResult | null = null;
+    const notices: string[] = [];
+    const harness = renderSwitchableHookHarness((result) => {
+      latest = result;
+    }, notices);
+    await act(async () => {
+      harness.render("novel-a");
+      await flushAsyncWork();
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+    let oldOperation!: Promise<void>;
+    await act(async () => {
+      oldOperation = latest?.handleClear() ?? Promise.resolve();
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      harness.render("novel-b");
+      await flushAsyncWork();
+    });
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+    const refreshCallsBeforeOldResult = vi.mocked(fetchCharacterSummary).mock.calls.length;
+    await act(async () => {
+      clearA.resolve({
+        message: "古いクリア結果",
+        characterProfileDeleted: true,
+        characterEventsDeleted: true,
+        termProfileDeleted: true,
+        extractionJobsDeleted: 1,
+        extractionJobIndexDeleted: true,
+        extractionCheckpointsDeleted: 0,
+      });
+      await oldOperation;
+      await flushAsyncWork();
+    });
+
+    expect(latest?.data?.novelId).toBe("novel-b");
+    expect(vi.mocked(fetchCharacterSummary)).toHaveBeenCalledTimes(refreshCallsBeforeOldResult);
+    expect(notices).not.toContain("古いクリア結果");
+    expect(latest?.isClearing).toBe(false);
+    await act(async () => harness.root.unmount());
   });
 });

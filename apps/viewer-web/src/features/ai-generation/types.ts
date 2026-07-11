@@ -49,6 +49,9 @@ export type AiGenerationSettingsResponse = {
     extractionStrategyModels: {
       nameDiscoveryModelId: string | null;
     };
+    extractionRuntime: {
+      parallelRequestConcurrency: number;
+    };
   };
 };
 
@@ -78,6 +81,9 @@ export type AiGenerationSettingsRequest = Partial<{
   }>;
   extractionStrategyModels: {
     nameDiscoveryModelId: string | null;
+  };
+  extractionRuntime: {
+    parallelRequestConcurrency: number;
   };
 }>;
 

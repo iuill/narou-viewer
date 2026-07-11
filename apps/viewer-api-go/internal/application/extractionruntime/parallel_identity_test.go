@@ -164,7 +164,6 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -185,7 +184,7 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 	candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidates(
 		context.Background(),
-		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true},
+		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true, ExtractionParallelConcurrency: 1},
 		"novel-1",
 		"2",
 		nil,
@@ -243,14 +242,13 @@ func TestExtractParallelIdentityCandidatesReturnsUsageFromSuccessfulAndNormaliza
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 	batches := []extractionBatch{
 		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文1"}}},
 		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "本文2"}}},
 	}
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	_, _, _, usage, _, err := runtime.extractParallelIdentityCandidates(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "2", nil, batches, nil, nil)
+	_, _, _, usage, _, err := runtime.extractParallelIdentityCandidates(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model", ExtractionParallelConcurrency: 1}, "novel-1", "2", nil, batches, nil, nil)
 	if err == nil {
 		t.Fatal("normalization failure should be returned")
 	}
@@ -274,7 +272,6 @@ func TestExtractParallelIdentityCandidatesDoesNotSendFutureCandidatesToEarlierBa
 	}))
 	defer server.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	known := []characters.GeneratedCharacter{
@@ -286,7 +283,7 @@ func TestExtractParallelIdentityCandidatesDoesNotSendFutureCandidatesToEarlierBa
 		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "王女セリアが名乗った。"}}},
 	}
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnown(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "test-model"}, "novel-1", "20", known, nil, batches, nil, nil)
+	_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnown(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "test-model", ExtractionParallelConcurrency: 1}, "novel-1", "20", known, nil, batches, nil, nil)
 	if err != nil {
 		t.Fatalf("extract candidates: %v", err)
 	}
@@ -335,7 +332,6 @@ func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 	}))
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -345,7 +341,7 @@ func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 	}
 	_, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(
 		context.Background(),
-		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true},
+		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true, ExtractionParallelConcurrency: 1},
 		"novel-1",
 		"2",
 		nil,
@@ -397,7 +393,6 @@ func TestParallelIdentityAppliesTrustedMergeProposalsAfterResolver(t *testing.T)
 			}))
 			defer openrouter.Close()
 			t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-			t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 			t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 			t.Setenv("EXTRACTION_PARALLEL_MAX_REDUCE_ITEMS", testCase.maxReduceItems)
 
@@ -409,7 +404,7 @@ func TestParallelIdentityAppliesTrustedMergeProposalsAfterResolver(t *testing.T)
 			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 			generated, state, _, err := runtime.generateOpenRouterExtractionParallelIdentity(
 				context.Background(),
-				&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"},
+				&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model", ExtractionParallelConcurrency: 1},
 				"novel-1",
 				"2",
 				seed,
@@ -453,14 +448,13 @@ func TestParallelIdentityResolverMergeIsEffectiveAtGenerationBoundary(t *testing
 }
 
 func TestRunParallelIdentityLLMJobsLimitsConcurrencyAndStaggersStarts(t *testing.T) {
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "2")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "20")
 
 	var mu sync.Mutex
 	active := 0
 	maxActive := 0
 	starts := []time.Time{}
-	err := runParallelIdentityLLMJobs(context.Background(), 4, func(ctx context.Context, _ int) error {
+	err := runParallelIdentityLLMJobs(context.Background(), 4, 2, func(ctx context.Context, _ int) error {
 		mu.Lock()
 		active++
 		if active > maxActive {
@@ -497,15 +491,12 @@ func TestRunParallelIdentityLLMJobsLimitsConcurrencyAndStaggersStarts(t *testing
 	}
 }
 
-func TestParallelIdentityLLMConfigReadsEnvironment(t *testing.T) {
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "99")
-	if got := parallelIdentityLLMConcurrency(); got != maxParallelIdentityLLMConcurrency {
+func TestParallelIdentityLLMConfig(t *testing.T) {
+	if got := parallelIdentityLLMConcurrency(&store.ResolvedAIGenerationConfig{ExtractionParallelConcurrency: 99}); got != maxParallelIdentityLLMConcurrency {
 		t.Fatalf("concurrency should be capped: got %d", got)
 	}
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "bad")
-	if got := parallelIdentityLLMConcurrency(); got != defaultParallelIdentityLLMConcurrency {
-		t.Fatalf("invalid concurrency should use default: got %d", got)
+	if got := parallelIdentityLLMConcurrency(nil); got != defaultParallelIdentityLLMConcurrency {
+		t.Fatalf("missing concurrency should use default: got %d", got)
 	}
 
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
@@ -539,12 +530,11 @@ func TestParallelIdentityLLMStartLimiterStopsWaitingOnContextCancel(t *testing.T
 }
 
 func TestRunParallelIdentityLLMJobsCancelsAfterFirstError(t *testing.T) {
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	expected := errors.New("first request failed")
 	var started int32
-	err := runParallelIdentityLLMJobs(context.Background(), 3, func(_ context.Context, index int) error {
+	err := runParallelIdentityLLMJobs(context.Background(), 3, 1, func(_ context.Context, index int) error {
 		atomic.AddInt32(&started, 1)
 		if index == 0 {
 			return expected
@@ -699,6 +689,45 @@ func TestParallelIdentityBuildGeneratedStateKeepsRawSeedBehindExistingMergeEvent
 		if len(character.Aliases) != 1 {
 			t.Fatalf("visible merged seed leaked into raw persistence: %+v", persistence)
 		}
+	}
+}
+
+func TestParallelCorrectionPersistsAliasPromotedToCanonicalName(t *testing.T) {
+	raw := []characters.GeneratedCharacter{{
+		CharacterID:                 "char_alice",
+		CanonicalName:               "謎の少女",
+		CanonicalEpisodeIndex:       "1",
+		FirstAppearanceEpisodeIndex: "1",
+		NameHistory:                 []characters.GeneratedTextVersion{{Text: "謎の少女", EpisodeIndex: "1"}},
+		Aliases:                     []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "20"}},
+	}}
+	current := append([]characters.GeneratedCharacter{}, raw...)
+	current[0].CanonicalName = "アリス"
+	current[0].CanonicalEpisodeIndex = "20"
+	persisted := applyParallelIdentityCurrentProjectionToPersistence(raw, raw, current, nil, "20")
+	if len(persisted) != 1 || persisted[0].CanonicalName != "アリス" || persisted[0].CanonicalEpisodeIndex != "20" || generatedCharacterNameEpisodeIndex(persisted[0], "アリス") != "20" {
+		t.Fatalf("promoted alias was not persisted as canonical: %+v", persisted)
+	}
+	atOne := projectGeneratedCharactersAtBoundary(persisted, "1")
+	if len(atOne) != 1 || atOne[0].CanonicalName != "謎の少女" {
+		t.Fatalf("future canonical promotion leaked into episode 1: %+v", atOne)
+	}
+	atTwenty := projectGeneratedCharactersAtBoundary(persisted, "20")
+	if len(atTwenty) != 1 || atTwenty[0].CanonicalName != "アリス" {
+		t.Fatalf("canonical promotion was not reproducible at episode 20: %+v", atTwenty)
+	}
+	stateDir := t.TempDir()
+	if err := characters.SaveGeneratedSummary(stateDir, "novel-1", "20", persisted); err != nil {
+		t.Fatalf("save promoted canonical: %v", err)
+	}
+	reloaded, _, ok, err := characters.LoadGeneratedCharacters(stateDir, "novel-1")
+	if err != nil || !ok {
+		t.Fatalf("reload promoted canonical: ok=%v err=%v", ok, err)
+	}
+	reloadedAtOne := projectGeneratedCharactersAtBoundary(reloaded, "1")
+	reloadedAtTwenty := projectGeneratedCharactersAtBoundary(reloaded, "20")
+	if len(reloadedAtOne) != 1 || reloadedAtOne[0].CanonicalName != "謎の少女" || len(reloadedAtTwenty) != 1 || reloadedAtTwenty[0].CanonicalName != "アリス" {
+		t.Fatalf("canonical promotion changed across save/load: at1=%+v at20=%+v", reloadedAtOne, reloadedAtTwenty)
 	}
 }
 
@@ -1133,14 +1162,13 @@ func TestDiscoverParallelIdentityNamesReturnsPartialUsageOnFailure(t *testing.T)
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	t.Setenv("EXTRACTION_LLM_CONCURRENCY", "1")
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	batches := []extractionBatch{
 		{EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文1"}}},
 		{EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "本文2"}}},
 	}
-	_, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "2", batches)
+	_, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model", ExtractionParallelConcurrency: 1}, "novel-1", "2", batches)
 	if err == nil || len(usage) != 2 || usage[0].TotalTokens == 0 || usage[1].TotalTokens == 0 {
 		t.Fatalf("discovery usage lost: usage=%+v err=%v", usage, err)
 	}

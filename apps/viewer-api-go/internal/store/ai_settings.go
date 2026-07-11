@@ -12,6 +12,7 @@ type AIGenerationSettingsUpdate = aisettings.AIGenerationSettingsUpdate
 type AISharedProvidersInput = aisettings.AISharedProvidersInput
 type AIProviderCredentialInput = aisettings.AIProviderCredentialInput
 type AIExtractionStrategyModelsInput = aisettings.AIExtractionStrategyModelsInput
+type AIExtractionRuntimeInput = aisettings.AIExtractionRuntimeInput
 type AIProfileInput = aisettings.AIProfileInput
 type AIProfileCredentialsInput = aisettings.AIProfileCredentialsInput
 type ResolvedAIGenerationConfig = aisettings.ResolvedAIGenerationConfig

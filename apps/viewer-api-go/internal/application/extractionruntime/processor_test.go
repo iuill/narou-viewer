@@ -38,6 +38,15 @@ type fakeWorkflow struct {
 	err error
 }
 
+type multiBatchWorkflow struct{}
+
+func (multiBatchWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, _ *store.ResolvedAIGenerationConfig, _ string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
+	progressSink(appextraction.BatchProgress{Phase: "start", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}})
+	progressSink(appextraction.BatchProgress{Phase: "complete", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}, CompletedBatchCount: 1, MergedCharacterCount: 3, MergedTermCount: 2})
+	progressSink(appextraction.BatchProgress{Phase: "start", Batch: core.Batch{BatchIndex: 2, BatchCount: 2}})
+	return appextraction.FinalCounts{CharacterCount: 3, TermCount: 2}, nil
+}
+
 func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
 	progressSink(appextraction.BatchProgress{
 		Phase: "start",
@@ -73,6 +82,9 @@ func TestProcessorMarksCompletedJob(t *testing.T) {
 	if last.Status != "completed" || last.Progress == nil || *last.Progress != 100 || last.ProgressStage == nil || *last.ProgressStage != "completed" {
 		t.Fatalf("job should be completed with progress: %+v", last)
 	}
+	if last.CompletedBatchCount == nil || last.BatchCount == nil || *last.CompletedBatchCount != *last.BatchCount {
+		t.Fatalf("completed job should record all completed batches: %+v", last)
+	}
 }
 
 func TestProcessorMarksFailedJob(t *testing.T) {
@@ -85,6 +97,23 @@ func TestProcessorMarksFailedJob(t *testing.T) {
 	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "generation failed" {
 		t.Fatalf("job should be failed with error message: %+v", last)
 	}
+}
+
+func TestProcessorKeepsGeneratedCountsWhileNextBatchRuns(t *testing.T) {
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{Workflow: multiBatchWorkflow{}, JobStore: jobStore})
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "2"}) {
+		t.Fatal("processor should report success")
+	}
+	for _, job := range jobStore.jobs {
+		if job.ProgressStage != nil && *job.ProgressStage == "batch" && job.CurrentBatchIndex != nil && *job.CurrentBatchIndex == 2 {
+			if job.GeneratedCharacterCount == nil || *job.GeneratedCharacterCount != 3 || job.GeneratedTermCount == nil || *job.GeneratedTermCount != 2 {
+				t.Fatalf("next batch start should retain completed counts: %+v", job)
+			}
+			return
+		}
+	}
+	t.Fatalf("second batch progress was not saved: %+v", jobStore.jobs)
 }
 
 func TestProcessorUpdatesJobMetadataToResolvedExecutionProfile(t *testing.T) {
@@ -206,8 +235,12 @@ func TestProgressHelpers(t *testing.T) {
 	batchCount := 2
 	generatedCharacterCount := 3
 	SetExtractionJobProgress(&job, 120, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount, nil)
+	SetExtractionJobCompletedBatchCount(&job, 3)
 	if job.Progress == nil || *job.Progress != 100 || job.ProgressStage == nil || *job.ProgressStage != "batchComplete" {
 		t.Fatalf("progress should be clamped and staged: %+v", job)
+	}
+	if job.CompletedBatchCount == nil || *job.CompletedBatchCount != 2 {
+		t.Fatalf("completed batch count should be clamped to batch count: %+v", job)
 	}
 	SetExtractionJobProgress(&job, 50, "batchComplete", &currentBatchIndex, &batchCount, &generatedCharacterCount, nil)
 	if job.Progress == nil || *job.Progress != 100 {
