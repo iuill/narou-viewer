@@ -54,6 +54,9 @@ ARG PLAYWRIGHT_CLI_VERSION=0.1.9
 ARG SERENA_AGENT_VERSION=1.3.0
 ARG SCC_VERSION=v3.7.0
 ARG SCC_LINUX_X86_64_SHA256=3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a
+ARG BETTERLEAKS_VERSION=1.6.1
+ARG BETTERLEAKS_LINUX_X64_SHA256=fbefc700a0bd4522cc952dd2a8f259cdb80526d7e60114aca19bb2d6fdc80f81
+ARG BETTERLEAKS_LINUX_ARM64_SHA256=bab9688ba968264ace67b608fc7a7d8f5e61218cde70029d32cbc894e3808fdf
 
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -67,6 +70,21 @@ RUN set -eux; \
     else \
       echo "scc is not preinstalled for architecture ${arch}; postCreate can install it when a pinned archive is configured."; \
     fi
+
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "${arch}" in \
+      amd64) betterleaks_arch="x64"; checksum="${BETTERLEAKS_LINUX_X64_SHA256}" ;; \
+      arm64) betterleaks_arch="arm64"; checksum="${BETTERLEAKS_LINUX_ARM64_SHA256}" ;; \
+      *) echo "unsupported architecture: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    archive="betterleaks_${BETTERLEAKS_VERSION}_linux_${betterleaks_arch}.tar.gz"; \
+    tmpdir="$(mktemp -d)"; \
+    curl -fsSL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${archive}" -o "${tmpdir}/${archive}"; \
+    echo "${checksum}  ${tmpdir}/${archive}" | sha256sum -c -; \
+    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}" betterleaks; \
+    install -m 0755 "${tmpdir}/betterleaks" /usr/local/bin/betterleaks; \
+    rm -rf "${tmpdir}"
 
 RUN su node -c "umask 0002 && npm install -g '@playwright/cli@${PLAYWRIGHT_CLI_VERSION}'"
 

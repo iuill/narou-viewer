@@ -10,6 +10,9 @@
   "scripts": {
     "install:locked": "bun install --frozen-lockfile",
     "install:locked:prod": "bun install --production --frozen-lockfile",
+    "security:scan:staged": "bash ./scripts/scan-sensitive-changes.sh staged",
+    "security:scan:history": "bash ./scripts/scan-sensitive-changes.sh history",
+    "test:security": "bash ./scripts/test-sensitive-information-checks.sh",
     "audit:dependencies": "bun audit --audit-level=high",
     "audit:go": "bun run audit:go:toolchain && bash ./scripts/audit-go.sh",
     "audit:go:toolchain": "bun ./scripts/audit-go-toolchain-version.mjs",

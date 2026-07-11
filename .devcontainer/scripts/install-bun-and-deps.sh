@@ -38,6 +38,7 @@ PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.9}"
 SERENA_AGENT_VERSION="${SERENA_AGENT_VERSION:-1.3.0}"
 SCC_VERSION="${SCC_VERSION:-v3.7.0}"
 SCC_LINUX_X86_64_SHA256="${SCC_LINUX_X86_64_SHA256:-3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a}"
+BETTERLEAKS_VERSION="1.6.1"
 # gopls は postCreate 専用で導入する。
 GOPLS_VERSION="${GOPLS_VERSION:-v0.22.0}"
 CODEX_HOME_DIR="${CODEX_HOME:-${HOME}/.codex}"
@@ -91,6 +92,10 @@ get_scc_version() {
   if [ -n "${version}" ]; then
     printf 'v%s\n' "${version#v}"
   fi
+}
+
+get_betterleaks_version() {
+  betterleaks version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n1
 }
 
 playwright_cli_browser_installed() {
@@ -243,6 +248,19 @@ ensure_scc() {
   sudo install -m 0755 "${tmpdir}/scc" /usr/local/bin/scc
 }
 
+ensure_betterleaks() {
+  if [ "$(get_betterleaks_version)" = "${BETTERLEAKS_VERSION}" ]; then
+    return
+  fi
+
+  BETTERLEAKS_INSTALL_DIR="${LOCAL_BIN_DIR}" bash "${REPO_ROOT}/scripts/install-betterleaks.sh"
+
+  if [ "$(get_betterleaks_version)" != "${BETTERLEAKS_VERSION}" ]; then
+    printf '%s\n' "Betterleaks ${BETTERLEAKS_VERSION} was installed but is not selected from PATH." >&2
+    return 1
+  fi
+}
+
 if ! command -v rg >/dev/null 2>&1 || ! command -v bwrap >/dev/null 2>&1; then
   sudo apt-get update
   DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
@@ -270,6 +288,7 @@ ensure_line_in_file "${HOME}/.profile" 'export PATH="/workspace/.devcontainer/bi
 
 ensure_gopls
 ensure_scc
+ensure_betterleaks
 ensure_serena
 
 bun run install:locked
@@ -304,4 +323,8 @@ if command -v playwright-cli >/dev/null 2>&1; then
   fi
 
   sync_playwright_cli_skill_for_codex
+fi
+
+if ! bash "${REPO_ROOT}/scripts/install-git-hooks.sh"; then
+  printf '%s\n' "Git hooks were not changed; review the existing core.hooksPath setting." >&2
 fi

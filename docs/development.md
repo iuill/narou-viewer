@@ -18,6 +18,29 @@
 bun run dev
 ```
 
+Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
+
+PR の機微情報検査は権限なしの `.github/workflows/sensitive-information-events.yml` で event と PR 番号を受け、`workflow_run` で起動する default branch 版 scanner へ渡します。後段は PR head を checkoutせずcommit objectとして検査します。PR本文・タイトル・通常コメント・review・diff上のreview commentを追加・編集・削除した場合も、同じhead SHAを持つopenなmain向けPRすべてをBetterleaksのGitHub sourceで再検査します。Betterleaksのallow markerと外部validationは有効にしません。
+
+後段workflowはApp tokenを扱う`invalidate`、App credentialを一切持たず未信頼PRデータを解析する`scan`、新しいrunnerでApp tokenを再生成する`publish`に分離します。専用GitHub Appは`opened`・`synchronize`・`reopened`時にcommit status `sensitive-information/commits`を発行し、これをrequired gateとして使用します。commitのpatch・path・message・author／committer identityに加え、Git属性でbinary指定されたblobまたはNULを含むblobからprintable stringsを抽出して検査します。
+
+PR metadataには別context `sensitive-information/metadata-advisory`を使用します。Actionsだけではmetadata編集直後の競合窓を完全に閉じられないため、こちらをRulesetのrequired checkにしてはいけません。通常の`pull_request` CIにある同名jobはdefense in depthであり、trustedなsecurity boundaryはSecret Guard Appだけが発行する`commits` statusです。
+
+### Secret Guard GitHub App の初期設定
+
+Enterprise限定のRequired Workflowは使用しません。個人accountのDeveloper settingsで、このrepository専用Appを次のように設定します。
+
+1. **Settings > Developer settings > GitHub Apps > New GitHub App** でAppを作成する。
+2. GitHub App nameは一意な名前、Homepage URLはこのrepository URLを指定する。Webhookは不要なので無効にする。
+3. Repository permissionsは **Commit statuses: Read and write** だけを設定し、その他はNo accessのままにする。
+4. App作成後、**Install App**から自分のaccountへinstallし、**Only select repositories**で`narou-viewer`だけを選ぶ。
+5. App設定画面のClient IDをrepository variable `SECRET_GUARD_APP_CLIENT_ID`へ登録する。
+6. App設定画面の**Generate a private key**で`.pem`を一度生成し、その内容全体をrepository secret `SECRET_GUARD_APP_PRIVATE_KEY`へ登録する。秘密鍵ファイルはrepositoryや共有storageへ置かず、secret登録後にlocalから削除する。
+7. このworkflowがdefault branchへ入った後、**Sensitive Information Events** workflowをPR番号付きで手動実行し、App名義のadvisory statusが成功することを確認する。
+8. repository rulesetで`sensitive-information/commits`をrequired statusに追加し、expected sourceを作成したSecret Guard Appに固定する。`sensitive-information/metadata-advisory`はrequired statusへ追加しない。
+
+Appの秘密鍵を更新する場合は、新しい鍵を先に生成してrepository secretを更新し、手動scanの成功後に古い鍵をApp設定画面から削除します。
+
 必要なら先に `.env.sample` を `.env.local` へコピーして値を調整してください。root の `.env.local` が存在する場合、`bun run dev` と各 app の主要 script から自動で読み込みます。シェルや CI で明示した環境変数は `.env.local` より優先されます。
 
 `bun: command not found` になった場合は、`postCreateCommand` の反映前か、ターミナルの `PATH` に `~/.bun/bin` が入っていない可能性があります。次を一度実行してからターミナルを開き直してください。
@@ -61,6 +84,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 
 ## 開発運用ルール
 
+- Dev Container では post-create 時に機微情報検査用の Git hooks が自動で有効になります。Dev Container 外では Betterleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行してください。
 - コミットメッセージは日本語で記述してください。
 - Pull Request のタイトルと本文は日本語で記述してください。
 - Pull Request へ追いコミットする場合は、PR 本文の更新要否も確認し、必要であれば更新してください。

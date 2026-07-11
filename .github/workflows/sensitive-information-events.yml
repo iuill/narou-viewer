@@ -1,0 +1,57 @@
+name: Sensitive Information Events
+run-name: Sensitive metadata event for PR #${{ inputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to rescan
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sensitive-event-${{ inputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: Capture pull request number
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Validate pull request number
+        env:
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_ACTION: ${{ github.event.action || 'manual' }}
+        run: |
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          mkdir event
+          printf '%s\n' "$PR_NUMBER" > event/pr-number
+          printf '%s\n' "$SOURCE_EVENT" > event/source-event
+          printf '%s\n' "$SOURCE_ACTION" > event/source-action
+
+      - name: Debounce consecutive metadata events
+        run: sleep 5
+
+      - name: Upload untrusted event data
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
+        with:
+          name: sensitive-information-event
+          path: event/
+          retention-days: 1

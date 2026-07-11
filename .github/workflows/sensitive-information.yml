@@ -1,0 +1,244 @@
+name: Sensitive Information Gate
+
+on:
+  workflow_run:
+    workflows: [Sensitive Information Events]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  prepare:
+    name: Validate event data
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.path == '.github/workflows/sensitive-information-events.yml' &&
+      contains(fromJSON('["pull_request_target","issue_comment","pull_request_review","pull_request_review_comment","workflow_dispatch"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pr_number: ${{ steps.validate.outputs.pr_number }}
+      source_event: ${{ steps.validate.outputs.source_event }}
+      source_action: ${{ steps.validate.outputs.source_action }}
+
+    steps:
+      - name: Download event data without executing it
+        id: event
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: sensitive-information-event
+          path: event
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Validate pull request number
+        if: steps.event.outcome == 'success'
+        id: validate
+        run: |
+          pr_number="$(tr -d '\r\n' < event/pr-number)"
+          source_event="$(tr -d '\r\n' < event/source-event)"
+          source_action="$(tr -d '\r\n' < event/source-action)"
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]]
+          [[ "$source_event" =~ ^(pull_request_target|issue_comment|pull_request_review|pull_request_review_comment|workflow_dispatch)$ ]]
+          [[ "$source_action" =~ ^(opened|synchronize|reopened|edited|created|deleted|submitted|dismissed|manual)$ ]]
+          printf 'pr_number=%s\n' "$pr_number" >> "$GITHUB_OUTPUT"
+          printf 'source_event=%s\n' "$source_event" >> "$GITHUB_OUTPUT"
+          printf 'source_action=%s\n' "$source_action" >> "$GITHUB_OUTPUT"
+
+  invalidate:
+    name: Mark sensitive scans as pending
+    needs: prepare
+    if: >-
+      needs.prepare.outputs.pr_number != '' &&
+      needs.prepare.outputs.source_event != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: sensitive-invalidate-${{ needs.prepare.outputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      commits_pending: ${{ steps.pending-commits.outcome }}
+      metadata_pending: ${{ steps.pending-metadata.outcome }}
+
+    steps:
+      - name: Checkout trusted status publisher
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+
+      - name: Resolve current pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/resolve-pull-request-number.sh "${{ needs.prepare.outputs.pr_number }}"
+
+      - name: Create secret guard App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.SECRET_GUARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SECRET_GUARD_APP_PRIVATE_KEY }}
+
+      - name: Publish required commit pending status
+        id: pending-commits
+        if: >-
+          (needs.prepare.outputs.source_event == 'pull_request_target' &&
+          contains(fromJSON('["opened","synchronize","reopened"]'), needs.prepare.outputs.source_action)) ||
+          needs.prepare.outputs.source_event == 'workflow_dispatch'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATUS_CONTEXT: sensitive-information/commits
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash ./scripts/update-sensitive-status.sh "${{ steps.pr.outputs.head_sha }}" pending "commitを検査中" "$STATUS_TARGET_URL"
+
+      - name: Publish advisory metadata pending status
+        id: pending-metadata
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash ./scripts/update-sensitive-status.sh "${{ steps.pr.outputs.head_sha }}" pending "PR metadataを検査中（advisory）" "$STATUS_TARGET_URL"
+
+  scan:
+    name: Scan untrusted pull request data
+    needs: [prepare, invalidate]
+    if: >-
+      needs.invalidate.result == 'success' &&
+      (needs.invalidate.outputs.commits_pending == 'success' ||
+      needs.invalidate.outputs.metadata_pending == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: sensitive-scan-${{ needs.prepare.outputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      pr_set: ${{ steps.metadata.outputs.pr_set }}
+      commits_outcome: ${{ steps.commits.outcome }}
+      metadata_outcome: ${{ steps.metadata.outcome }}
+
+    steps:
+      - name: Checkout trusted scanner without App credentials
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve current pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/resolve-pull-request-number.sh "${{ needs.prepare.outputs.pr_number }}"
+
+      - name: Fetch pull request head object without checkout
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: git fetch --no-tags origin "pull/${PR_NUMBER}/head"
+
+      - name: Scan pull request commits
+        id: commits
+        if: needs.invalidate.outputs.commits_pending == 'success'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: bash ./scripts/scan-sensitive-changes.sh range "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Scan metadata for every pull request sharing the head SHA
+        id: metadata
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set +e
+          bash ./scripts/scan-pull-request-metadata-for-head.sh "$HEAD_SHA" scan-targets
+          outcome=$?
+          printf 'pr_set=%s\n' "$(paste -sd, scan-targets/pr-numbers 2>/dev/null || true)" >> "$GITHUB_OUTPUT"
+          exit "$outcome"
+
+  publish:
+    name: Publish sensitive scan results
+    needs: [prepare, invalidate, scan]
+    if: >-
+      always() && needs.prepare.outputs.pr_number != '' &&
+      (needs.invalidate.outputs.commits_pending == 'success' ||
+      needs.invalidate.outputs.metadata_pending == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: sensitive-publish-${{ needs.prepare.outputs.pr_number }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout trusted status publisher
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+
+      - name: Resolve current pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ./scripts/resolve-pull-request-number.sh "${{ needs.prepare.outputs.pr_number }}"
+
+      - name: Resolve current pull request set
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          bash ./scripts/list-pull-requests-for-head.sh "$HEAD_SHA" current-targets
+          printf 'pr_set=%s\n' "$(paste -sd, current-targets/pr-numbers)" >> "$GITHUB_OUTPUT"
+
+      - name: Create fresh secret guard App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: ${{ vars.SECRET_GUARD_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SECRET_GUARD_APP_PRIVATE_KEY }}
+
+      - name: Publish required commit result
+        if: always() && needs.invalidate.outputs.commits_pending == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STATUS_CONTEXT: sensitive-information/commits
+          CURRENT_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          SCANNED_HEAD_SHA: ${{ needs.scan.outputs.head_sha }}
+          COMMITS_OUTCOME: ${{ needs.scan.outputs.commits_outcome }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bash ./scripts/assert-latest-sensitive-status.sh "$CURRENT_HEAD_SHA" "$STATUS_TARGET_URL"
+          if [[ "$SCAN_RESULT" == "success" && "$CURRENT_HEAD_SHA" == "$SCANNED_HEAD_SHA" && "$COMMITS_OUTCOME" == "success" ]]; then
+            bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" success "commitに機微情報は検出されませんでした" "$STATUS_TARGET_URL"
+          else
+            bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" failure "commitの機微情報検査に失敗しました" "$STATUS_TARGET_URL"
+            exit 1
+          fi
+
+      - name: Publish advisory metadata result
+        if: always() && needs.invalidate.outputs.metadata_pending == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CURRENT_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          CURRENT_PR_SET: ${{ steps.prs.outputs.pr_set }}
+          SCANNED_HEAD_SHA: ${{ needs.scan.outputs.head_sha }}
+          SCANNED_PR_SET: ${{ needs.scan.outputs.pr_set }}
+          METADATA_OUTCOME: ${{ needs.scan.outputs.metadata_outcome }}
+          SCAN_RESULT: ${{ needs.scan.result }}
+          STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bash ./scripts/assert-latest-sensitive-status.sh "$CURRENT_HEAD_SHA" "$STATUS_TARGET_URL"
+          if [[ "$SCAN_RESULT" == "success" && "$CURRENT_HEAD_SHA" == "$SCANNED_HEAD_SHA" && "$CURRENT_PR_SET" == "$SCANNED_PR_SET" && "$METADATA_OUTCOME" == "success" ]]; then
+            bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" success "機微情報は検出されませんでした（advisory）" "$STATUS_TARGET_URL"
+          else
+            bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" failure "機微情報検査に失敗しました（advisory）" "$STATUS_TARGET_URL"
+            exit 1
+          fi
