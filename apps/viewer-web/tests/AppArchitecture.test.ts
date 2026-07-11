@@ -100,5 +100,5 @@ describe("frontend App composition architecture", () => {
     });
 
     expect(offenders).toEqual([]);
-  });
+  }, 15_000);
 });

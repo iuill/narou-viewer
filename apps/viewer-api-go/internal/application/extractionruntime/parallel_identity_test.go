@@ -852,6 +852,39 @@ func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
 	}
 }
 
+func TestDiscoverParallelIdentityNamesRejectsEpisodeOutsideBatch(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"1","reason":"第20話で正体を明かした王女"}]}`)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "王女セリアが名乗った。"}}}
+	if _, _, err := runtime.discoverParallelIdentityNamesForBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", 0, batch); err == nil || !strings.Contains(err.Error(), "outside the current discovery batch") {
+		t.Fatalf("out-of-batch discovery episode should fail: %v", err)
+	}
+}
+
+func TestDiscoverParallelIdentityNamesDefaultsEmptyEpisodeToBatchBoundary(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"name":"アリス","aliases":[],"episodeIndex":"","reason":"登場"}]}`)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "アリスが来た。"}}}
+	names, _, err := runtime.discoverParallelIdentityNamesForBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", 0, batch)
+	if err != nil {
+		t.Fatalf("empty discovery episode should use batch boundary: %v", err)
+	}
+	if len(names) != 1 || names[0].EpisodeIndex != "1" {
+		t.Fatalf("names = %+v", names)
+	}
+}
+
+func TestNormalizeDiscoveredNamesRejectsNonNumericEpisode(t *testing.T) {
+	batch := extractionBatch{EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20"}}}
+	if _, err := normalizeDiscoveredNamesForBatch([]parallelIdentityDiscoveredName{{Name: "王女セリア", EpisodeIndex: "twenty"}}, batch, "20"); err == nil || !strings.Contains(err.Error(), "outside the current discovery batch") {
+		t.Fatalf("non-numeric discovery episode should fail: %v", err)
+	}
+}
+
 func TestCorrectParallelIdentityCharactersUsesOpenRouter(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
 	defer openrouter.Close()
@@ -966,12 +999,48 @@ func TestApplyParallelIdentityCorrections(t *testing.T) {
 		CharacterID: "char_b",
 		Keep:        &remove,
 	}}, "3")
-	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || len(corrected[0].Aliases) != 2 || len(corrected[0].SummaryHistory) != 1 {
+	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || corrected[0].CanonicalEpisodeIndex != "3" || len(corrected[0].Aliases) != 2 || len(corrected[0].SummaryHistory) != 0 {
 		t.Fatalf("corrected = %+v", corrected)
 	}
 	cards := correctionCharacterCards(corrected)
 	if len(cards) != 1 || cards[0]["characterId"] != "char_a" || cards[0]["canonicalName"] != "アリス姫" {
 		t.Fatalf("cards = %+v", cards)
+	}
+}
+
+func TestApplyParallelIdentityCorrectionsPreservesNameTimeline(t *testing.T) {
+	generated := []characters.GeneratedCharacter{{
+		CharacterID:                 "char_a",
+		CanonicalName:               "謎の少女",
+		CanonicalEpisodeIndex:       "1",
+		FirstAppearanceEpisodeIndex: "1",
+		NameHistory: []characters.GeneratedTextVersion{
+			{Text: "謎の少女", EpisodeIndex: "1"},
+			{Text: "アリス", EpisodeIndex: "20"},
+		},
+		Aliases: []characters.GeneratedTextVersion{
+			{Text: "謎の少女", EpisodeIndex: "1"},
+			{Text: "アリス", EpisodeIndex: "20"},
+		},
+		SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "1", Text: "正体不明の少女。"}},
+	}}
+	corrected := applyParallelIdentityCorrections(generated, []parallelIdentityCorrection{{
+		CharacterID:   "char_a",
+		CanonicalName: "アリス",
+		Aliases:       []string{"謎の少女", "アリス", "姫"},
+		Reason:        "第20話の情報から代表名を補正",
+	}}, "20")
+	if len(corrected) != 1 || corrected[0].CanonicalEpisodeIndex != "20" || len(corrected[0].SummaryHistory) != 1 {
+		t.Fatalf("correction rewrote timeline or persisted reason: %+v", corrected)
+	}
+	projected := projectGeneratedCharactersAtBoundary(corrected, "1")
+	if len(projected) != 1 || projected[0].CanonicalName != "謎の少女" {
+		t.Fatalf("episode 1 canonical name leaked: %+v", projected)
+	}
+	for _, alias := range projected[0].Aliases {
+		if alias.Text == "アリス" || alias.Text == "姫" {
+			t.Fatalf("future correction alias leaked into episode 1: %+v", projected[0].Aliases)
+		}
 	}
 }
 

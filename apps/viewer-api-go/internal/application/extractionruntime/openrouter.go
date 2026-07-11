@@ -244,7 +244,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
 			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
 			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
-			"firstAppearanceEpisodeIndex": map[string]any{"anyOf": []any{map[string]any{"type": "null"}, map[string]any{"type": "string", "pattern": "^\\d+$"}}},
+			"firstAppearanceEpisodeIndex": map[string]any{"type": "null"},
 			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
 			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
 			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},

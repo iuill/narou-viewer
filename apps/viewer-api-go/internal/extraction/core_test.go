@@ -553,8 +553,19 @@ func TestCharacterUpdateAcceptsPersistedFirstAppearanceOutsideBatch(t *testing.T
 	if err != nil {
 		t.Fatalf("persisted first appearance should not violate the update boundary: %v", err)
 	}
-	if len(delta.CharacterUpdates) != 1 || delta.CharacterUpdates[0].FirstAppearanceEpisodeIndex != "1" || len(delta.CharacterUpdates[0].SummaryHistory) != 1 {
+	if len(delta.CharacterUpdates) != 1 || delta.CharacterUpdates[0].FirstAppearanceEpisodeIndex != "" || len(delta.CharacterUpdates[0].SummaryHistory) != 1 {
 		t.Fatalf("unexpected update: %+v", delta.CharacterUpdates)
+	}
+	existing := []characters.GeneratedCharacter{{
+		CharacterID:                 "char_alice",
+		CanonicalName:               "アリス",
+		CanonicalEpisodeIndex:       "10",
+		FirstAppearanceEpisodeIndex: "10",
+		NameHistory:                 []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "10"}},
+	}}
+	merged, _ := ApplyDelta("novel-1", existing, delta, nil)
+	if len(merged) != 1 || merged[0].FirstAppearanceEpisodeIndex != "10" {
+		t.Fatalf("update must not rewrite persisted first appearance: %+v", merged)
 	}
 }
 

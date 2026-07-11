@@ -746,6 +746,10 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	if err := json.Unmarshal([]byte(result.Answer), &decoded); err != nil {
 		return nil, ai.UsageRequest{}, err
 	}
+	normalized, err := normalizeDiscoveredNamesForBatch(decoded.Characters, batch, upToEpisodeIndex)
+	if err != nil {
+		return nil, ai.UsageRequest{}, err
+	}
 	usage := ai.UsageRequest{
 		Kind:         "extraction_name_discovery",
 		InputTokens:  result.InputTokens,
@@ -758,7 +762,59 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	if usage.TotalTokens <= 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
-	return decoded.Characters, usage, nil
+	return normalized, usage, nil
+}
+
+func normalizeDiscoveredNamesForBatch(values []parallelIdentityDiscoveredName, batch extractionBatch, upToEpisodeIndex string) ([]parallelIdentityDiscoveredName, error) {
+	allowed := map[string]bool{}
+	boundary := ""
+	for _, episodeIndex := range append(append([]string{}, batch.EpisodeIndexes...), extractionBatchChunkEpisodeIndexes(batch)...) {
+		episodeIndex = strings.TrimSpace(episodeIndex)
+		if !isDigitsEpisodeIndex(episodeIndex) {
+			continue
+		}
+		allowed[episodeIndex] = true
+		if boundary == "" || compareEpisodeString(episodeIndex, boundary) > 0 {
+			boundary = episodeIndex
+		}
+	}
+	if boundary == "" {
+		return nil, errors.New("name discovery batch has no valid episode indexes")
+	}
+	result := make([]parallelIdentityDiscoveredName, len(values))
+	for index, value := range values {
+		episodeIndex := strings.TrimSpace(value.EpisodeIndex)
+		if episodeIndex == "" {
+			episodeIndex = boundary
+		}
+		if !isDigitsEpisodeIndex(episodeIndex) || !allowed[episodeIndex] || (isDigitsEpisodeIndex(upToEpisodeIndex) && compareEpisodeString(episodeIndex, upToEpisodeIndex) > 0) {
+			return nil, fmt.Errorf("name discovery response contained episodeIndex %q outside the current discovery batch", value.EpisodeIndex)
+		}
+		value.EpisodeIndex = episodeIndex
+		result[index] = value
+	}
+	return result, nil
+}
+
+func extractionBatchChunkEpisodeIndexes(batch extractionBatch) []string {
+	result := make([]string, 0, len(batch.Chunks))
+	for _, chunk := range batch.Chunks {
+		result = append(result, chunk.EpisodeIndex)
+	}
+	return result
+}
+
+func isDigitsEpisodeIndex(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func discoveredNamesToGeneratedCharacters(values []parallelIdentityDiscoveredName, fallbackEpisodeIndex string) []characters.GeneratedCharacter {
@@ -943,25 +999,50 @@ func applyParallelIdentityCorrections(generated []characters.GeneratedCharacter,
 		}
 		if ok {
 			if name := strings.TrimSpace(correction.CanonicalName); name != "" {
+				episodeIndex := generatedCharacterNameEpisodeIndex(character, name)
+				if episodeIndex == "" {
+					episodeIndex = fallbackEpisodeIndex
+				}
 				character.CanonicalName = name
-				character.CanonicalEpisodeIndex = firstNonEmptySummaryString(character.CanonicalEpisodeIndex, character.FirstAppearanceEpisodeIndex, fallbackEpisodeIndex)
-				character.NameHistory = mergeGeneratedTextVersionLists(character.NameHistory, []characters.GeneratedTextVersion{{Text: name, EpisodeIndex: character.CanonicalEpisodeIndex}})
+				character.CanonicalEpisodeIndex = episodeIndex
+				character.NameHistory = mergeGeneratedTextVersionLists(character.NameHistory, []characters.GeneratedTextVersion{{Text: name, EpisodeIndex: episodeIndex}})
 			}
 			aliases := []characters.GeneratedTextVersion{}
 			for _, alias := range correction.Aliases {
 				alias = strings.TrimSpace(alias)
 				if alias != "" {
-					aliases = append(aliases, characters.GeneratedTextVersion{Text: alias, EpisodeIndex: firstNonEmptySummaryString(character.CanonicalEpisodeIndex, fallbackEpisodeIndex)})
+					episodeIndex := generatedCharacterNameEpisodeIndex(character, alias)
+					if episodeIndex == "" {
+						episodeIndex = fallbackEpisodeIndex
+					}
+					aliases = append(aliases, characters.GeneratedTextVersion{Text: alias, EpisodeIndex: episodeIndex})
 				}
 			}
 			character.Aliases = mergeGeneratedTextVersionLists(character.Aliases, aliases)
-			if reason := strings.TrimSpace(correction.Reason); reason != "" {
-				character.SummaryHistory = mergeGeneratedHistoryVersionLists(character.SummaryHistory, []characters.GeneratedHistoryVersion{{EpisodeIndex: firstNonEmptySummaryString(character.CanonicalEpisodeIndex, fallbackEpisodeIndex), Text: reason}})
-			}
 		}
 		result = append(result, character)
 	}
 	return result
+}
+
+func generatedCharacterNameEpisodeIndex(character characters.GeneratedCharacter, name string) string {
+	name = strings.TrimSpace(name)
+	best := ""
+	consider := func(text string, episodeIndex string) {
+		if strings.TrimSpace(text) != name || !isDigitsEpisodeIndex(episodeIndex) {
+			return
+		}
+		if best == "" || compareEpisodeString(episodeIndex, best) < 0 {
+			best = episodeIndex
+		}
+	}
+	consider(character.CanonicalName, character.CanonicalEpisodeIndex)
+	for _, versions := range [][]characters.GeneratedTextVersion{character.NameHistory, character.FullNameHistory, character.Aliases} {
+		for _, version := range versions {
+			consider(version.Text, version.EpisodeIndex)
+		}
+	}
+	return best
 }
 
 func correctionCharacterCards(values []characters.GeneratedCharacter) []map[string]any {

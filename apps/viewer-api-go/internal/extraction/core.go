@@ -1014,6 +1014,9 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	for _, rawItem := range payload.CharacterUpdates {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
 		if ok && strings.TrimSpace(character.CharacterID) != "" {
+			// Existing persisted data is the authority for first appearance. An
+			// update response must never move a character into an earlier boundary.
+			character.FirstAppearanceEpisodeIndex = ""
 			delta.CharacterUpdates = append(delta.CharacterUpdates, character)
 		}
 	}
@@ -1099,10 +1102,6 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 		}
 	}
 	for _, character := range delta.CharacterUpdates {
-		// Updates are true deltas. They may identify a persisted character whose
-		// first appearance predates this batch, but every newly supplied value
-		// must still belong to the current batch.
-		character.FirstAppearanceEpisodeIndex = ""
 		if !validateCharacter(character) {
 			return extractionEpisodeBoundaryError()
 		}
@@ -2028,7 +2027,7 @@ func MergeGeneratedCharacter(left characters.GeneratedCharacter, right character
 		result.CharacterID = strings.TrimSpace(right.CharacterID)
 	}
 	result.NameHistory = MergeGeneratedTextVersionLists(result.NameHistory, right.NameHistory)
-	if CompareEpisodeString(right.FirstAppearanceEpisodeIndex, result.FirstAppearanceEpisodeIndex) < 0 || result.FirstAppearanceEpisodeIndex == "" {
+	if strings.TrimSpace(right.FirstAppearanceEpisodeIndex) != "" && (CompareEpisodeString(right.FirstAppearanceEpisodeIndex, result.FirstAppearanceEpisodeIndex) < 0 || result.FirstAppearanceEpisodeIndex == "") {
 		result.FirstAppearanceEpisodeIndex = right.FirstAppearanceEpisodeIndex
 	}
 	if strings.TrimSpace(result.CanonicalName) != "" && strings.TrimSpace(result.CanonicalEpisodeIndex) != "" {
