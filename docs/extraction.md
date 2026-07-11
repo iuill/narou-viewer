@@ -18,7 +18,7 @@
 - parallel identity と discovery + parallel correction の detail extraction は、各本文バッチを人物用・用語用に二重送信せず、1回の並列リクエストで人物差分と用語の事実差分を同時抽出する。
 - 並列方式の同時LLMリクエスト数は「AI生成 > 設定 > 人物・用語抽出」で1〜20に設定し、既定値は3とする。discoveryとdetail extractionの両方へ同じ上限を適用し、serialには適用しない。
 - 並列実行中のjob APIは、各workerの番号、batch番号、処理中の開始・終了話、discovery/detailの段階を`activeWorkers`で返す。本文画面は進行中のworkerを話数範囲つきで表示し、完了または失敗したworkerを一覧から除く。
-- 本文の人物・用語パネルは、進行中jobがある間は2秒、ない間は4秒ごとに人物・用語・job状態を再取得する。
+- 本文の人物・用語パネルは、進行中jobがある間は前回の取得完了から2秒後にjob状態だけを逐次取得し、完了を検知した時点で人物・用語・job状態を一度まとめて再取得する。進行中jobがない間は、前回の取得完了から4秒後に人物・用語・job状態を逐次再取得する。全体取得が実行中の場合は重複して開始しない。
 - `characterUpdates` は現在バッチの差分だけを受け取り、既存人物の初登場話は更新 response で変更しない。
 - discovery の人物名候補は response の話数を当該バッチで検証し、最終補正では既存の名前・別名の話数を維持する。補正理由は物語上の人物履歴へ保存しない。
 - 人物の同一性判明は `identity_merge_events` に source / target ID と有効話数を保存する。明示的な `mergeProposals` は返却した runtime batch の境界、identity resolver の判定は生成上限を有効話数とし、それより前の表示境界では別人物のまま投影する。

@@ -214,26 +214,96 @@ describe("useExtraction", () => {
     vi.restoreAllMocks();
   });
 
-  it("polls every two seconds while an extraction job is active", async () => {
+  it("polls only jobs sequentially and refreshes all data after completion", async () => {
     const dom = installDom();
-    const intervalSpy = vi.spyOn(dom.window, "setInterval");
-    vi.mocked(fetchExtractionJobs).mockResolvedValue({
-      jobs: [
-        {
-          jobId: "job-running",
-          requestedUpToEpisodeIndex: "2",
-          generationMode: "openrouter",
-          generationStrategy: "parallel_identity",
-          modelId: "synthetic/model",
-          status: "running",
-          createdAt: "2026-07-11T00:00:00Z",
-          startedAt: "2026-07-11T00:00:01Z",
-          finishedAt: null,
-          errorMessage: null,
-        },
-      ],
+    const scheduledTimers = new Map<
+      number,
+      { callback: () => void; delay: number | undefined }
+    >();
+    let nextTimeoutId = 1;
+    vi.spyOn(dom.window, "setTimeout").mockImplementation(
+      (handler, timeout) => {
+        const timeoutId = nextTimeoutId;
+        nextTimeoutId += 1;
+        if (typeof handler === "function") {
+          scheduledTimers.set(timeoutId, { callback: handler, delay: timeout });
+        }
+        return timeoutId;
+      },
+    );
+    vi.spyOn(dom.window, "clearTimeout").mockImplementation((timeoutId) => {
+      scheduledTimers.delete(Number(timeoutId));
     });
-    vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
+    const timersWithDelay = (delay: number) =>
+      [...scheduledTimers.entries()].filter(
+        ([, timer]) => timer.delay === delay,
+      );
+    const runNextTimer = (delay: number) => {
+      const nextTimer = timersWithDelay(delay)[0];
+      expect(nextTimer).toBeDefined();
+      if (!nextTimer) {
+        return;
+      }
+      scheduledTimers.delete(nextTimer[0]);
+      nextTimer[1].callback();
+    };
+
+    const runningJob = {
+      jobId: "job-running",
+      requestedUpToEpisodeIndex: "2",
+      generationMode: "openrouter" as const,
+      generationStrategy: "parallel_identity" as const,
+      modelId: "synthetic/model",
+      status: "running" as const,
+      progress: 35,
+      generatedCharacterCount: 10,
+      generatedTermCount: 20,
+      createdAt: "2026-07-11T00:00:00Z",
+      startedAt: "2026-07-11T00:00:01Z",
+      finishedAt: null,
+      errorMessage: null,
+    };
+    const delayedPoll = deferred<ExtractionJobsResponse>();
+    let jobRequestCount = 0;
+    let inFlightJobRequests = 0;
+    let maxInFlightJobRequests = 0;
+    vi.mocked(fetchExtractionJobs).mockImplementation(async () => {
+      jobRequestCount += 1;
+      inFlightJobRequests += 1;
+      maxInFlightJobRequests = Math.max(
+        maxInFlightJobRequests,
+        inFlightJobRequests,
+      );
+      try {
+        if (jobRequestCount === 1) {
+          return { jobs: [runningJob] };
+        }
+        if (jobRequestCount === 2) {
+          return await delayedPoll.promise;
+        }
+        return {
+          jobs: [
+            {
+              ...runningJob,
+              status: "completed",
+              progress: 100,
+              finishedAt: "2026-07-11T00:00:10Z",
+            },
+          ],
+        };
+      } finally {
+        inFlightJobRequests -= 1;
+      }
+    });
+    const delayedCompletionSummary = deferred<CharacterSummaryResponse>();
+    let summaryRequestCount = 0;
+    vi.mocked(fetchCharacterSummary).mockImplementation(async () => {
+      summaryRequestCount += 1;
+      if (summaryRequestCount === 2) {
+        return await delayedCompletionSummary.promise;
+      }
+      return createReadySummary("2");
+    });
     vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
 
     let latest: HookResult | null = null;
@@ -248,14 +318,77 @@ describe("useExtraction", () => {
       await flushAsyncWork();
     });
 
-    expect(intervalSpy.mock.calls.at(-1)?.[1]).toBe(4000);
+    expect(timersWithDelay(4000)).toHaveLength(1);
 
     await act(async () => {
       await latest?.handleOpen();
       await flushAsyncWork();
     });
 
-    expect(intervalSpy.mock.calls.at(-1)?.[1]).toBe(2000);
+    expect(timersWithDelay(2000)).toHaveLength(1);
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(1);
+    expect(fetchTerms).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      runNextTimer(2000);
+      await flushAsyncWork();
+    });
+
+    expect(jobRequestCount).toBe(2);
+    expect(timersWithDelay(2000)).toHaveLength(0);
+    expect(maxInFlightJobRequests).toBe(1);
+
+    await act(async () => {
+      delayedPoll.resolve({
+        jobs: [
+          {
+            ...runningJob,
+            progress: 75,
+            generatedCharacterCount: 30,
+            generatedTermCount: 60,
+          },
+        ],
+      });
+      await delayedPoll.promise;
+      await flushAsyncWork();
+    });
+
+    expect(latest?.activeJobs[0]?.progress).toBe(75);
+    expect(timersWithDelay(2000)).toHaveLength(1);
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(1);
+    expect(fetchTerms).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      runNextTimer(2000);
+      await flushAsyncWork();
+    });
+
+    expect(maxInFlightJobRequests).toBe(1);
+    expect(jobRequestCount).toBe(4);
+    expect(timersWithDelay(4000)).toHaveLength(1);
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(2);
+    expect(fetchTerms).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      runNextTimer(4000);
+      await flushAsyncWork();
+    });
+
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(2);
+    expect(fetchTerms).toHaveBeenCalledTimes(2);
+    expect(jobRequestCount).toBe(4);
+    expect(timersWithDelay(4000)).toHaveLength(1);
+
+    await act(async () => {
+      delayedCompletionSummary.resolve(createReadySummary("2"));
+      await delayedCompletionSummary.promise;
+      await flushAsyncWork();
+      await flushAsyncWork();
+    });
+
+    expect(latest?.activeJobs).toHaveLength(0);
+    expect(fetchCharacterSummary).toHaveBeenCalledTimes(2);
+    expect(fetchTerms).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       root?.unmount();

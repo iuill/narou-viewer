@@ -104,6 +104,8 @@ export function useExtraction({
   const [isClearing, setIsClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestSeqRef = useRef(0);
+  const loadInFlightCountRef = useRef(0);
+  const jobPollTokenRef = useRef<object | null>(null);
   const selectionScope = useMemo<ExtractionSelectionScope>(
     () => ({ novelId: selectedNovelId, token: {} }),
     [selectedNovelId],
@@ -193,6 +195,7 @@ export function useExtraction({
       return;
     }
 
+    loadInFlightCountRef.current += 1;
     const requestSeq = requestSeqRef.current + 1;
     requestSeqRef.current = requestSeq;
     const isBackgroundRefresh = options?.background === true;
@@ -264,6 +267,10 @@ export function useExtraction({
         setNotice(null);
       }
     } finally {
+      loadInFlightCountRef.current = Math.max(
+        0,
+        loadInFlightCountRef.current - 1,
+      );
       if (scope.token === selectionScopeRef.current.token && requestSeq === requestSeqRef.current) {
         setIsLoading(false);
       }
@@ -271,8 +278,58 @@ export function useExtraction({
   }
 
   const refreshInBackground = useEffectEvent(
-    (targetUpToEpisodeIndex: EpisodeIndex) => {
-      void load(targetUpToEpisodeIndex, { background: true });
+    async (targetUpToEpisodeIndex: EpisodeIndex) => {
+      if (loadInFlightCountRef.current > 0) {
+        return;
+      }
+      await load(targetUpToEpisodeIndex, { background: true });
+    },
+  );
+
+  const pollJobsInBackground = useEffectEvent(
+    async (
+      targetUpToEpisodeIndex: EpisodeIndex,
+      scope: ExtractionSelectionScope,
+      pollToken: object,
+    ): Promise<boolean> => {
+      if (
+        !scope.novelId ||
+        scope.token !== selectionScopeRef.current.token ||
+        pollToken !== jobPollTokenRef.current
+      ) {
+        return false;
+      }
+
+      try {
+        const nextJobs = await fetchExtractionJobs(scope.novelId);
+        if (
+          scope.token !== selectionScopeRef.current.token ||
+          pollToken !== jobPollTokenRef.current
+        ) {
+          return false;
+        }
+
+        setJobs(nextJobs);
+        const hasActiveJobs = nextJobs.jobs.some((job) =>
+          isCharacterSummaryActiveJob(job.status),
+        );
+        if (!hasActiveJobs) {
+          await load(targetUpToEpisodeIndex, { background: true }, scope);
+        }
+        return hasActiveJobs;
+      } catch (pollError) {
+        if (
+          scope.token !== selectionScopeRef.current.token ||
+          pollToken !== jobPollTokenRef.current
+        ) {
+          return false;
+        }
+
+        setError(
+          pollError instanceof Error ? pollError.message : "Unknown error",
+        );
+        return true;
+      }
     },
   );
 
@@ -340,15 +397,28 @@ export function useExtraction({
       return;
     }
 
-    const pollInterval = activeJobs.length > 0
-      ? ACTIVE_EXTRACTION_POLL_INTERVAL_MS
-      : IDLE_EXTRACTION_POLL_INTERVAL_MS;
-    const intervalId = window.setInterval(() => {
-      refreshInBackground(refreshTargetEpisodeIndex);
-    }, pollInterval);
+    if (activeJobs.length > 0) {
+      return;
+    }
 
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    const scheduleNextRefresh = () => {
+      timeoutId = window.setTimeout(() => {
+        void refreshInBackground(refreshTargetEpisodeIndex).then(() => {
+          if (!cancelled) {
+            scheduleNextRefresh();
+          }
+        });
+      }, IDLE_EXTRACTION_POLL_INTERVAL_MS);
+    };
+
+    scheduleNextRefresh();
     return () => {
-      window.clearInterval(intervalId);
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
   }, [
     defaultUpToEpisodeIndex,
@@ -356,6 +426,67 @@ export function useExtraction({
     isOpen,
     requestedUpToEpisodeOrder,
     selectedNovelId,
+    toc,
+  ]);
+
+  useEffect(() => {
+    const refreshTarget = resolveCharacterSummaryRefreshTarget({
+      defaultUpToEpisodeIndex,
+      requestedUpToEpisodeIndex: requestedUpToEpisodeOrder,
+    });
+    const refreshTargetEpisodeIndex =
+      refreshTarget !== null && toc
+        ? (toc.episodes[Number.parseInt(refreshTarget, 10) - 1]?.episodeIndex ??
+          null)
+        : null;
+
+    if (
+      !isOpen ||
+      selectedNovelId === null ||
+      refreshTargetEpisodeIndex === null ||
+      activeJobs.length === 0
+    ) {
+      return;
+    }
+
+    const scope = selectionScope;
+    const pollToken = {};
+    jobPollTokenRef.current = pollToken;
+    let timeoutId: number | null = null;
+
+    const scheduleNextPoll = () => {
+      timeoutId = window.setTimeout(() => {
+        void pollJobsInBackground(
+          refreshTargetEpisodeIndex,
+          scope,
+          pollToken,
+        ).then((shouldContinue) => {
+          if (
+            shouldContinue &&
+            pollToken === jobPollTokenRef.current
+          ) {
+            scheduleNextPoll();
+          }
+        });
+      }, ACTIVE_EXTRACTION_POLL_INTERVAL_MS);
+    };
+
+    scheduleNextPoll();
+    return () => {
+      if (jobPollTokenRef.current === pollToken) {
+        jobPollTokenRef.current = null;
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [
+    activeJobs.length,
+    defaultUpToEpisodeIndex,
+    isOpen,
+    requestedUpToEpisodeOrder,
+    selectedNovelId,
+    selectionScope,
     toc,
   ]);
 
