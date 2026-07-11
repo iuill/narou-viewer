@@ -34,6 +34,8 @@
 - [ ] `bun run verify:api-go`
 - [ ] `bun run verify:api-go:contract`
 - [ ] `bun run verify:novel-fetcher`
+- [ ] `bun run security:scan:staged`
+- [ ] `bun run security:scan:branch`
 - [ ] `bun run test:security`
 - [ ] `bun run audit:bun:vulnerabilities`
 - [ ] `bun run audit:go:toolchain`

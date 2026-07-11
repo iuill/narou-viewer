@@ -104,7 +104,7 @@
 
 ## 検証
 
-- 機微情報検査の CI 相当確認には `bun run security:scan:history` を使う。出力時は Betterleaks の redaction を維持し、検出値をログや報告へ貼らない。外部 validation は有効にしない。
+- 通常の commit 前は hook と `bun run security:scan:staged`、PR / push 前は `bun run security:scan:branch` または pre-push hook で現在ブランチの merge-base 以降だけを検査する。`bun run security:scan:history` は定期 CI、scanner 自体の変更、または明示的な repository 全履歴 audit に限定し、通常の commit / PR ごとには実行しない。出力時は Betterleaks の redaction を維持し、検出値をログや報告へ貼らない。外部 validation は有効にしない。
 - Git hook、Betterleaks range、禁止 path、公開 IPv4 検査を変更した場合は `bun run test:security` で一時 Git repository を使う回帰テストも実行する。
 - コードを変更した場合は、`bun run lint` の実行を必須とする。
 - コードを変更した場合は、まず `bun run lint` を実行し、その後に変更箇所に応じた高速コードレベルテストを実行し、最後に build、原則として E2E テストを実施する。

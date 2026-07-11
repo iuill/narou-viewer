@@ -231,6 +231,8 @@ commit_all "$repo" binary-secret
 local_sha="$(git -C "$repo" rev-parse HEAD)"
 zero_sha="0000000000000000000000000000000000000000"
 scan_fails "$repo" range "$base_sha" HEAD
+scan_fails "$repo" branch
+scan_fails "$repo" branch origin/main
 scan_fails "$repo" history
 if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
   scan_passes "$repo" pre-push origin; then
