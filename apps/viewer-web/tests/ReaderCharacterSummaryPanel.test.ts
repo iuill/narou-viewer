@@ -10,18 +10,24 @@ type PanelProps = ComponentProps<typeof ReaderCharacterSummaryPanel>;
 function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
   return {
     activeJobs: [],
+    canClear: true,
     canGenerate: true,
     completedJobs: [],
     data: null,
     defaultUpToEpisodeIndex: "12",
     error: null,
     formatEpisodeOrderLabel: (episodeIndex) => episodeIndex,
+    isClearing: false,
+    includeCurrentEpisode: false,
     isLoading: false,
     isSubmitting: false,
     notice: null,
+    onClear: vi.fn(),
+    onIncludeCurrentEpisodeChange: vi.fn(),
     onClose: vi.fn(),
     onRequestedGenerationStrategyChange: vi.fn(),
     onRequestedUpToEpisodeIndexChange: vi.fn(),
+    onShowTerms: vi.fn(),
     onSubmit: vi.fn(),
     requestedGenerationStrategy: "parallel_identity",
     requestedUpToEpisodeIndex: "12",
@@ -117,7 +123,24 @@ describe("ReaderCharacterSummaryPanel", () => {
           progressStage: "batch",
           currentBatchIndex: 2,
           batchCount: 4,
+          completedBatchCount: 2,
           generatedCharacterCount: 5,
+          activeWorkers: [
+            {
+              workerIndex: 1,
+              batchIndex: 3,
+              startEpisodeIndex: "9",
+              endEpisodeIndex: "10",
+              phase: "extraction"
+            },
+            {
+              workerIndex: 2,
+              batchIndex: 4,
+              startEpisodeIndex: "11",
+              endEpisodeIndex: "11",
+              phase: "discovery"
+            }
+          ],
           createdAt: "2026-03-22T10:00:00Z",
           errorMessage: null
         }
@@ -133,7 +156,7 @@ describe("ReaderCharacterSummaryPanel", () => {
         }
       ],
       data: {
-        status: "ready",
+        status: "partial",
         upToEpisodeIndex: "12",
         processedUpToEpisodeIndex: "11",
         characters: [
@@ -174,7 +197,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root, dom } = await renderPanel(props);
 
-    expect(container.textContent).toContain("キャラクター一覧");
+    expect(container.textContent).toContain("人物・用語一覧");
     expect(container.textContent).toContain("第12話時点までの情報を確認します。");
     expect(container.textContent).toContain(
       "第11話時点までの生成済み一覧を表示しています。第12話時点の一覧はまだ生成されていません。"
@@ -183,12 +206,16 @@ describe("ReaderCharacterSummaryPanel", () => {
     expect(container.textContent).toContain("メインキャラ");
     expect(container.textContent).toContain("初登場第1話");
     expect(container.textContent).toContain("進行中の生成");
-    expect(container.textContent).toContain("並列抽出 + 同一人物解決");
-    expect(container.textContent).toContain("名前発見 + 並列抽出 + 補正");
-    expect(container.textContent).toContain("batch 生成中");
-    expect(container.textContent).toContain("62% / batch 2/4 / 5 人まで反映");
+    expect(container.textContent).toContain("並列抽出 + 人物・用語統合");
+    expect(container.textContent).toContain("事前発見 + 並列抽出 + 補正");
+    expect(container.textContent).toContain("人物・用語一覧を生成中");
+    expect(container.textContent).toContain("全体62%");
+    expect(container.textContent).toContain("batch2 of 4完了");
+    expect(container.textContent).toContain("人物5反映済");
+    expect(container.textContent).toContain("worker 1batch 3第9〜10話 人物・用語を抽出中…");
+    expect(container.textContent).toContain("worker 2batch 4第11話 人物候補を探索中…");
     expect(container.textContent).toContain("過去の生成履歴");
-    expect(container.textContent).toContain("現行 serial");
+    expect(container.textContent).toContain("順次抽出");
     expect(container.textContent).toContain("timeout");
 
     const form = container.querySelector("form");
@@ -197,9 +224,15 @@ describe("ReaderCharacterSummaryPanel", () => {
     }
 
     await submitForm(form, dom);
+    const termsTab = container.querySelector(".reader-extraction-tabs button:last-child");
+    if (!(termsTab instanceof dom.window.HTMLButtonElement)) {
+      throw new Error("terms tab not found");
+    }
+    await click(termsTab, dom);
     await click(getButtonByText(container, "×"), dom);
 
     expect(props.onSubmit).toHaveBeenCalledTimes(1);
+    expect(props.onShowTerms).toHaveBeenCalledTimes(1);
     expect(props.onClose).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -207,12 +240,12 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
   });
 
-  it("生成方式の変更を通知する", async () => {
+  it("抽出方式の変更を通知する", async () => {
     const onRequestedGenerationStrategyChange = vi.fn();
     const props = createProps({ onRequestedGenerationStrategyChange });
     const { container, root, dom } = await renderPanel(props);
     const select = Array.from(container.querySelectorAll("select")).find((candidate) =>
-      candidate.textContent?.includes("現行 serial")
+      candidate.textContent?.includes("順次抽出")
     );
 
     if (!(select instanceof dom.window.HTMLSelectElement)) {
@@ -323,19 +356,20 @@ describe("ReaderCharacterSummaryPanel", () => {
   it("未生成かつ第1話では生成不可メッセージと disabled 状態を出す", async () => {
     const props = createProps({
       canGenerate: false,
-      defaultUpToEpisodeIndex: null
+      defaultUpToEpisodeIndex: null,
+      includeCurrentEpisode: false
     });
     const { container, root, dom } = await renderPanel(props);
 
-    expect(container.textContent).toContain("第1話閲覧中のため、キャラクター一覧は生成できません。");
-    expect(container.textContent).toContain("第1話ではキャラクター一覧を生成できません。");
+    expect(container.textContent).toContain("第1話より前には生成対象がありません。");
+    expect(container.textContent).toContain("「現在話を含む」を有効にすると第1話を生成できます。");
 
     const input = container.querySelector('input[type="number"]');
     if (!(input instanceof dom.window.HTMLInputElement)) {
       throw new Error("number input not found");
     }
 
-    const submitButton = getButtonByText(container, "生成を依頼");
+    const submitButton = getButtonByText(container, "人物と用語を抽出");
     expect(input.disabled).toBe(true);
     expect(submitButton.disabled).toBe(true);
 
@@ -352,7 +386,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(container.textContent).toContain("キャラクター情報を読み込み中...");
+    expect(container.textContent).toContain("人物と用語の抽出情報を読み込み中...");
     expect(container.textContent).toContain("登録中...");
 
     await act(async () => {
@@ -408,7 +442,8 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(container.textContent).toContain("第3話時点 / 1 / 1 人");
+    expect(container.textContent).toContain("第2話時点");
+    expect(container.textContent).toContain("人物 1 of 1");
     expect(container.textContent).toContain("初登場第1話");
     expect(container.textContent).toContain("第2話まで");
     expect(container.textContent).toContain("第3話まで");

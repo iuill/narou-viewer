@@ -18,14 +18,16 @@ import (
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
-	appcharactersummary "narou-viewer/apps/viewer-api-go/internal/application/charactersummary"
+	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/fetcher"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/storageusage"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 
 	_ "modernc.org/sqlite"
 )
@@ -92,10 +94,10 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	workerCancel()
 	workerServer := &Server{ctx: workerCtx, dataDir: t.TempDir()}
-	if workerServer.processCharacterJob(workerCtx, "novel", characters.Job{Status: "queued"}) {
+	if workerServer.processCharacterJob(workerCtx, "novel", extractdomain.Job{Status: "queued"}) {
 		t.Fatal("processCharacterJob should stop before starting work when context is canceled")
 	}
-	options, message := (&Server{}).parseCharacterSummaryRequestOptions(map[string]any{
+	options, message := (&Server{}).parseExtractionRequestOptions(map[string]any{
 		"profileId":            nil,
 		"modelId":              nil,
 		"providerOrder":        []any{"ProviderA", " ProviderB "},
@@ -106,19 +108,19 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	if message != "" || !options.ProfileResolution || options.Transient == nil || options.ProfileID != nil {
 		t.Fatalf("transient null overrides should be accepted: options=%+v message=%q", options, message)
 	}
-	if strategyOptions, message := (&Server{}).parseCharacterSummaryRequestOptions(map[string]any{"generationStrategy": "parallel_identity"}); message != "" || strategyOptions.GenerationStrategy != "parallel_identity" {
+	if strategyOptions, message := (&Server{}).parseExtractionRequestOptions(map[string]any{"generationStrategy": "parallel_identity"}); message != "" || strategyOptions.GenerationStrategy != "parallel_identity" {
 		t.Fatalf("generation strategy should be accepted: options=%+v message=%q", strategyOptions, message)
 	}
-	if strategyOptions, message := (&Server{}).parseCharacterSummaryRequestOptions(map[string]any{"generationStrategy": "discovery_parallel_correction"}); message != "" || strategyOptions.GenerationStrategy != "discovery_parallel_correction" {
+	if strategyOptions, message := (&Server{}).parseExtractionRequestOptions(map[string]any{"generationStrategy": "discovery_parallel_correction"}); message != "" || strategyOptions.GenerationStrategy != "discovery_parallel_correction" {
 		t.Fatalf("discovery generation strategy should be accepted: options=%+v message=%q", strategyOptions, message)
 	}
 	if options.Transient.ModelID != nil || len(options.Transient.ProviderOrder) != 2 || options.Transient.AllowFallbacks == nil || *options.Transient.AllowFallbacks || options.Transient.RequireParameters == nil || !*options.Transient.RequireParameters {
 		t.Fatalf("transient overrides should be normalized: %+v", options.Transient)
 	}
-	if message, status := (&Server{}).resolveCharacterSummaryRequestOptions(&characterSummaryRequestOptions{ProfileResolution: true}); message != "AI generation profile was not found." || status != http.StatusBadRequest {
+	if message, status := (&Server{}).resolveExtractionRequestOptions(&extractionRequestOptions{ProfileResolution: true}); message != "AI生成プロファイルが見つかりません。" || status != http.StatusBadRequest {
 		t.Fatalf("nil store profile resolution should fail, got %q", message)
 	}
-	if message, status := (&Server{}).resolveCharacterSummaryRequestOptions(nil); message != "" || status != http.StatusOK {
+	if message, status := (&Server{}).resolveExtractionRequestOptions(nil); message != "" || status != http.StatusOK {
 		t.Fatalf("nil request options should be ignored, got %q", message)
 	}
 	for _, body := range []map[string]any{
@@ -126,11 +128,11 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 		{"systemPromptOverride": 10},
 		{"generationStrategy": "unknown"},
 	} {
-		if _, message := (&Server{}).parseCharacterSummaryRequestOptions(body); message == "" {
+		if _, message := (&Server{}).parseExtractionRequestOptions(body); message == "" {
 			t.Fatalf("invalid character summary options should be rejected: body=%+v", body)
 		}
 	}
-	nilUnlock := (*Server)(nil).characterSummaryRuntime().LockTarget("novel-1", "1")
+	nilUnlock := (*Server)(nil).extractionRuntime().LockTarget("novel-1", "1")
 	nilUnlock()
 	if got := appendUniqueInt([]int{1}, 1); len(got) != 1 || got[0] != 1 {
 		t.Fatalf("appendUniqueInt should not duplicate existing values: %+v", got)
@@ -138,12 +140,12 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	if got := mergeStringSets([]string{"1"}, []string{"", "1", "2"}); len(got) != 2 || got[1] != "2" {
 		t.Fatalf("mergeStringSets should skip blanks and duplicates: %+v", got)
 	}
-	if fingerprint := characterSummaryCheckpointFingerprint(nil, func() {}); fingerprint == "" {
-		t.Fatal("characterSummaryCheckpointFingerprint should return a stable fallback hash")
+	if fingerprint := extractionCheckpointFingerprint(nil, func() {}); fingerprint == "" {
+		t.Fatal("extractionCheckpointFingerprint should return a stable fallback hash")
 	}
 }
 
-func TestCharacterSummaryUsageTokenHelpers(t *testing.T) {
+func TestExtractionUsageTokenHelpers(t *testing.T) {
 	episodes := []characters.HeuristicEpisode{
 		{EpisodeIndex: "1", Text: "alpha beta"},
 		{EpisodeIndex: "2", Text: "gamma"},
@@ -152,15 +154,15 @@ func TestCharacterSummaryUsageTokenHelpers(t *testing.T) {
 		t.Fatalf("unexpected heuristic episode indexes: %+v", got)
 	}
 	expectedInputTokens := estimateTokenCount(episodes[0].Text) + estimateTokenCount(episodes[1].Text)
-	if got := characterSummaryInputTokens(episodes); got != expectedInputTokens {
+	if got := extractionInputTokens(episodes); got != expectedInputTokens {
 		t.Fatalf("unexpected input token estimate: %d", got)
 	}
 
-	batches := []characterSummaryBatch{
-		{Chunks: []characterSummaryChunk{{Text: "one two"}, {Text: "three"}}},
-		{Chunks: []characterSummaryChunk{{Text: "four"}}},
+	batches := []extractionBatch{
+		{Chunks: []extractionChunk{{Text: "one two"}, {Text: "three"}}},
+		{Chunks: []extractionChunk{{Text: "four"}}},
 	}
-	requests := characterSummaryBatchUsageRequests(batches)
+	requests := extractionBatchUsageRequests(batches)
 	if len(requests) != 2 || requests[0].RequestIndex != 0 || requests[1].RequestIndex != 1 {
 		t.Fatalf("unexpected usage requests: %+v", requests)
 	}
@@ -177,6 +179,19 @@ func TestCharacterSummaryUsageTokenHelpers(t *testing.T) {
 	}
 }
 
+func TestExtractionPlaygroundParallelStartEmitsBatchStatus(t *testing.T) {
+	event := extractionPlaygroundProgressEvent(extractionBatchProgress{
+		Phase: "parallelStart",
+		Batch: extractionBatch{BatchIndex: 2, BatchCount: 4, EpisodeIndexes: []string{"3"}},
+	})
+	if event == nil || event["type"] != "status" || event["stage"] != "generating" || event["batchIndex"] != 2 || event["batchCount"] != 4 {
+		t.Fatalf("parallelStart event = %+v, want public batch status", event)
+	}
+	if event := extractionPlaygroundProgressEvent(extractionBatchProgress{Phase: "error"}); event != nil {
+		t.Fatalf("error phase should not emit playground progress event: %+v", event)
+	}
+}
+
 func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
 	stateStore := store.New(dataDir)
@@ -188,7 +203,7 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 		t.Fatalf("EnsureStateDirs returned error: %v", err)
 	}
 	startedAt := "2026-01-01T00:00:00Z"
-	job := characters.Job{
+	job := extractdomain.Job{
 		JobID:                     "job-running",
 		RequestedUpToEpisodeIndex: "1",
 		GenerationMode:            "heuristic",
@@ -196,7 +211,7 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 		CreatedAt:                 "2026-01-01T00:00:00Z",
 		StartedAt:                 &startedAt,
 	}
-	if err := characters.SaveJob(stateDir, "novel-1", job); err != nil {
+	if err := extractdomain.SaveJob(stateDir, "novel-1", job); err != nil {
 		t.Fatalf("SaveJob returned error: %v", err)
 	}
 
@@ -211,7 +226,7 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 		_ = server.Shutdown(context.Background())
 	})
 
-	jobs, ok, err := characters.LoadJobs(stateDir, "novel-1")
+	jobs, ok, err := extractdomain.LoadJobs(stateDir, "novel-1")
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after constructor: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
@@ -222,7 +237,7 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	server.StartBackground(ctx)
-	jobs, ok, err = characters.LoadJobs(stateDir, "novel-1")
+	jobs, ok, err = extractdomain.LoadJobs(stateDir, "novel-1")
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after StartBackground: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
@@ -231,7 +246,7 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryProcessedEpisodesChangedDetectsContentEtagDiff(t *testing.T) {
+func TestExtractionProcessedEpisodesChangedDetectsContentEtagDiff(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	server := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), store.New(dataDir)).(*Server)
 	novelID := library.NovelID(library.Work{ID: 1, Site: "syosetu", SiteWorkID: "n1234"})
@@ -254,7 +269,7 @@ episode_etags:
 characters: []
 `)
 	processed := "1"
-	reprocessFrom, err := server.characterSummaryReprocessFromEpisode(context.Background(), novelID, &processed, processed)
+	reprocessFrom, err := server.extractionReprocessFromEpisode(context.Background(), novelID, &processed, processed)
 	if err != nil || reprocessFrom != "" {
 		t.Fatalf("matching content etag should not trigger reprocess: reprocessFrom=%q err=%v", reprocessFrom, err)
 	}
@@ -268,7 +283,7 @@ episode_etags:
     content_etag: "stale-etag"
 characters: []
 `)
-	reprocessFrom, err = server.characterSummaryReprocessFromEpisode(context.Background(), novelID, &processed, processed)
+	reprocessFrom, err = server.extractionReprocessFromEpisode(context.Background(), novelID, &processed, processed)
 	if err != nil || reprocessFrom != "1" {
 		t.Fatalf("stale content etag should trigger reprocess: reprocessFrom=%q err=%v", reprocessFrom, err)
 	}
@@ -279,7 +294,7 @@ processed_up_to_episode_index: "1"
 next_character_ordinal: 1
 characters: []
 `)
-	reprocessFrom, err = server.characterSummaryReprocessFromEpisode(context.Background(), novelID, &processed, processed)
+	reprocessFrom, err = server.extractionReprocessFromEpisode(context.Background(), novelID, &processed, processed)
 	if err != nil || reprocessFrom != "1" {
 		t.Fatalf("missing legacy etags should trigger bootstrap reprocess: reprocessFrom=%q err=%v", reprocessFrom, err)
 	}
@@ -296,11 +311,11 @@ episode_etags:
     content_etag: "deleted-etag"
 characters: []
 `)
-	reprocessFrom, err = server.characterSummaryReprocessFromEpisode(context.Background(), novelID, &processed, "1")
+	reprocessFrom, err = server.extractionReprocessFromEpisode(context.Background(), novelID, &processed, "1")
 	if err != nil || reprocessFrom != "" {
 		t.Fatalf("changes after requested episode should not trigger reprocess: reprocessFrom=%q err=%v", reprocessFrom, err)
 	}
-	reprocessFrom, err = server.characterSummaryReprocessFromEpisode(context.Background(), novelID, &processed, processed)
+	reprocessFrom, err = server.extractionReprocessFromEpisode(context.Background(), novelID, &processed, processed)
 	if err != nil || reprocessFrom != "2" {
 		t.Fatalf("deleted processed episode should trigger reprocess from the deleted episode: reprocessFrom=%q err=%v", reprocessFrom, err)
 	}
@@ -322,14 +337,14 @@ func TestNonStreamingLLMContextUsesShorterDeadlineThanServerWriteTimeout(t *test
 	}
 }
 
-func TestCharacterSummaryTargetLockSerializesSameTarget(t *testing.T) {
+func TestExtractionTargetLockSerializesSameTarget(t *testing.T) {
 	server := &Server{}
-	unlockFirst := server.characterSummaryRuntime().LockTarget("novel-1", "1")
+	unlockFirst := server.extractionRuntime().LockTarget("novel-1", "1")
 
 	acquiredSameTarget := make(chan struct{})
 	releaseSameTarget := make(chan struct{})
 	go func() {
-		unlock := server.characterSummaryRuntime().LockTarget("novel-1", "1")
+		unlock := server.extractionRuntime().LockTarget("novel-1", "1")
 		close(acquiredSameTarget)
 		<-releaseSameTarget
 		unlock()
@@ -341,7 +356,7 @@ func TestCharacterSummaryTargetLockSerializesSameTarget(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 
-	unlockOther := server.characterSummaryRuntime().LockTarget("novel-1", "2")
+	unlockOther := server.extractionRuntime().LockTarget("novel-1", "2")
 	unlockOther()
 
 	unlockFirst()
@@ -354,10 +369,10 @@ func TestCharacterSummaryTargetLockSerializesSameTarget(t *testing.T) {
 }
 
 func TestAIGenerationPreviewHelperBranches(t *testing.T) {
-	if got := characterSummaryPlaygroundErrorMessage(nil); got != "Character profiles could not be read." {
+	if got := extractionPlaygroundErrorMessage(nil); got != "Character profiles could not be read." {
 		t.Fatalf("nil playground error should use default message, got %q", got)
 	}
-	if got := characterSummaryPlaygroundErrorMessage(errors.New("   ")); got != "Character profiles could not be read." {
+	if got := extractionPlaygroundErrorMessage(errors.New("   ")); got != "Character profiles could not be read." {
 		t.Fatalf("blank playground error should use default message, got %q", got)
 	}
 	config := &store.ResolvedAIGenerationConfig{
@@ -415,8 +430,8 @@ func TestAIGenerationPreviewHelperBranches(t *testing.T) {
 	if count := previewChunkCount(map[string]any{"batches": []map[string]any{{"chunkCount": "bad"}}}); count != 0 {
 		t.Fatalf("malformed preview chunk count should be zero: %d", count)
 	}
-	typedPreview := appcharactersummary.PromptPreview{
-		Batches: []appcharactersummary.PromptPreviewBatch{
+	typedPreview := appextraction.PromptPreview{
+		Batches: []appextraction.PromptPreviewBatch{
 			{EpisodeIndexes: []string{"1", "2"}, ChunkCount: 2},
 			{EpisodeIndexes: []string{"2", "3"}, ChunkCount: 4},
 		},
@@ -491,7 +506,7 @@ func TestAIGenerationPreviewHelperBranches(t *testing.T) {
 	}
 }
 
-func TestGenerateAndSaveCharacterSummaryDirectBranches(t *testing.T) {
+func TestGenerateAndSaveExtractionDirectBranches(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
 	if err := stateStore.Initialize(); err != nil {
@@ -503,44 +518,44 @@ func TestGenerateAndSaveCharacterSummaryDirectBranches(t *testing.T) {
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
 
-	preview, err := server.characterSummaryPromptPreview(context.Background(), novelID, "1", nil)
+	preview, err := server.extractionPromptPreview(context.Background(), novelID, "1", nil)
 	if err != nil {
-		t.Fatalf("characterSummaryPromptPreview returned error: %v", err)
+		t.Fatalf("extractionPromptPreview returned error: %v", err)
 	}
 	if indexes := previewEpisodeIndexes(preview); len(indexes) != 1 || indexes[0] != "1" || previewChunkCount(preview) != 1 {
 		t.Fatalf("unexpected prompt preview: %+v", preview)
 	}
-	emptyPreview, err := (&Server{}).characterSummaryPromptPreview(context.Background(), novelID, "1", nil)
+	emptyPreview, err := (&Server{}).extractionPromptPreview(context.Background(), novelID, "1", nil)
 	if err != nil {
-		t.Fatalf("nil-library characterSummaryPromptPreview returned error: %v", err)
+		t.Fatalf("nil-library extractionPromptPreview returned error: %v", err)
 	}
 	if len(previewEpisodeIndexes(emptyPreview)) != 0 || previewChunkCount(emptyPreview) != 0 {
 		t.Fatalf("nil-library prompt preview should be empty: %+v", emptyPreview)
 	}
 
-	if err := server.generateAndSaveCharacterSummary(context.Background(), novelID, "1", nil, nil); err != nil {
-		t.Fatalf("heuristic generateAndSaveCharacterSummary returned error: %v", err)
+	if err := server.generateAndSaveExtraction(context.Background(), novelID, "1", nil, nil); err != nil {
+		t.Fatalf("heuristic generateAndSaveExtraction returned error: %v", err)
 	}
 	heuristic, ok, err := characters.LoadSummary(server.stateDir(), novelID, "1")
 	if err != nil || !ok || heuristic.Status != "ready" {
 		t.Fatalf("heuristic summary should be readable: ok=%v summary=%+v err=%v", ok, heuristic, err)
 	}
-	heuristicPreview, err := server.generateCharacterSummaryPreview(context.Background(), novelID, "1", nil, nil, []string{"1"}, nil)
+	heuristicPreview, err := server.generateExtractionPreview(context.Background(), novelID, "1", nil, nil, []string{"1"}, nil)
 	if err != nil || heuristicPreview.Status != "ready" || heuristicPreview.ProcessedUpToEpisodeIndex == nil {
 		t.Fatalf("heuristic preview should be built without touching state profiles: preview=%+v err=%v", heuristicPreview, err)
 	}
-	if _, err := loadRequiredCharacterSummaryPreview(t.TempDir(), "novel-1", "1", nil); err == nil {
-		t.Fatal("loadRequiredCharacterSummaryPreview should fail when the temporary summary is missing")
+	if _, err := loadRequiredExtractionPreview(t.TempDir(), "novel-1", "1", nil); err == nil {
+		t.Fatal("loadRequiredExtractionPreview should fail when the temporary summary is missing")
 	}
 
 	if _, err := stateStore.PutAIGenerationPreferredMode("llm"); err != nil {
 		t.Fatalf("PutAIGenerationPreferredMode returned error: %v", err)
 	}
-	if err := server.generateAndSaveCharacterSummary(context.Background(), novelID, "1", nil, nil); err == nil {
-		t.Fatal("disabled generateAndSaveCharacterSummary should fail")
+	if err := server.generateAndSaveExtraction(context.Background(), novelID, "1", nil, nil); err == nil {
+		t.Fatal("disabled generateAndSaveExtraction should fail")
 	}
-	if _, err := server.generateCharacterSummaryPreview(context.Background(), novelID, "1", nil, nil, []string{"1"}, nil); err == nil {
-		t.Fatal("disabled generateCharacterSummaryPreview should fail")
+	if _, err := server.generateExtractionPreview(context.Background(), novelID, "1", nil, nil, []string{"1"}, nil); err == nil {
+		t.Fatal("disabled generateExtractionPreview should fail")
 	}
 	afterDisabled, ok, err := characters.LoadSummary(server.stateDir(), novelID, "1")
 	if err != nil || !ok || afterDisabled.Status != heuristic.Status || len(afterDisabled.Characters) != len(heuristic.Characters) {
@@ -676,14 +691,14 @@ func TestProcessCharacterJobMarksFailedOnGenerationError(t *testing.T) {
 	server := handler.(*Server)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	job := characters.Job{
+	job := extractdomain.Job{
 		JobID:                     "job-failure",
 		RequestedUpToEpisodeIndex: "1",
 		GenerationMode:            "heuristic",
 		Status:                    "queued",
 		CreatedAt:                 ai.NowISO(),
 	}
-	savedJob, _, err := characters.SaveJobIfNoActive(server.stateDir(), novelID, job)
+	savedJob, _, err := extractdomain.SaveJobIfNoActive(server.stateDir(), novelID, job)
 	if err != nil {
 		t.Fatalf("SaveJobIfNoActive returned error: %v", err)
 	}
@@ -691,11 +706,11 @@ func TestProcessCharacterJobMarksFailedOnGenerationError(t *testing.T) {
 		t.Fatalf("corrupt AI settings: %v", err)
 	}
 	server.processCharacterJob(context.Background(), novelID, savedJob)
-	jobs, ok, err := characters.LoadJobs(server.stateDir(), novelID)
+	jobs, ok, err := extractdomain.LoadJobs(server.stateDir(), novelID)
 	if err != nil || !ok {
 		t.Fatalf("load failed job: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
-	var failedJob *characters.Job
+	var failedJob *extractdomain.Job
 	for index := range jobs {
 		if jobs[index].JobID == savedJob.JobID {
 			failedJob = &jobs[index]
@@ -719,14 +734,14 @@ func TestCharacterJobSubmitStoresGenerationStrategy(t *testing.T) {
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
 
-	response := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex":   "1",
 		"generationStrategy": "parallel_identity",
 	}, http.StatusAccepted)
 	if response["generationStrategy"] != "parallel_identity" {
 		t.Fatalf("response should include generation strategy: %+v", response)
 	}
-	jobs, ok, err := characters.LoadJobs(server.stateDir(), novelID)
+	jobs, ok, err := extractdomain.LoadJobs(server.stateDir(), novelID)
 	if err != nil || !ok || len(jobs) == 0 {
 		t.Fatalf("jobs not saved: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
@@ -1200,9 +1215,9 @@ func TestWriteJSONNormalizesLegacyErrorPayloadsWithRequestID(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryTargetLockCleansUp(t *testing.T) {
+func TestExtractionTargetLockCleansUp(t *testing.T) {
 	server := &Server{}
-	runtime := server.characterSummaryRuntime()
+	runtime := server.extractionRuntime()
 	unlock := runtime.LockTarget("novel-1", "1")
 	if runtime.ActiveLockCount() != 1 {
 		t.Fatalf("target lock should be tracked while held: %d", runtime.ActiveLockCount())
@@ -1391,7 +1406,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if characters["status"] != "ready" {
 		t.Fatalf("unexpected characters response: %+v", characters)
 	}
-	createdJob := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	createdJob := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": episodeIndex,
 	}, http.StatusAccepted)
 	if createdJob["status"] != "queued" {
@@ -1404,7 +1419,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if completedJob["progress"] != float64(100) || completedJob["progressStage"] != "completed" {
 		t.Fatalf("completed character job should expose worker progress metadata: %+v", completedJob)
 	}
-	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "llm"}, http.StatusOK)
@@ -1415,7 +1430,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage/run-http", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage/go-fixture-usage-run", nil, http.StatusNotFound)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": 1,
 	}, http.StatusOK)
@@ -1540,7 +1555,7 @@ processed_up_to_episode_index: "1"
 next_character_ordinal: 1
 characters: []
 `)
-	characterJobIndexDir := filepath.Join(server.stateDir(), "character_jobs", "index")
+	characterJobIndexDir := filepath.Join(server.stateDir(), "extraction_jobs", "index")
 	if err := os.MkdirAll(characterJobIndexDir, 0o755); err != nil {
 		t.Fatalf("mkdir character job index fixture: %v", err)
 	}
@@ -1560,7 +1575,7 @@ job_ids:
 	if _, err := stateStore.CreateBookmark(store.Bookmark{NovelID: novelID, EpisodeIndex: "1", Position: 12}); err != nil {
 		t.Fatalf("CreateBookmark returned error: %v", err)
 	}
-	if err := server.saveCharacterSummaryCheckpoint(novelID, "1", characterSummaryCheckpoint{
+	if err := server.saveExtractionCheckpoint(novelID, "1", extractionCheckpoint{
 		SchemaVersion:           1,
 		NovelID:                 novelID,
 		UpToEpisodeIndex:        "1",
@@ -1573,7 +1588,7 @@ job_ids:
 	targetUsageNovelID := novelID
 	if err := ai.SaveUsageRun(server.aiUsageDBPath(), ai.UsageRun{
 		RunID:          "run-target-remove",
-		Feature:        "character-summary",
+		Feature:        "extraction",
 		WorkflowName:   "Character summary",
 		Status:         "completed",
 		StartedAt:      "2026-01-01T00:00:00Z",
@@ -1605,14 +1620,14 @@ job_ids:
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
 	expectedCounts := map[string]float64{
-		"readingStatesDeleted":        1,
-		"bookmarksDeleted":            1,
-		"characterEventsDeleted":      1,
-		"characterProfilesDeleted":    1,
-		"characterJobsDeleted":        1,
-		"characterJobIndexesDeleted":  1,
-		"characterCheckpointsDeleted": 1,
-		"aiUsageRunsDeleted":          1,
+		"readingStatesDeleted":         1,
+		"bookmarksDeleted":             1,
+		"characterEventsDeleted":       1,
+		"characterProfilesDeleted":     1,
+		"extractionJobsDeleted":        1,
+		"extractionJobIndexesDeleted":  1,
+		"extractionCheckpointsDeleted": 1,
+		"aiUsageRunsDeleted":           1,
 	}
 	for key, expected := range expectedCounts {
 		if cleanup[key] != expected {
@@ -1648,10 +1663,10 @@ job_ids:
 	if _, err := os.Stat(filepath.Join(server.stateDir(), "character_profiles", novelID+".yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("character profile should be pruned: %v", err)
 	}
-	if jobs, ok, err := characters.LoadJobs(server.stateDir(), novelID); err != nil || ok || len(jobs) != 0 {
+	if jobs, ok, err := extractdomain.LoadJobs(server.stateDir(), novelID); err != nil || ok || len(jobs) != 0 {
 		t.Fatalf("character jobs should be pruned: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
-	if server.characterSummaryCheckpointExists(novelID, "1") {
+	if server.extractionCheckpointExists(novelID, "1") {
 		t.Fatal("character checkpoint should be pruned")
 	}
 	if _, ok, err := ai.LoadUsageRun(server.aiUsageDBPath(), "run-target-remove"); err != nil || ok {
@@ -1697,7 +1712,7 @@ func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.
 		t.Fatalf("cleanup failure should be reported without failing remove: %+v", response)
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
-	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["characterJobsDeleted"] != float64(1) {
+	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["extractionJobsDeleted"] != float64(1) {
 		t.Fatalf("cleanup response should keep successful partial counts: %+v", cleanup)
 	}
 }
@@ -1784,8 +1799,9 @@ func TestMethodAllowHeadersForMultiMethodRoutes(t *testing.T) {
 		{http.MethodPost, "/api/reader/state", "GET, PUT"},
 		{http.MethodPost, "/api/reader/preferences", "GET, PUT"},
 		{http.MethodPut, "/api/bookmarks", "GET, POST"},
-		{http.MethodPost, "/api/library/novels/" + novelID + "/characters?upToEpisodeIndex=1", "GET, DELETE"},
-		{http.MethodPut, "/api/library/novels/" + novelID + "/character-jobs", "GET, POST"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/characters?upToEpisodeIndex=1", "GET"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/terms?upToEpisodeIndex=1", "GET"},
+		{http.MethodPut, "/api/library/novels/" + novelID + "/extraction-jobs", "GET, POST"},
 	}
 	for _, tc := range cases {
 		response := httptest.NewRecorder()
@@ -1824,12 +1840,16 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=1", nil, http.StatusMethodNotAllowed)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=999", nil, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=0", nil, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/character-jobs", nil, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms", nil, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex=1", nil, http.StatusMethodNotAllowed)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex=999", nil, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/terms?upToEpisodeIndex=1", nil, http.StatusNotFound)
+	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/extraction-jobs", nil, http.StatusNotFound)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": 0,
 	}, http.StatusBadRequest)
 
@@ -1889,13 +1909,13 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		"profiles":      []any{map[string]any{"id": "default", "label": "Default"}},
 	}, http.StatusOK)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "bad"}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/playground/character-summary", nil, http.StatusMethodNotAllowed)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/playground/extraction", nil, http.StatusMethodNotAllowed)
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
-	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -1903,29 +1923,29 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		t.Fatalf("unexpected playground result: %+v", playground)
 	}
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{"preferredMode": "llm"}, http.StatusOK)
-	llmPlayground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	llmPlayground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
 	if llmPlayground["generationMode"] != "disabled" {
 		t.Fatalf("playground should report effective AI generation mode: %+v", llmPlayground)
 	}
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": 0,
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId": "missing",
 	}, http.StatusBadRequest)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "999",
 	}, http.StatusBadRequest)
@@ -2004,9 +2024,9 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		{http.MethodPost, "/api/bookmarks"},
 		{http.MethodPut, "/api/ai-generation/settings"},
 		{http.MethodPut, "/api/ai-generation/settings/preferred-mode"},
-		{http.MethodPost, "/api/ai-generation/playground/character-summary"},
-		{http.MethodPost, "/api/ai-generation/playground/character-summary/stream"},
-		{http.MethodPost, "/api/library/novels/" + novelID + "/character-jobs"},
+		{http.MethodPost, "/api/ai-generation/playground/extraction"},
+		{http.MethodPost, "/api/ai-generation/playground/extraction/stream"},
+		{http.MethodPost, "/api/library/novels/" + novelID + "/extraction-jobs"},
 		{http.MethodPost, "/api/library/novels/" + novelID + "/reader-assistant/chat"},
 		{http.MethodPost, "/api/library/novels/" + novelID + "/reader-assistant/chat/stream"},
 		{http.MethodPost, "/api/fetcher/works/download"},
@@ -2071,7 +2091,7 @@ func (f failingFetcherLibraryReader) GetLibraryEpisode(context.Context, int, str
 	return fetcher.LibraryEpisodeResponse{}, f.err
 }
 
-func TestCharacterSummaryLookupErrorReturnsBadGateway(t *testing.T) {
+func TestExtractionLookupErrorReturnsBadGateway(t *testing.T) {
 	service := library.NewServiceWithFetcher(t.TempDir(), failingFetcherLibraryReader{err: errors.New("sidecar unavailable")})
 	handler := NewServerWithDependencies(ServerDependencies{
 		DataDir: t.TempDir(),
@@ -2085,7 +2105,48 @@ func TestCharacterSummaryLookupErrorReturnsBadGateway(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryClearEndpointDeletesGeneratedState(t *testing.T) {
+func TestTermsEndpointUsesCharacterCommitFrontierAndDistinguishesEmptyState(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("initialize store: %v", err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	server := handler.(*Server)
+	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
+	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
+	path := "/api/library/novels/" + novelID + "/terms?upToEpisodeIndex=1"
+
+	legacy := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	if legacy["status"] != "not_generated" || legacy["processedUpToEpisodeIndex"] != nil || len(legacy["terms"].([]any)) != 0 {
+		t.Fatalf("character-only state should expose an actionable not_generated terms response: %+v", legacy)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, "1", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save empty generated terms: %v", err)
+	}
+	empty := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	if empty["status"] != "ready" || empty["processedUpToEpisodeIndex"] != "1" || len(empty["terms"].([]any)) != 0 {
+		t.Fatalf("generated empty terms should be ready: %+v", empty)
+	}
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, "1", []terms.GeneratedTerm{{
+		Term:               "聖剣",
+		CategoryHistory:    []terms.CategoryVersion{{Category: terms.CategoryItem, EpisodeIndex: "1"}},
+		DescriptionHistory: []terms.HistoryVersion{{Text: "王家に伝わる剣。", EpisodeIndex: "1"}},
+	}}, nil); err != nil {
+		t.Fatalf("save generated term: %v", err)
+	}
+	ready := requestJSON(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	items := ready["terms"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("term projection should contain the committed term: %+v", ready)
+	}
+	item := items[0].(map[string]any)
+	if item["term"] != "聖剣" || item["reading"] != nil || item["category"] != terms.CategoryItem || item["description"] != "王家に伝わる剣。" {
+		t.Fatalf("unexpected term projection: %+v", item)
+	}
+}
+
+func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
 	if err := stateStore.Initialize(); err != nil {
@@ -2106,7 +2167,13 @@ func TestCharacterSummaryClearEndpointDeletesGeneratedState(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("save generated summary: %v", err)
 	}
-	if err := characters.SaveJob(server.stateDir(), novelID, characters.Job{
+	if err := terms.SaveGeneratedTerms(server.stateDir(), novelID, episodeIndex, []terms.GeneratedTerm{{
+		Term:               "聖剣",
+		DescriptionHistory: []terms.HistoryVersion{{EpisodeIndex: episodeIndex, Text: "王家に伝わる剣。"}},
+	}}, nil); err != nil {
+		t.Fatalf("save generated terms: %v", err)
+	}
+	if err := extractdomain.SaveJob(server.stateDir(), novelID, extractdomain.Job{
 		JobID:                     "completed-clear-test",
 		RequestedUpToEpisodeIndex: episodeIndex,
 		Status:                    "completed",
@@ -2114,11 +2181,11 @@ func TestCharacterSummaryClearEndpointDeletesGeneratedState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save completed job: %v", err)
 	}
-	checkpointPath := server.characterSummaryCheckpointPath(novelID, episodeIndex)
+	checkpointPath := server.extractionCheckpointPath(novelID, episodeIndex)
 	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
-	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":2,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":3,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 
@@ -2126,15 +2193,19 @@ func TestCharacterSummaryClearEndpointDeletesGeneratedState(t *testing.T) {
 	if before["status"] != "ready" {
 		t.Fatalf("precondition generated summary should be ready: %+v", before)
 	}
-	cleared := requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/characters", nil, http.StatusOK)
-	if cleared["profileDeleted"] != true || cleared["eventsDeleted"] != true || cleared["jobsDeleted"].(float64) < 1 || cleared["checkpointsDeleted"] != float64(1) {
+	cleared := requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/extraction", nil, http.StatusOK)
+	if cleared["characterProfileDeleted"] != true || cleared["characterEventsDeleted"] != true || cleared["termProfileDeleted"] != true || cleared["extractionJobsDeleted"].(float64) < 1 || cleared["extractionCheckpointsDeleted"] != float64(1) {
 		t.Fatalf("clear response should report deleted generated state: %+v", cleared)
 	}
 	after := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex="+episodeIndex, nil, http.StatusOK)
 	if after["status"] != "not_generated" || len(after["characters"].([]any)) != 0 {
 		t.Fatalf("cleared character summary should become not_generated: %+v", after)
 	}
-	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	afterTerms := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/terms?upToEpisodeIndex="+episodeIndex, nil, http.StatusOK)
+	if afterTerms["status"] != "not_generated" || len(afterTerms["terms"].([]any)) != 0 {
+		t.Fatalf("cleared terms should become not_generated: %+v", afterTerms)
+	}
+	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 0 {
 		t.Fatalf("clear should delete character jobs: %+v", jobs)
 	}
@@ -2143,7 +2214,7 @@ func TestCharacterSummaryClearEndpointDeletesGeneratedState(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryClearEndpointRejectsActiveJob(t *testing.T) {
+func TestExtractionClearEndpointRejectsActiveJob(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
 	if err := stateStore.Initialize(); err != nil {
@@ -2161,7 +2232,7 @@ func TestCharacterSummaryClearEndpointRejectsActiveJob(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("save generated summary: %v", err)
 	}
-	if err := characters.SaveJob(server.stateDir(), novelID, characters.Job{
+	if err := extractdomain.SaveJob(server.stateDir(), novelID, extractdomain.Job{
 		JobID:                     "running-clear-test",
 		RequestedUpToEpisodeIndex: "1",
 		Status:                    "running",
@@ -2170,7 +2241,7 @@ func TestCharacterSummaryClearEndpointRejectsActiveJob(t *testing.T) {
 		t.Fatalf("save running job: %v", err)
 	}
 
-	requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/characters", nil, http.StatusConflict)
+	requestJSON(t, handler, http.MethodDelete, "/api/library/novels/"+novelID+"/extraction", nil, http.StatusConflict)
 	summary := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/characters?upToEpisodeIndex=1", nil, http.StatusOK)
 	if summary["status"] != "ready" {
 		t.Fatalf("active job rejection should keep generated summary: %+v", summary)
@@ -2188,7 +2259,7 @@ func TestServerDegradedDependencies(t *testing.T) {
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/toc", nil, http.StatusNotFound)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/missing/characters?upToEpisodeIndex=1", nil, http.StatusNotFound)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          "missing",
 		"upToEpisodeIndex": "1",
 	}, http.StatusNotFound)
@@ -2199,7 +2270,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(dataDir, "state", "character_profiles")); err != nil {
 		t.Fatalf("remove character profiles: %v", err)
 	}
-	if err := os.RemoveAll(filepath.Join(dataDir, "state", "character_jobs")); err != nil {
+	if err := os.RemoveAll(filepath.Join(dataDir, "state", "extraction_jobs")); err != nil {
 		t.Fatalf("remove character jobs: %v", err)
 	}
 	if err := os.Remove(filepath.Join(dataDir, "state", "ai_usage.sqlite")); err != nil {
@@ -2217,11 +2288,11 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if characters["status"] != "not_generated" || len(characters["characters"].([]any)) != 0 {
 		t.Fatalf("fallback characters should be not_generated without fake characters: %+v", characters)
 	}
-	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	jobs := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 0 {
 		t.Fatalf("expected no initial memory jobs: %+v", jobs)
 	}
-	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/character-jobs", map[string]any{
+	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{
 		"upToEpisodeIndex": "1",
 	}, http.StatusAccepted)
 	if created["jobId"] == "" {
@@ -2231,7 +2302,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 		t.Fatalf("created job should start queued before the worker processes it: %+v", created)
 	}
 	completed := waitForCharacterJobStatus(t, handler, novelID, created["jobId"].(string), "completed")
-	jobs = requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+	jobs = requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 	if len(jobs["jobs"].([]any)) != 1 {
 		t.Fatalf("expected one memory job: %+v", jobs)
 	}
@@ -2246,7 +2317,7 @@ func TestServerFallbackStateBranches(t *testing.T) {
 	if usage["runs"] == nil {
 		t.Fatalf("fallback usage should include runs key: %+v", usage)
 	}
-	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	playground := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -2540,7 +2611,7 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	if !strings.Contains(instructions, "現在位置: 第1話まで") {
 		t.Fatalf("instructions should fall back to episode 1 label: %s", instructions)
 	}
-	if !strings.Contains(instructions, "get_character_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "search_full_text") {
+	if !strings.Contains(instructions, "get_character_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "get_term_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "search_full_text") {
 		t.Fatalf("instructions should guide concrete term fallback search: %s", instructions)
 	}
 	if args := decodeToolArguments(`bad json`); len(args) != 0 {
@@ -2559,6 +2630,13 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	}
 	if snapshot.Result["status"] == "not_generated" && snapshot.Result["fallbackTool"] != "search_full_text" {
 		t.Fatalf("not_generated character snapshot should suggest full text fallback: %+v", snapshot)
+	}
+	termSnapshot := server.executeReaderAssistantTool(context.Background(), contextInfo, "get_term_snapshot", `{}`)
+	if termSnapshot.Name != "get_term_snapshot" || termSnapshot.Result["status"] == "" {
+		t.Fatalf("term snapshot tool should return a status: %+v", termSnapshot)
+	}
+	if termSnapshot.Result["status"] == "not_generated" && termSnapshot.Result["fallbackTool"] != "search_full_text" {
+		t.Fatalf("not_generated term snapshot should suggest full text fallback: %+v", termSnapshot)
 	}
 	unsupported := server.executeReaderAssistantTool(context.Background(), contextInfo, "missing_tool", `{}`)
 	if unsupported.Name != "tool_recovery" {
@@ -2784,7 +2862,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		promptTokens := 13
 		completionTokens := 5
 		if strings.Contains(string(raw), `"response_format"`) {
-			content = `{"characters":[{"canonicalName":"ミラ","summary":"mock OpenRouter summary"}]}`
+			content = `{"terms":[],"characters":[{"canonicalName":"ミラ","summary":"mock OpenRouter summary"}]}`
 			promptTokens = 29
 			completionTokens = 11
 		}
@@ -2850,7 +2928,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		t.Fatalf("reader assistant should use fake OpenRouter result: %+v", readerResponse)
 	}
 
-	summaryStream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	summaryStream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -2878,7 +2956,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		run := rawRun.(map[string]any)
 		features[run["feature"].(string)] = true
 	}
-	if !features["reader-assistant"] || !features["character-summary"] {
+	if !features["reader-assistant"] || !features["extraction"] {
 		t.Fatalf("usage should include reader assistant and character summary runs: %+v", usage)
 	}
 	if providerCalls < 2 {
@@ -3036,14 +3114,14 @@ func TestReaderAssistantUsesRequestedPositionForCurrentExcerpt(t *testing.T) {
 	}
 }
 
-func TestPlaygroundCharacterSummaryUsesConfiguredOpenRouterProvider(t *testing.T) {
+func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("authorization") != "Bearer sk-summary-secret" {
 			t.Fatalf("unexpected authorization: %q", r.Header.Get("authorization"))
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"アリス\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"OpenRouter summary\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"OpenRouter summary\"}]}"}}],
 			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 		}`))
 	}))
@@ -3085,7 +3163,7 @@ func TestPlaygroundCharacterSummaryUsesConfiguredOpenRouterProvider(t *testing.T
 	server := handler.(*Server)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -3096,7 +3174,10 @@ func TestPlaygroundCharacterSummaryUsesConfiguredOpenRouterProvider(t *testing.T
 	if len(characters) != 1 || characters[0].(map[string]any)["canonicalName"] != "アリス" {
 		t.Fatalf("playground should return generated character profile: %+v", response)
 	}
-	if server.characterSummaryCheckpointExists(novelID, "1") {
+	if response["terms"] == nil || len(response["terms"].([]any)) != 0 {
+		t.Fatalf("playground should always return the combined terms result: %+v", response)
+	}
+	if server.extractionCheckpointExists(novelID, "1") {
 		t.Fatal("playground preview should not create a checkpoint")
 	}
 	if _, err := os.Stat(filepath.Join(server.stateDir(), "character_profiles", novelID+".yaml")); !errors.Is(err, os.ErrNotExist) {
@@ -3110,16 +3191,16 @@ func TestPlaygroundCharacterSummaryUsesConfiguredOpenRouterProvider(t *testing.T
 	if run.Status != "completed" || run.InputTokens != 11 || run.OutputTokens != 7 || run.TotalTokens != 18 {
 		t.Fatalf("playground preview usage should preserve provider token counts: %+v", run)
 	}
-	if run.Feature != "character-summary" || run.WorkflowName != "character-summary" || run.HasSnapshot != true {
+	if run.Feature != "extraction" || run.WorkflowName != "extraction" || run.HasSnapshot != true {
 		t.Fatalf("playground preview usage should keep character summary metadata: %+v", run)
 	}
 }
 
-func TestGenerateAndSaveCharacterSummaryPreservesOpenRouterTokenUsage(t *testing.T) {
+func TestGenerateAndSaveExtractionPreservesOpenRouterTokenUsage(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"OpenRouter summary\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"OpenRouter summary\"}]}"}}],
 			"usage": {"prompt_tokens": 21, "completion_tokens": 8, "total_tokens": 29}
 		}`))
 	}))
@@ -3158,8 +3239,8 @@ func TestGenerateAndSaveCharacterSummaryPreservesOpenRouterTokenUsage(t *testing
 	_ = os.Remove(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml"))
 	_ = os.Remove(filepath.Join(dataDir, "state", "character_events", novelID+".yaml"))
 
-	if err := server.generateAndSaveCharacterSummary(context.Background(), novelID, "1", nil, nil); err != nil {
-		t.Fatalf("generateAndSaveCharacterSummary returned error: %v", err)
+	if err := server.generateAndSaveExtraction(context.Background(), novelID, "1", nil, nil); err != nil {
+		t.Fatalf("generateAndSaveExtraction returned error: %v", err)
 	}
 	usage, ok, err := ai.LoadUsage(server.aiUsageDBPath())
 	if err != nil || !ok || len(usage.Runs) != 1 {
@@ -3178,7 +3259,7 @@ func TestGenerateAndSaveCharacterSummaryPreservesOpenRouterTokenUsage(t *testing
 	}
 }
 
-func TestPlaygroundCharacterSummaryReportsOpenRouterSchemaMismatch(t *testing.T) {
+func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
@@ -3222,11 +3303,11 @@ func TestPlaygroundCharacterSummaryReportsOpenRouterSchemaMismatch(t *testing.T)
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
-	if !strings.Contains(response["error"].(string), "OpenRouter response did not match the expected character summary schema.") {
+	if !strings.Contains(response["error"].(string), "OpenRouter response did not match the expected extraction schema.") {
 		t.Fatalf("unexpected schema mismatch response: %+v", response)
 	}
 	server := handler.(*Server)
@@ -3235,12 +3316,12 @@ func TestPlaygroundCharacterSummaryReportsOpenRouterSchemaMismatch(t *testing.T)
 		t.Fatalf("failed playground preview usage run should be saved: ok=%v usage=%+v err=%v", ok, usage, err)
 	}
 	run := usage.Runs[0]
-	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "OpenRouter response did not match the expected character summary schema.") {
+	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "OpenRouter response did not match the expected extraction schema.") {
 		t.Fatalf("failed playground preview usage should preserve the generation error: %+v", run)
 	}
 }
 
-func TestPlaygroundCharacterSummaryUsesTransientOverrides(t *testing.T) {
+func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -3266,7 +3347,7 @@ func TestPlaygroundCharacterSummaryUsesTransientOverrides(t *testing.T) {
 			t.Fatalf("systemPromptOverride should be forwarded: %+v", messages)
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"セシル\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"一時設定で生成\"}]}"}}]
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"一時設定で生成\"}]}"}}]
 		}`))
 	}))
 	defer provider.Close()
@@ -3303,7 +3384,7 @@ func TestPlaygroundCharacterSummaryUsesTransientOverrides(t *testing.T) {
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":              novelID,
 		"upToEpisodeIndex":     "1",
 		"modelId":              "openrouter/transient",
@@ -3317,13 +3398,13 @@ func TestPlaygroundCharacterSummaryUsesTransientOverrides(t *testing.T) {
 	}
 }
 
-func TestPlaygroundCharacterSummaryStreamUsesTransientPromptPreviewAndBatchProgress(t *testing.T) {
+func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	providerCalls := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"finish_reason": "stop", "message": {"content": "{\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
+			"choices": [{"finish_reason": "stop", "message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
 			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 		}`))
 	}))
@@ -3360,7 +3441,7 @@ func TestPlaygroundCharacterSummaryStreamUsesTransientPromptPreviewAndBatchProgr
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":              novelID,
 		"upToEpisodeIndex":     "1",
 		"modelId":              "openrouter/transient",
@@ -3372,7 +3453,13 @@ func TestPlaygroundCharacterSummaryStreamUsesTransientPromptPreviewAndBatchProgr
 	}
 	promptIndex := eventIndex(events, "promptPreview", "")
 	generatingIndex := eventIndex(events, "status", "generating")
-	batchIndex := eventIndex(events, "status", "batch")
+	batchIndex := -1
+	for index, event := range events {
+		if event["type"] == "status" && event["stage"] == "generating" && event["batchIndex"] != nil {
+			batchIndex = index
+			break
+		}
+	}
 	timingIndex := eventIndex(events, "batchTiming", "")
 	buildingIndex := eventIndex(events, "status", "buildingResponse")
 	resultIndex := eventIndex(events, "result", "")
@@ -3390,12 +3477,16 @@ func TestPlaygroundCharacterSummaryStreamUsesTransientPromptPreviewAndBatchProgr
 	if events[batchIndex]["batchIndex"] != float64(1) || events[batchIndex]["batchCount"] != float64(1) {
 		t.Fatalf("batch status should include batch metadata: %+v", events[batchIndex])
 	}
+	result := events[resultIndex]["result"].(map[string]any)
+	if result["terms"] == nil || len(result["terms"].([]any)) != 0 {
+		t.Fatalf("stream final result should always include terms: %+v", result)
+	}
 	if _, err := os.Stat(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stream playground preview should not persist reader-facing profiles, stat err=%v", err)
 	}
 }
 
-func TestPlaygroundCharacterSummaryRejectsInvalidTransientOverrides(t *testing.T) {
+func TestPlaygroundExtractionRejectsInvalidTransientOverrides(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
 	if err := stateStore.Initialize(); err != nil {
@@ -3411,17 +3502,17 @@ func TestPlaygroundCharacterSummaryRejectsInvalidTransientOverrides(t *testing.T
 		{"novelId": novelID, "upToEpisodeIndex": "1", "requireParameters": "false"},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "systemPromptOverride": "  "},
 	} {
-		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", body, http.StatusBadRequest)
+		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", body, http.StatusBadRequest)
 		if response["error"] != "一時 AI 生成設定が不正です。" {
 			t.Fatalf("unexpected transient validation response: body=%+v response=%+v", body, response)
 		}
 	}
 }
 
-func TestCharacterSummaryBatchUsageRequestsUseBatchCount(t *testing.T) {
-	requests := characterSummaryBatchUsageRequests([]characterSummaryBatch{
-		{BatchIndex: 1, Chunks: []characterSummaryChunk{{Text: "あいうえ"}, {Text: "かき"}}},
-		{BatchIndex: 2, Chunks: []characterSummaryChunk{{Text: "さしすせそ"}}},
+func TestExtractionBatchUsageRequestsUseBatchCount(t *testing.T) {
+	requests := extractionBatchUsageRequests([]extractionBatch{
+		{BatchIndex: 1, Chunks: []extractionChunk{{Text: "あいうえ"}, {Text: "かき"}}},
+		{BatchIndex: 2, Chunks: []extractionChunk{{Text: "さしすせそ"}}},
 	})
 	if len(requests) != 2 || requests[0].RequestIndex != 0 || requests[1].RequestIndex != 1 {
 		t.Fatalf("usage requests should follow batches, got %+v", requests)
@@ -3431,20 +3522,20 @@ func TestCharacterSummaryBatchUsageRequestsUseBatchCount(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryBatchUsageRequestsMatchMaterializedBatches(t *testing.T) {
+func TestExtractionBatchUsageRequestsMatchMaterializedBatches(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	libraryService := library.NewService(filepath.Join(dataDir, "novel-fetcher"))
 	handler := newTestServerWithLibraryAndStore(dataDir, libraryService, store.New(dataDir))
 	server := handler.(*Server)
 	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
-	maxChunkChars, maxBatchChars := characterSummaryLimits()
-	inputs, err := server.loadCharacterSummaryInputs(context.Background(), novelID, "1", maxChunkChars, maxBatchChars)
+	maxChunkChars, maxBatchChars := extractionLimits()
+	inputs, err := server.loadExtractionInputs(context.Background(), novelID, "1", maxChunkChars, maxBatchChars)
 	if err != nil {
-		t.Fatalf("loadCharacterSummaryInputs returned error: %v", err)
+		t.Fatalf("loadExtractionInputs returned error: %v", err)
 	}
 	materialized := inputs.Batches
-	plannedRequests := characterSummaryBatchUsageRequests(materialized)
+	plannedRequests := extractionBatchUsageRequests(materialized)
 
 	if len(inputs.Episodes) == 0 || len(materialized) == 0 {
 		t.Fatalf("summary inputs should include fixture episodes and batches: inputs=%+v", inputs)
@@ -3461,7 +3552,7 @@ func TestCharacterSummaryBatchUsageRequestsMatchMaterializedBatches(t *testing.T
 		t.Fatalf("usage requests should match materialized batches: requests=%+v materialized=%+v", plannedRequests, materialized)
 	}
 	for index, request := range plannedRequests {
-		if request.RequestIndex != index || request.Kind != "character_summary_batch" {
+		if request.RequestIndex != index || request.Kind != "extraction_batch" {
 			t.Fatalf("usage request should identify the materialized batch: %+v", plannedRequests)
 		}
 		expectedInputTokens := 0
@@ -3477,7 +3568,7 @@ func TestCharacterSummaryBatchUsageRequestsMatchMaterializedBatches(t *testing.T
 	}
 }
 
-func TestCharacterSummaryCheckpointFingerprintCompatibility(t *testing.T) {
+func TestExtractionCheckpointFingerprintCompatibility(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{
 		ProfileID:         "default",
 		ModelID:           "openrouter/test-model",
@@ -3486,12 +3577,12 @@ func TestCharacterSummaryCheckpointFingerprintCompatibility(t *testing.T) {
 		RequireParameters: true,
 		SystemPrompt:      testStringPtr("抽出ルール"),
 	}
-	batches := []characterSummaryBatch{
+	batches := []extractionBatch{
 		{
 			BatchIndex:     1,
 			BatchCount:     2,
 			EpisodeIndexes: []string{"1"},
-			Chunks: []characterSummaryChunk{
+			Chunks: []extractionChunk{
 				{EpisodeIndex: "1", Title: "第一話", Text: "アリスが村を出る。"},
 				{EpisodeIndex: "1", Title: "第一話", Text: "ボブが見送る。"},
 			},
@@ -3500,23 +3591,29 @@ func TestCharacterSummaryCheckpointFingerprintCompatibility(t *testing.T) {
 			BatchIndex:     2,
 			BatchCount:     2,
 			EpisodeIndexes: []string{"2"},
-			Chunks: []characterSummaryChunk{
+			Chunks: []extractionChunk{
 				{EpisodeIndex: "2", Title: "第二話", Text: "アリスが森でボブと再会する。"},
 			},
 		},
 	}
-	fingerprint := characterSummaryCheckpointFingerprint(config, characterSummaryCheckpointBatchInputs(batches))
-	if fingerprint != "0d86f70e7a4112817e998ca6ce434228b7ea8509" {
+	fingerprint := extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches))
+	if fingerprint != "76b40f87eebc8e6cc6e09eaaf412f18ba24007b3" {
 		t.Fatalf("checkpoint fingerprint should remain compatible, got %s", fingerprint)
 	}
 	batches[0].BatchCount = 99
-	if changed := characterSummaryCheckpointFingerprint(config, characterSummaryCheckpointBatchInputs(batches)); changed != fingerprint {
+	if changed := extractionCheckpointFingerprint(config, extractionCheckpointBatchInputs(batches)); changed != fingerprint {
 		t.Fatalf("checkpoint fingerprint should ignore batch count: before=%s after=%s", fingerprint, changed)
 	}
 }
 
+func extractionGenerationFingerprint(config *store.ResolvedAIGenerationConfig, novelID string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, unresolved []characters.GeneratedUnresolvedMention) string {
+	allocator := characters.NewGeneratedCharacterIDAllocator(novelID, seed)
+	inputs := appextraction.CheckpointGenerationInputs(seed, seedTerms, batches, unresolved, allocator)
+	return extractionCheckpointFingerprint(config, inputs)
+}
+
 func TestCharacterJobProgressHelpers(t *testing.T) {
-	job := characters.Job{}
+	job := extractdomain.Job{}
 	currentBatchIndex := 2
 	batchCount := 4
 	generatedCharacterCount := 5
@@ -3542,15 +3639,23 @@ func TestCharacterJobProgressHelpers(t *testing.T) {
 	if got := formatTimingFields("stage", "load_inputs", "elapsedMs", 12); got != "stage=load_inputs elapsedMs=12" {
 		t.Fatalf("formatTimingFields returned %q", got)
 	}
-	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "")
-	if characterSummaryTimingLogEnabled() {
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "")
+	if extractionTimingLogEnabled() {
 		t.Fatal("character summary timing log should be disabled by default")
 	}
-	t.Setenv("VIEWER_CHARACTER_SUMMARY_TIMING_LOG", "1")
-	if !characterSummaryTimingLogEnabled() {
-		t.Fatal("character summary timing log should be enabled by env")
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "1")
+	if !extractionTimingLogEnabled() {
+		t.Fatal("legacy extraction timing log should be enabled by env")
 	}
-	logCharacterSummaryTiming("test", time.Now())
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "0")
+	if extractionTimingLogEnabled() {
+		t.Fatal("new extraction timing setting should take precedence")
+	}
+	t.Setenv("VIEWER_EXTRACTION_TIMING_LOG", "1")
+	if !extractionTimingLogEnabled() {
+		t.Fatal("new extraction timing log should be enabled")
+	}
+	logExtractionTiming("test", time.Now())
 	if characterJobBatchProgressPercent(0, 0) != 70 || characterJobBatchProgressPercent(2, 4) != 62 {
 		t.Fatal("characterJobBatchProgressPercent returned an unexpected value")
 	}
@@ -3560,23 +3665,23 @@ func TestCharacterJobProgressHelpers(t *testing.T) {
 	if !allEpisodeIndexesProcessed([]string{"1", "2"}, []string{"2", "1"}) {
 		t.Fatal("allEpisodeIndexesProcessed should accept complete processed sets regardless of order")
 	}
-	if inputs, err := (&Server{}).loadCharacterSummaryInputs(context.Background(), "novel-1", "1", 10, 10); err != nil || len(inputs.Batches) != 0 {
+	if inputs, err := (&Server{}).loadExtractionInputs(context.Background(), "novel-1", "1", 10, 10); err != nil || len(inputs.Batches) != 0 {
 		t.Fatalf("nil-library summary input loader should be empty without error: inputs=%+v err=%v", inputs, err)
 	}
 }
 
-func TestCharacterSummaryBatchBudgetUsesModelContext(t *testing.T) {
-	if got := characterSummaryTokensFromChars(0); got != 0 {
+func TestExtractionBatchBudgetUsesModelContext(t *testing.T) {
+	if got := extractionTokensFromChars(0); got != 0 {
 		t.Fatalf("zero chars should map to zero tokens, got %d", got)
 	}
-	if got := characterSummaryTokensFromChars(5); got != 5 {
+	if got := extractionTokensFromChars(5); got != 5 {
 		t.Fatalf("character token estimate should be conservative for Japanese text, got %d", got)
 	}
-	nilBudget := resolveCharacterSummaryBatchBudget(context.Background(), nil, 12001)
+	nilBudget := resolveExtractionBatchBudget(context.Background(), nil, 12001)
 	if nilBudget.MaxTextChars != 12001 || nilBudget.MaxTextTokens != 12001 {
 		t.Fatalf("nil config should use fallback char and token budget: %+v", nilBudget)
 	}
-	placeholderBudget := resolveCharacterSummaryBatchBudget(context.Background(), &store.ResolvedAIGenerationConfig{
+	placeholderBudget := resolveExtractionBatchBudget(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "sk-test-budget",
 		ModelID: "openrouter/budget-model",
 	}, 12000)
@@ -3620,12 +3725,12 @@ func TestCharacterSummaryBatchBudgetUsesModelContext(t *testing.T) {
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
 
 	config := &store.ResolvedAIGenerationConfig{APIKey: "dummy-openrouter-key-realish-budget", ModelID: modelID}
-	budget := resolveCharacterSummaryBatchBudget(context.Background(), config, 12000)
-	if budget.MaxTextTokens <= characterSummaryTokensFromChars(12000) || budget.MaxTextChars != 0 {
+	budget := resolveExtractionBatchBudget(context.Background(), config, 12000)
+	if budget.MaxTextTokens <= extractionTokensFromChars(12000) || budget.MaxTextChars != 0 {
 		t.Fatalf("model context should expand token batch budget: %+v", budget)
 	}
 
-	smallBudget := resolveCharacterSummaryBatchBudget(context.Background(), &store.ResolvedAIGenerationConfig{
+	smallBudget := resolveExtractionBatchBudget(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-small-budget",
 		ModelID: smallModelID,
 	}, 12000)
@@ -3633,8 +3738,8 @@ func TestCharacterSummaryBatchBudgetUsesModelContext(t *testing.T) {
 		t.Fatalf("too-small model context should keep fallback budget: %+v", smallBudget)
 	}
 
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", "1234")
-	budget = resolveCharacterSummaryBatchBudget(context.Background(), config, 12000)
+	t.Setenv("EXTRACTION_MAX_BATCH_TOKENS", "1234")
+	budget = resolveExtractionBatchBudget(context.Background(), config, 12000)
 	if budget.MaxTextTokens != 1234 || budget.MaxTextChars != 0 {
 		t.Fatalf("explicit token budget should win: %+v", budget)
 	}
@@ -3739,28 +3844,28 @@ func TestOpenRouterTokenEstimateHelpersCoverStructuredPayloads(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryRuntimeBatchesAccountForKnownCharacters(t *testing.T) {
+func TestExtractionRuntimeBatchesAccountForKnownCharacters(t *testing.T) {
 	knownCharacters := []characters.GeneratedCharacter{{
 		CanonicalName: "既知人物",
 		Summary:       testStringPtr(strings.Repeat("既知情報", 220)),
 	}}
-	batch := characterSummaryBatch{
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1", "2"},
-		Chunks: []characterSummaryChunk{
+		Chunks: []extractionChunk{
 			{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("前半", 40)},
 			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 40)},
 		},
 	}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "dummy-openrouter-key-realish-known", ModelID: "openrouter/known-character-context"}
-	single := characterSummaryRuntimeBatch(batch, []characterSummaryChunk{batch.Chunks[0]})
-	systemPrompt, userPrompt := buildCharacterSummaryPrompt("novel-1", "2", knownCharacters, single, nil)
+	single := extractionRuntimeBatch(batch, []extractionChunk{batch.Chunks[0]})
+	systemPrompt, userPrompt := buildExtractionPrompt("novel-1", "2", knownCharacters, single, nil)
 	singleTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, nil, characterSummaryOpenRouterResponseFormat())
-	contextLength := singleTokens + characterSummaryMinimumCompletionTokens + 320
+	}, nil, extractionOpenRouterResponseFormat())
+	contextLength := singleTokens + extractionMinimumCompletionTokens + 320
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": [{
@@ -3776,33 +3881,33 @@ func TestCharacterSummaryRuntimeBatchesAccountForKnownCharacters(t *testing.T) {
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
 
-	runtimeBatches, err := (&Server{}).characterSummaryRuntimeBatches(context.Background(), config, "novel-1", "2", knownCharacters, batch)
+	runtimeBatches, err := (&Server{}).extractionRuntimeBatches(context.Background(), config, "novel-1", "2", knownCharacters, batch)
 	if err != nil {
-		t.Fatalf("characterSummaryRuntimeBatches returned error: %v", err)
+		t.Fatalf("extractionRuntimeBatches returned error: %v", err)
 	}
 	if len(runtimeBatches) != 2 || len(runtimeBatches[0].Chunks) != 1 || len(runtimeBatches[1].Chunks) != 1 {
 		t.Fatalf("known characters should force a too-large later batch to split: %+v", runtimeBatches)
 	}
 }
 
-func TestNextCharacterSummaryRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *testing.T) {
-	batch := characterSummaryBatch{
+func TestNextExtractionRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *testing.T) {
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1", "2"},
-		Chunks: []characterSummaryChunk{
+		Chunks: []extractionChunk{
 			{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("前半", 80)},
 			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 80)},
 		},
 	}
-	single := characterSummaryRuntimeBatch(batch, []characterSummaryChunk{batch.Chunks[0]})
-	systemPrompt, userPrompt := buildCharacterSummaryPrompt("novel-1", "2", nil, single, nil)
+	single := extractionRuntimeBatch(batch, []extractionChunk{batch.Chunks[0]})
+	systemPrompt, userPrompt := buildExtractionPrompt("novel-1", "2", nil, single, nil)
 	singleTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, nil, characterSummaryOpenRouterResponseFormat())
+	}, nil, extractionOpenRouterResponseFormat())
 	modelID := "openrouter/next-runtime-context"
-	contextLength := singleTokens + characterSummaryMinimumCompletionTokens + 320
+	contextLength := singleTokens + extractionMinimumCompletionTokens + 320
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": [{
@@ -3818,12 +3923,12 @@ func TestNextCharacterSummaryRuntimeBatchReturnsRemainingWhenCandidateOverflows(
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
 
-	runtimeBatch, remaining, err := (&Server{}).nextCharacterSummaryRuntimeBatch(context.Background(), &store.ResolvedAIGenerationConfig{
+	runtimeBatch, remaining, err := (&Server{}).nextExtractionRuntimeBatch(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-next-runtime",
 		ModelID: modelID,
 	}, "novel-1", "2", nil, batch, batch.Chunks)
 	if err != nil {
-		t.Fatalf("nextCharacterSummaryRuntimeBatch returned error: %v", err)
+		t.Fatalf("nextExtractionRuntimeBatch returned error: %v", err)
 	}
 	if len(runtimeBatch.Chunks) != 1 || runtimeBatch.Chunks[0].EpisodeIndex != "1" {
 		t.Fatalf("first fitting chunk should be returned: %+v", runtimeBatch)
@@ -3833,25 +3938,25 @@ func TestNextCharacterSummaryRuntimeBatchReturnsRemainingWhenCandidateOverflows(
 	}
 }
 
-func TestNextCharacterSummaryRuntimeBatchSplitsOversizedFirstChunk(t *testing.T) {
-	chunk := characterSummaryChunk{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("長文", 220)}
-	trailing := characterSummaryChunk{EpisodeIndex: "2", Title: "第二話", Text: "続き"}
-	batch := characterSummaryBatch{
+func TestNextExtractionRuntimeBatchSplitsOversizedFirstChunk(t *testing.T) {
+	chunk := extractionChunk{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("長文", 220)}
+	trailing := extractionChunk{EpisodeIndex: "2", Title: "第二話", Text: "続き"}
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1", "2"},
-		Chunks:         []characterSummaryChunk{chunk, trailing},
+		Chunks:         []extractionChunk{chunk, trailing},
 	}
 	half := chunk
 	half.Text = string([]rune(chunk.Text)[:len([]rune(chunk.Text))/2])
-	halfBatch := characterSummaryRuntimeBatch(batch, []characterSummaryChunk{half})
-	systemPrompt, userPrompt := buildCharacterSummaryPrompt("novel-1", "2", nil, halfBatch, nil)
+	halfBatch := extractionRuntimeBatch(batch, []extractionChunk{half})
+	systemPrompt, userPrompt := buildExtractionPrompt("novel-1", "2", nil, halfBatch, nil)
 	halfTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, nil, characterSummaryOpenRouterResponseFormat())
+	}, nil, extractionOpenRouterResponseFormat())
 	modelID := "openrouter/next-runtime-split-context"
-	contextLength := halfTokens + characterSummaryMinimumCompletionTokens + 320
+	contextLength := halfTokens + extractionMinimumCompletionTokens + 320
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": [{
@@ -3867,12 +3972,12 @@ func TestNextCharacterSummaryRuntimeBatchSplitsOversizedFirstChunk(t *testing.T)
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
 
-	runtimeBatch, remaining, err := (&Server{}).nextCharacterSummaryRuntimeBatch(context.Background(), &store.ResolvedAIGenerationConfig{
+	runtimeBatch, remaining, err := (&Server{}).nextExtractionRuntimeBatch(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-next-runtime-split",
 		ModelID: modelID,
 	}, "novel-1", "2", nil, batch, batch.Chunks)
 	if err != nil {
-		t.Fatalf("nextCharacterSummaryRuntimeBatch returned error: %v", err)
+		t.Fatalf("nextExtractionRuntimeBatch returned error: %v", err)
 	}
 	if len(runtimeBatch.Chunks) != 1 || runtimeBatch.Chunks[0].EpisodeIndex != "1" || runtimeBatch.Chunks[0].Text == chunk.Text {
 		t.Fatalf("oversized first chunk should be split before sending: %+v", runtimeBatch)
@@ -3882,19 +3987,19 @@ func TestNextCharacterSummaryRuntimeBatchSplitsOversizedFirstChunk(t *testing.T)
 	}
 }
 
-func TestCharacterSummaryRuntimeBatchesSmallBranches(t *testing.T) {
-	emptyBatch := characterSummaryBatch{BatchIndex: 1, BatchCount: 1}
-	emptyResult, err := (&Server{}).characterSummaryRuntimeBatches(context.Background(), nil, "novel-1", "1", nil, emptyBatch)
+func TestExtractionRuntimeBatchesSmallBranches(t *testing.T) {
+	emptyBatch := extractionBatch{BatchIndex: 1, BatchCount: 1}
+	emptyResult, err := (&Server{}).extractionRuntimeBatches(context.Background(), nil, "novel-1", "1", nil, emptyBatch)
 	if err != nil || len(emptyResult) != 1 {
 		t.Fatalf("empty runtime batch should pass through: result=%+v err=%v", emptyResult, err)
 	}
-	batch := characterSummaryBatch{
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1"},
-		Chunks:         []characterSummaryChunk{{EpisodeIndex: "1", Title: "第一話", Text: "あ"}},
+		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "第一話", Text: "あ"}},
 	}
-	nilConfigResult, err := (&Server{}).characterSummaryRuntimeBatches(context.Background(), nil, "novel-1", "1", nil, batch)
+	nilConfigResult, err := (&Server{}).extractionRuntimeBatches(context.Background(), nil, "novel-1", "1", nil, batch)
 	if err != nil || len(nilConfigResult) != 1 {
 		t.Fatalf("nil config runtime batch should pass through: result=%+v err=%v", nilConfigResult, err)
 	}
@@ -3914,7 +4019,7 @@ func TestCharacterSummaryRuntimeBatchesSmallBranches(t *testing.T) {
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
-	_, err = (&Server{}).characterSummaryRuntimeBatches(context.Background(), &store.ResolvedAIGenerationConfig{
+	_, err = (&Server{}).extractionRuntimeBatches(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-tiny-single",
 		ModelID: modelID,
 	}, "novel-1", "1", nil, batch)
@@ -3923,23 +4028,23 @@ func TestCharacterSummaryRuntimeBatchesSmallBranches(t *testing.T) {
 	}
 }
 
-func TestCharacterSummaryRuntimeBatchesSplitOversizedSingleChunk(t *testing.T) {
-	chunk := characterSummaryChunk{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("長文", 220)}
-	batch := characterSummaryBatch{
+func TestExtractionRuntimeBatchesSplitOversizedSingleChunk(t *testing.T) {
+	chunk := extractionChunk{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("長文", 220)}
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1"},
-		Chunks:         []characterSummaryChunk{chunk},
+		Chunks:         []extractionChunk{chunk},
 	}
 	half := chunk
 	half.Text = string([]rune(chunk.Text)[:len([]rune(chunk.Text))/2])
-	halfBatch := characterSummaryRuntimeBatch(batch, []characterSummaryChunk{half})
-	systemPrompt, userPrompt := buildCharacterSummaryPrompt("novel-1", "1", nil, halfBatch, nil)
+	halfBatch := extractionRuntimeBatch(batch, []extractionChunk{half})
+	systemPrompt, userPrompt := buildExtractionPrompt("novel-1", "1", nil, halfBatch, nil)
 	halfTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
-	}, nil, characterSummaryOpenRouterResponseFormat())
-	contextLength := halfTokens + characterSummaryMinimumCompletionTokens + 320
+	}, nil, extractionOpenRouterResponseFormat())
+	contextLength := halfTokens + extractionMinimumCompletionTokens + 320
 	modelID := "openrouter/single-chunk-context"
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
@@ -3956,33 +4061,33 @@ func TestCharacterSummaryRuntimeBatchesSplitOversizedSingleChunk(t *testing.T) {
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
 
-	runtimeBatches, err := (&Server{}).characterSummaryRuntimeBatches(context.Background(), &store.ResolvedAIGenerationConfig{
+	runtimeBatches, err := (&Server{}).extractionRuntimeBatches(context.Background(), &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-single-chunk",
 		ModelID: modelID,
 	}, "novel-1", "1", nil, batch)
 	if err != nil {
-		t.Fatalf("characterSummaryRuntimeBatches returned error: %v", err)
+		t.Fatalf("extractionRuntimeBatches returned error: %v", err)
 	}
 	if len(runtimeBatches) < 2 {
 		t.Fatalf("oversized single chunk should be split into smaller runtime batches: %+v", runtimeBatches)
 	}
 }
 
-func TestRebatchCharacterSummaryInputsUsesResolvedBudget(t *testing.T) {
-	inputs := characterSummaryInputs{
-		Batches: []characterSummaryBatch{{
+func TestRebatchExtractionInputsUsesResolvedBudget(t *testing.T) {
+	inputs := extractionInputs{
+		Batches: []extractionBatch{{
 			BatchIndex:     1,
 			BatchCount:     1,
 			EpisodeIndexes: []string{"1", "2", "3"},
-			Chunks: []characterSummaryChunk{
+			Chunks: []extractionChunk{
 				{EpisodeIndex: "1", Title: "第一話", Text: "１２３４５６７８"},
 				{EpisodeIndex: "2", Title: "第二話", Text: "１２３４５６７８"},
 				{EpisodeIndex: "3", Title: "第三話", Text: "１２３４５６７８"},
 			},
 		}},
 	}
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", "90")
-	rebatched := rebatchCharacterSummaryInputs(context.Background(), inputs, &store.ResolvedAIGenerationConfig{
+	t.Setenv("EXTRACTION_MAX_BATCH_TOKENS", "90")
+	rebatched := rebatchExtractionInputs(context.Background(), inputs, &store.ResolvedAIGenerationConfig{
 		APIKey:  "dummy-openrouter-key-realish-rebatch",
 		ModelID: "openrouter/rebatch-model",
 	}, 12000)
@@ -3991,7 +4096,7 @@ func TestRebatchCharacterSummaryInputsUsesResolvedBudget(t *testing.T) {
 	}
 }
 
-func TestOpenRouterCharacterSummaryUsesModelMaxCompletionTokens(t *testing.T) {
+func TestOpenRouterExtractionUsesModelMaxCompletionTokens(t *testing.T) {
 	chatRequests := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -4016,7 +4121,7 @@ func TestOpenRouterCharacterSummaryUsesModelMaxCompletionTokens(t *testing.T) {
 				t.Fatalf("character summary should use model max completion tokens: %+v", body)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"人物\"}]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"人物\"}]}"}}],
 				"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 			}`))
 		default:
@@ -4028,21 +4133,21 @@ func TestOpenRouterCharacterSummaryUsesModelMaxCompletionTokens(t *testing.T) {
 
 	server := &Server{dataDir: t.TempDir()}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "dummy-openrouter-key-realish-summary", ModelID: "openrouter/test-model"}
-	batch := characterSummaryBatch{
+	batch := extractionBatch{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1"},
-		Chunks:         []characterSummaryChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスが現れた。"}},
+		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスが現れた。"}},
 	}
-	if _, err := server.generateOpenRouterCharacterSummaryBatch(context.Background(), config, "novel-1", "1", nil, batch); err != nil {
-		t.Fatalf("generateOpenRouterCharacterSummaryBatch returned error: %v", err)
+	if _, err := server.generateOpenRouterExtractionBatch(context.Background(), config, "novel-1", "1", nil, batch); err != nil {
+		t.Fatalf("generateOpenRouterExtractionBatch returned error: %v", err)
 	}
 	if chatRequests != 1 {
 		t.Fatalf("expected one chat request, got %d", chatRequests)
 	}
 }
 
-func TestOpenRouterCharacterSummaryUsesDeltaCandidatesAndStableIDMerges(t *testing.T) {
+func TestOpenRouterExtractionUsesDeltaCandidatesAndStableIDMerges(t *testing.T) {
 	modelID := "openrouter/character-delta-candidates"
 	chatRequests := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4086,7 +4191,7 @@ func TestOpenRouterCharacterSummaryUsesDeltaCandidatesAndStableIDMerges(t *testi
 				t.Fatalf("candidate card should preserve stable id and display name: %+v", candidate)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"gender\":null,\"firstAppearanceEpisodeIndex\":\"1\",\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"2\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"クレア\",\"episodeIndex\":\"2\"},\"fullName\":null,\"fullNameHistory\":[],\"gender\":null,\"genderHistory\":[],\"firstAppearanceEpisodeIndex\":\"2\",\"aliases\":[{\"text\":\"クレア\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"新たに同行する。\"}]}],\"characterUpdates\":[{\"characterId\":\"char_seed\",\"canonicalName\":null,\"fullName\":null,\"fullNameHistory\":[],\"gender\":null,\"genderHistory\":[],\"firstAppearanceEpisodeIndex\":null,\"aliases\":[{\"text\":\"アリス\",\"episodeIndex\":\"2\"}],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"episodeIndex\":\"2\",\"text\":\"クレアを案内する。\"}]}],\"mergeProposals\":[],\"unresolvedMentions\":[],\"terms\":[]}"}}],
 				"usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26}
 			}`))
 		default:
@@ -4106,15 +4211,15 @@ func TestOpenRouterCharacterSummaryUsesDeltaCandidatesAndStableIDMerges(t *testi
 		Aliases:                     []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "1"}},
 		SummaryHistory:              []characters.GeneratedHistoryVersion{{EpisodeIndex: "1", Text: "旅の案内役。"}},
 	}}
-	batches := []characterSummaryBatch{{
+	batches := []extractionBatch{{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"2"},
-		Chunks:         []characterSummaryChunk{{EpisodeIndex: "2", Title: "二話", Text: "アリスはクレアを案内した。"}},
+		Chunks:         []extractionChunk{{EpisodeIndex: "2", Title: "二話", Text: "アリスはクレアを案内した。"}},
 	}}
-	generated, _, usageRequests, err := server.generateOpenRouterCharacterSummary(context.Background(), config, "novel-1", "2", seed, batches, nil)
+	generated, _, usageRequests, err := server.generateOpenRouterExtraction(context.Background(), config, "novel-1", "2", seed, batches, nil)
 	if err != nil {
-		t.Fatalf("generateOpenRouterCharacterSummary returned error: %v", err)
+		t.Fatalf("generateOpenRouterExtraction returned error: %v", err)
 	}
 	if chatRequests != 1 || len(usageRequests) != 1 || usageRequests[0].InputTokens != 20 || usageRequests[0].OutputTokens != 6 {
 		t.Fatalf("delta generation should make one tracked request: calls=%d usage=%+v", chatRequests, usageRequests)
@@ -4130,7 +4235,7 @@ func TestOpenRouterCharacterSummaryUsesDeltaCandidatesAndStableIDMerges(t *testi
 	}
 }
 
-func TestCharacterSummaryGenerationSeedFiltersAlreadyProcessedEpisodes(t *testing.T) {
+func TestExtractionGenerationSeedFiltersAlreadyProcessedEpisodes(t *testing.T) {
 	dataDir := t.TempDir()
 	server := &Server{dataDir: dataDir}
 	if err := characters.SaveGeneratedSummary(server.stateDir(), "novel-1", "2", []characters.GeneratedCharacter{{
@@ -4142,39 +4247,42 @@ func TestCharacterSummaryGenerationSeedFiltersAlreadyProcessedEpisodes(t *testin
 	}}); err != nil {
 		t.Fatalf("save existing generated summary: %v", err)
 	}
-	seed, processed, ok, err := server.loadCharacterSummaryGenerationSeed("novel-1", "4")
-	if err != nil || !ok || processed == nil || *processed != "2" || len(seed) != 1 || seed[0].CharacterID != "char_existing" {
-		t.Fatalf("loadCharacterSummaryGenerationSeed should return reusable seed: ok=%v processed=%v seed=%+v err=%v", ok, processed, seed, err)
+	if err := terms.SaveGeneratedTerms(server.stateDir(), "novel-1", "2", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save existing generated terms: %v", err)
 	}
-	coveredSeed, processed, ok, err := server.loadCharacterSummaryGenerationSeed("novel-1", "1")
-	if err != nil || !ok || processed == nil || *processed != "2" || len(coveredSeed) != 1 || !characterSummaryProcessedCovers(*processed, "1") {
+	seed, processed, ok, err := server.loadExtractionGenerationSeed("novel-1", "4")
+	if err != nil || !ok || processed == nil || *processed != "2" || len(seed) != 1 || seed[0].CharacterID != "char_existing" {
+		t.Fatalf("loadExtractionGenerationSeed should return reusable seed: ok=%v processed=%v seed=%+v err=%v", ok, processed, seed, err)
+	}
+	coveredSeed, processed, ok, err := server.loadExtractionGenerationSeed("novel-1", "1")
+	if err != nil || !ok || processed == nil || *processed != "2" || len(coveredSeed) != 1 || !extractionProcessedCovers(*processed, "1") {
 		t.Fatalf("generation seed beyond request should cover earlier requests: ok=%v processed=%v seed=%+v err=%v", ok, processed, coveredSeed, err)
 	}
 
-	inputs := characterSummaryInputs{
+	inputs := extractionInputs{
 		Episodes: []characters.HeuristicEpisode{
 			{EpisodeIndex: "1", Text: "一話"},
 			{EpisodeIndex: "2", Text: "二話"},
 			{EpisodeIndex: "3", Text: "三話"},
 		},
-		Batches: []characterSummaryBatch{{
+		Batches: []extractionBatch{{
 			BatchIndex:     1,
 			BatchCount:     1,
 			EpisodeIndexes: []string{"1", "2", "3"},
-			Chunks: []characterSummaryChunk{
+			Chunks: []extractionChunk{
 				{EpisodeIndex: "1", Title: "一話", Text: "一話"},
 				{EpisodeIndex: "2", Title: "二話", Text: "二話"},
 				{EpisodeIndex: "3", Title: "三話", Text: "三話"},
 			},
 		}},
 	}
-	filtered := filterCharacterSummaryInputsAfter(inputs, "2")
+	filtered := filterExtractionInputsAfter(inputs, "2")
 	if len(filtered.Episodes) != 1 || filtered.Episodes[0].EpisodeIndex != "3" || len(filtered.Batches) != 1 || len(filtered.Batches[0].Chunks) != 1 || filtered.Batches[0].Chunks[0].EpisodeIndex != "3" {
 		t.Fatalf("filter should keep only episodes after processed index: %+v", filtered)
 	}
 }
 
-func TestCharacterSummaryPreviewReusesCoveredGeneratedSummaryWithoutOpenRouter(t *testing.T) {
+func TestExtractionPreviewReusesCoveredGeneratedSummaryWithoutOpenRouter(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	providerCalls := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4216,16 +4324,19 @@ func TestCharacterSummaryPreviewReusesCoveredGeneratedSummaryWithoutOpenRouter(t
 	}}); err != nil {
 		t.Fatalf("save existing generated summary: %v", err)
 	}
-	preloaded := characterSummaryInputs{
+	if err := terms.SaveGeneratedTerms(server.stateDir(), "novel-1", "2", []terms.GeneratedTerm{}, nil); err != nil {
+		t.Fatalf("save existing generated terms: %v", err)
+	}
+	preloaded := extractionInputs{
 		Episodes: []characters.HeuristicEpisode{{EpisodeIndex: "1", Text: "一話"}},
-		Batches: []characterSummaryBatch{{
+		Batches: []extractionBatch{{
 			BatchIndex:     1,
 			BatchCount:     1,
 			EpisodeIndexes: []string{"1"},
-			Chunks:         []characterSummaryChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスがいた。"}},
+			Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスがいた。"}},
 		}},
 	}
-	summary, err := server.generateCharacterSummaryPreview(context.Background(), "novel-1", "1", nil, nil, []string{"1"}, &preloaded)
+	summary, err := server.generateExtractionPreview(context.Background(), "novel-1", "1", nil, nil, []string{"1"}, &preloaded)
 	if err != nil {
 		t.Fatalf("covered preview should load existing summary: %v", err)
 	}
@@ -4234,7 +4345,7 @@ func TestCharacterSummaryPreviewReusesCoveredGeneratedSummaryWithoutOpenRouter(t
 	}
 }
 
-func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
+func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 	failEpisodeTwo := true
 	requestedEpisodes := []string{}
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4252,7 +4363,7 @@ func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
 		episodeIndex := promptEpisodes[0].(map[string]any)["episodeIndex"].(string)
 		if episodeIndex == "1" {
 			requestedEpisodes = append(requestedEpisodes, "1")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
 			return
 		}
 		requestedEpisodes = append(requestedEpisodes, "2")
@@ -4261,25 +4372,25 @@ func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"characters\":[{\"canonicalName\":\"ボブ\",\"summary\":\"二話の人物\"}]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"ボブ\",\"summary\":\"二話の人物\"}]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`))
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
-	t.Setenv("CHARACTER_SUMMARY_MAX_BATCH_CHARS", "1")
+	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "1")
 
 	server := &Server{dataDir: t.TempDir()}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/auto"}
-	episodes := []characterSummaryEpisodeInput{
+	episodes := []extractionEpisodeInput{
 		{EpisodeIndex: "1", Title: "一話", ReaderDocument: library.ReaderDocument{Blocks: []library.ReaderBlock{{Type: "paragraph", Inlines: []library.ReaderInline{{Type: "text", Text: "アリスは出発した。"}}}}}},
 		{EpisodeIndex: "2", Title: "二話", ReaderDocument: library.ReaderDocument{Blocks: []library.ReaderBlock{{Type: "paragraph", Inlines: []library.ReaderInline{{Type: "text", Text: "ボブが合流した。"}}}}}},
 	}
-	maxChunkChars, maxBatchChars := characterSummaryLimits()
-	batches := createCharacterSummaryBatches(createCharacterSummaryChunks(episodes, maxChunkChars), maxBatchChars)
-	progressEvents := []characterSummaryBatchProgress{}
-	progressSink := func(progress characterSummaryBatchProgress) {
+	maxChunkChars, maxBatchChars := extractionLimits()
+	batches := createExtractionBatches(createExtractionChunks(episodes, maxChunkChars), maxBatchChars)
+	progressEvents := []extractionBatchProgress{}
+	progressSink := func(progress extractionBatchProgress) {
 		progressEvents = append(progressEvents, progress)
 	}
-	if _, _, usageRequests, err := server.generateOpenRouterCharacterSummaryWithCheckpoint(context.Background(), config, "novel-1", "2", nil, batches, progressSink); err == nil {
+	if _, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, "novel-1", "2", nil, batches, progressSink); err == nil {
 		t.Fatal("first checkpointed generation should fail on the second episode")
 	} else if len(usageRequests) != 1 {
 		t.Fatalf("failed checkpointed generation should preserve completed batch usage: %+v", usageRequests)
@@ -4287,15 +4398,15 @@ func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
 	if len(progressEvents) != 3 || progressEvents[0].Phase != "start" || progressEvents[1].Phase != "complete" || progressEvents[2].Phase != "start" {
 		t.Fatalf("checkpointed generation should emit per-batch start/complete progress: %+v", progressEvents)
 	}
-	checkpoint := server.loadCharacterSummaryCheckpoint("novel-1", "2")
+	checkpoint := server.loadExtractionCheckpoint("novel-1", "2")
 	if len(checkpoint.ProcessedEpisodeIndexes) != 1 || checkpoint.ProcessedEpisodeIndexes[0] != "1" || len(checkpoint.Characters) != 1 {
 		t.Fatalf("checkpoint should preserve completed first episode: %+v", checkpoint)
 	}
 
 	failEpisodeTwo = false
 	requestedEpisodes = []string{}
-	progressEvents = []characterSummaryBatchProgress{}
-	generated, _, usageRequests, err := server.generateOpenRouterCharacterSummaryWithCheckpoint(context.Background(), config, "novel-1", "2", nil, batches, progressSink)
+	progressEvents = []extractionBatchProgress{}
+	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, "novel-1", "2", nil, batches, progressSink)
 	if err != nil {
 		t.Fatalf("resumed checkpointed generation returned error: %v", err)
 	}
@@ -4308,10 +4419,10 @@ func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
 	if len(usageRequests) != 1 || usageRequests[0].OutputTokens == 0 || usageRequests[0].TotalTokens == 0 {
 		t.Fatalf("resumed generation should retain provider token usage for requested batches: %+v", usageRequests)
 	}
-	if !server.characterSummaryCheckpointExists("novel-1", "2") {
+	if !server.extractionCheckpointExists("novel-1", "2") {
 		t.Fatal("checkpoint should remain until generated profiles are durably saved")
 	}
-	info, err := os.Stat(server.characterSummaryCheckpointPath("novel-1", "2"))
+	info, err := os.Stat(server.extractionCheckpointPath("novel-1", "2"))
 	if err != nil {
 		t.Fatalf("stat checkpoint: %v", err)
 	}
@@ -4320,20 +4431,24 @@ func TestOpenRouterCharacterSummaryCheckpointResume(t *testing.T) {
 	}
 }
 
-func TestOpenRouterCharacterSummaryCheckpointSnapshotIsAuthoritative(t *testing.T) {
+func TestOpenRouterExtractionCheckpointSnapshotIsAuthoritative(t *testing.T) {
 	server := &Server{dataDir: t.TempDir()}
 	config := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/auto"}
-	batches := []characterSummaryBatch{{
+	seed := []characters.GeneratedCharacter{
+		{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+		{CharacterID: "char_b", CanonicalName: "ボブ", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+	}
+	batches := []extractionBatch{{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1"},
-		Chunks:         []characterSummaryChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスだけが残る。"}},
+		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "アリスだけが残る。"}},
 	}}
-	if err := server.saveCharacterSummaryCheckpoint("novel-1", "1", characterSummaryCheckpoint{
-		SchemaVersion:             1,
+	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
+		SchemaVersion:             appextraction.CheckpointSchemaVersion,
 		NovelID:                   "novel-1",
 		UpToEpisodeIndex:          "1",
-		GenerationFingerprint:     characterSummaryCheckpointFingerprint(config, characterSummaryCheckpointBatchInputs(batches)),
+		GenerationFingerprint:     extractionGenerationFingerprint(config, "novel-1", seed, nil, batches, nil),
 		ProcessedEpisodeIndexes:   []string{"1"},
 		ProcessedBatchIndexes:     []int{1},
 		Characters:                []characters.GeneratedCharacter{{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},
@@ -4341,11 +4456,7 @@ func TestOpenRouterCharacterSummaryCheckpointSnapshotIsAuthoritative(t *testing.
 	}); err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
-	seed := []characters.GeneratedCharacter{
-		{CharacterID: "char_a", CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
-		{CharacterID: "char_b", CanonicalName: "ボブ", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
-	}
-	generated, generationState, usageRequests, err := server.generateOpenRouterCharacterSummaryWithCheckpoint(context.Background(), config, "novel-1", "1", seed, batches, nil)
+	generated, generationState, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, "novel-1", "1", seed, batches, nil)
 	if err != nil {
 		t.Fatalf("checkpoint generation returned error: %v", err)
 	}
@@ -4357,12 +4468,12 @@ func TestOpenRouterCharacterSummaryCheckpointSnapshotIsAuthoritative(t *testing.
 	}
 }
 
-func TestOpenRouterCharacterSummaryCheckpointRejectsGenerationInputMismatch(t *testing.T) {
+func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing.T) {
 	requests := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"新モデル\",\"summary\":\"新しい設定で生成\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新モデル\",\"summary\":\"新しい設定で生成\"}]}"}}],
 			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
 		}`))
 	}))
@@ -4372,17 +4483,17 @@ func TestOpenRouterCharacterSummaryCheckpointRejectsGenerationInputMismatch(t *t
 	server := &Server{dataDir: t.TempDir()}
 	oldConfig := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/old", SystemPrompt: testStringPtr("old prompt")}
 	newConfig := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/new", SystemPrompt: testStringPtr("new prompt")}
-	batches := []characterSummaryBatch{{
+	batches := []extractionBatch{{
 		BatchIndex:     1,
 		BatchCount:     1,
 		EpisodeIndexes: []string{"1"},
-		Chunks:         []characterSummaryChunk{{EpisodeIndex: "1", Title: "一話", Text: "新モデルが登場した。"}},
+		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "一話", Text: "新モデルが登場した。"}},
 	}}
-	if err := server.saveCharacterSummaryCheckpoint("novel-1", "1", characterSummaryCheckpoint{
-		SchemaVersion:           1,
+	if err := server.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
+		SchemaVersion:           appextraction.CheckpointSchemaVersion,
 		NovelID:                 "novel-1",
 		UpToEpisodeIndex:        "1",
-		GenerationFingerprint:   characterSummaryCheckpointFingerprint(oldConfig, characterSummaryCheckpointBatchInputs(batches)),
+		GenerationFingerprint:   extractionGenerationFingerprint(oldConfig, "novel-1", nil, nil, batches, nil),
 		ProcessedEpisodeIndexes: []string{"1"},
 		ProcessedBatchIndexes:   []int{1},
 		Characters:              []characters.GeneratedCharacter{{CanonicalName: "旧モデル"}},
@@ -4390,7 +4501,7 @@ func TestOpenRouterCharacterSummaryCheckpointRejectsGenerationInputMismatch(t *t
 		t.Fatalf("save stale checkpoint: %v", err)
 	}
 
-	generated, _, usageRequests, err := server.generateOpenRouterCharacterSummaryWithCheckpoint(context.Background(), newConfig, "novel-1", "1", nil, batches, nil)
+	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), newConfig, "novel-1", "1", nil, batches, nil)
 	if err != nil {
 		t.Fatalf("generation with mismatched checkpoint returned error: %v", err)
 	}
@@ -4405,12 +4516,12 @@ func TestOpenRouterCharacterSummaryCheckpointRejectsGenerationInputMismatch(t *t
 	}
 }
 
-func TestOpenRouterCharacterSummaryLibraryCheckpointRejectsBatchInputMismatch(t *testing.T) {
+func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testing.T) {
 	providerCalls := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"characters\":[{\"canonicalName\":\"新本文\",\"summary\":\"現在の本文で生成\"}]}"}}],
+			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新本文\",\"summary\":\"現在の本文で生成\"}]}"}}],
 			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
 		}`))
 	}))
@@ -4426,16 +4537,16 @@ func TestOpenRouterCharacterSummaryLibraryCheckpointRejectsBatchInputMismatch(t 
 	}
 	novelID := novels.Novels[0].NovelID
 	config := &store.ResolvedAIGenerationConfig{APIKey: "sk-summary-secret", ModelID: "openrouter/current"}
-	maxChunkChars, maxBatchChars := characterSummaryLimits()
-	inputs, err := server.loadCharacterSummaryInputs(context.Background(), novelID, "1", maxChunkChars, maxBatchChars)
+	maxChunkChars, maxBatchChars := extractionLimits()
+	inputs, err := server.loadExtractionInputs(context.Background(), novelID, "1", maxChunkChars, maxBatchChars)
 	if err != nil {
 		t.Fatalf("load fixture character summary inputs: %v", err)
 	}
-	if err := server.saveCharacterSummaryCheckpoint(novelID, "1", characterSummaryCheckpoint{
-		SchemaVersion:           1,
+	if err := server.saveExtractionCheckpoint(novelID, "1", extractionCheckpoint{
+		SchemaVersion:           appextraction.CheckpointSchemaVersion,
 		NovelID:                 novelID,
 		UpToEpisodeIndex:        "1",
-		GenerationFingerprint:   characterSummaryCheckpointFingerprint(config, map[string]int{"maxChunkChars": maxChunkChars, "maxBatchChars": maxBatchChars}),
+		GenerationFingerprint:   extractionCheckpointFingerprint(config, map[string]int{"maxChunkChars": maxChunkChars, "maxBatchChars": maxBatchChars}),
 		ProcessedEpisodeIndexes: []string{"1"},
 		ProcessedBatchIndexes:   []int{1},
 		Characters:              []characters.GeneratedCharacter{{CanonicalName: "旧本文"}},
@@ -4443,7 +4554,7 @@ func TestOpenRouterCharacterSummaryLibraryCheckpointRejectsBatchInputMismatch(t 
 		t.Fatalf("save stale library checkpoint: %v", err)
 	}
 
-	generated, _, usageRequests, err := server.generateOpenRouterCharacterSummaryWithCheckpoint(context.Background(), config, novelID, "1", nil, inputs.Batches, nil)
+	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, novelID, "1", nil, inputs.Batches, nil)
 	if err != nil {
 		t.Fatalf("library checkpoint generation returned error: %v", err)
 	}
@@ -4458,48 +4569,48 @@ func TestOpenRouterCharacterSummaryLibraryCheckpointRejectsBatchInputMismatch(t 
 	}
 }
 
-func TestCharacterSummaryInternalHelperErrorBranches(t *testing.T) {
+func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 	server := &Server{dataDir: t.TempDir()}
-	if episodes := server.characterSummaryHeuristicEpisodes(context.Background(), "novel-1", "1"); len(episodes) != 0 {
+	if episodes := server.extractionHeuristicEpisodes(context.Background(), "novel-1", "1"); len(episodes) != 0 {
 		t.Fatalf("nil library should return no heuristic episodes: %+v", episodes)
 	}
-	if err := server.recordCharacterSummaryUsage(ai.UsageRun{}); err != nil {
+	if err := server.recordExtractionUsage(ai.UsageRun{}); err != nil {
 		t.Fatalf("nil store usage recorder should be a no-op: %v", err)
 	}
 
-	badCheckpointPath := server.characterSummaryCheckpointPath("novel-1", "1")
+	badCheckpointPath := server.extractionCheckpointPath("novel-1", "1")
 	if err := os.MkdirAll(filepath.Dir(badCheckpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
 	if err := os.WriteFile(badCheckpointPath, []byte(`{"novelId":"other","upToEpisodeIndex":"1","characters":[{"CanonicalName":"bad"}]}`), 0o644); err != nil {
 		t.Fatalf("write mismatched checkpoint: %v", err)
 	}
-	checkpoint := server.loadCharacterSummaryCheckpoint("novel-1", "1")
+	checkpoint := server.loadExtractionCheckpoint("novel-1", "1")
 	if len(checkpoint.Characters) != 0 || checkpoint.NovelID != "novel-1" {
 		t.Fatalf("mismatched checkpoint should reset to an empty checkpoint: %+v", checkpoint)
 	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":2,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":1,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
 		t.Fatalf("write unsupported schema checkpoint: %v", err)
 	}
-	checkpoint = server.loadCharacterSummaryCheckpoint("novel-1", "1")
-	if checkpoint.SchemaVersion != 1 || len(checkpoint.Characters) != 0 {
+	checkpoint = server.loadExtractionCheckpoint("novel-1", "1")
+	if checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion || len(checkpoint.Characters) != 0 {
 		t.Fatalf("unsupported schema checkpoint should reset to current empty checkpoint: %+v", checkpoint)
 	}
 
 	blockedServer := &Server{dataDir: t.TempDir()}
-	blockedPath := blockedServer.characterSummaryCheckpointPath("novel-1", "1")
+	blockedPath := blockedServer.extractionCheckpointPath("novel-1", "1")
 	if err := os.MkdirAll(filepath.Dir(blockedPath), 0o755); err != nil {
 		t.Fatalf("mkdir blocked checkpoint dir: %v", err)
 	}
 	if err := os.Mkdir(blockedPath, 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint path blocker: %v", err)
 	}
-	if err := blockedServer.saveCharacterSummaryCheckpoint("novel-1", "1", characterSummaryCheckpoint{
-		SchemaVersion:    1,
+	if err := blockedServer.saveExtractionCheckpoint("novel-1", "1", extractionCheckpoint{
+		SchemaVersion:    appextraction.CheckpointSchemaVersion,
 		NovelID:          "novel-1",
 		UpToEpisodeIndex: "1",
 	}); err == nil {
-		t.Fatal("saveCharacterSummaryCheckpoint should fail when target path is a directory")
+		t.Fatal("saveExtractionCheckpoint should fail when target path is a directory")
 	}
 
 	dataDir := newHTTPAPITestData(t)
@@ -4509,7 +4620,7 @@ func TestCharacterSummaryInternalHelperErrorBranches(t *testing.T) {
 	if err != nil || len(novels.Novels) != 1 {
 		t.Fatalf("list fixture novels: novels=%+v err=%v", novels, err)
 	}
-	episodes := withLibrary.characterSummaryHeuristicEpisodes(context.Background(), novels.Novels[0].NovelID, "1")
+	episodes := withLibrary.extractionHeuristicEpisodes(context.Background(), novels.Novels[0].NovelID, "1")
 	if len(episodes) != 1 || episodes[0].EpisodeIndex != "1" || !strings.Contains(episodes[0].Text, "本文") {
 		t.Fatalf("library-backed heuristic episodes should include body text: %+v", episodes)
 	}
@@ -4519,14 +4630,14 @@ func TestCharacterSummaryInternalHelperErrorBranches(t *testing.T) {
 	if title := withLibrary.novelTitle(context.Background(), "missing"); title != nil {
 		t.Fatalf("novelTitle should return nil for missing novels: %v", title)
 	}
-	generationInputs, err := withLibrary.loadCharacterSummaryInputs(context.Background(), novels.Novels[0].NovelID, "1", 10, 10)
+	generationInputs, err := withLibrary.loadExtractionInputs(context.Background(), novels.Novels[0].NovelID, "1", 10, 10)
 	if err != nil || len(generationInputs.Episodes) != 1 || generationInputs.Episodes[0].EpisodeIndex != "1" || len(generationInputs.Batches) == 0 {
 		t.Fatalf("strict summary inputs should load fixture body: inputs=%+v err=%v", generationInputs, err)
 	}
-	if _, err := withLibrary.loadCharacterSummaryInputs(context.Background(), "missing", "1", 10, 10); err == nil {
+	if _, err := withLibrary.loadExtractionInputs(context.Background(), "missing", "1", 10, 10); err == nil {
 		t.Fatal("strict summary inputs should reject missing novels")
 	}
-	if inputs, err := (&Server{}).loadCharacterSummaryInputs(context.Background(), "novel-1", "1", 10, 10); err != nil || len(inputs.Episodes) != 0 || len(inputs.Batches) != 0 {
+	if inputs, err := (&Server{}).loadExtractionInputs(context.Background(), "novel-1", "1", 10, 10); err != nil || len(inputs.Episodes) != 0 || len(inputs.Batches) != 0 {
 		t.Fatalf("nil-library strict summary inputs should be empty without error: inputs=%+v err=%v", inputs, err)
 	}
 
@@ -4808,11 +4919,11 @@ func TestServerAIGenerationProfileReadErrors(t *testing.T) {
 		t.Fatalf("initialize store: %v", err)
 	}
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
-	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary", map[string]any{
+	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
-	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/character-summary/stream", map[string]any{
+	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
@@ -5221,6 +5332,14 @@ func TestServerAIGenerationSettingsIncludesOpenRouterModelInfo(t *testing.T) {
 }
 
 func TestAIGenerationSettingsParserHelpers(t *testing.T) {
+	if runtime, ok := parseAIExtractionRuntime(map[string]any{"parallelRequestConcurrency": float64(4)}); !ok || runtime.ParallelRequestConcurrency != 4 {
+		t.Fatalf("unexpected extraction runtime parse: %+v %v", runtime, ok)
+	}
+	for _, invalid := range []any{nil, map[string]any{}, map[string]any{"parallelRequestConcurrency": 0.0}, map[string]any{"parallelRequestConcurrency": 21.0}, map[string]any{"parallelRequestConcurrency": 1.5}} {
+		if _, ok := parseAIExtractionRuntime(invalid); ok {
+			t.Fatalf("invalid extraction runtime should be rejected: %+v", invalid)
+		}
+	}
 	if shared, ok := parseAISharedProviders(map[string]any{"openrouter": map[string]any{"apiKey": nil}}); !ok || shared.OpenRouter.APIKey != nil {
 		t.Fatalf("unexpected shared providers parse: %+v %v", shared, ok)
 	}
@@ -5311,18 +5430,18 @@ func TestAIGenerationSettingsParserHelpers(t *testing.T) {
 	if _, ok := parseStringArray("OpenAI, openai"); ok {
 		t.Fatal("duplicate provider order items should be rejected")
 	}
-	strategyModels, ok := parseAICharacterSummaryStrategyModels(map[string]any{"nameDiscoveryModelId": " openai/gpt-5-nano "})
+	strategyModels, ok := parseAIExtractionStrategyModels(map[string]any{"nameDiscoveryModelId": " openai/gpt-5-nano "})
 	if !ok || strategyModels.NameDiscoveryModelID == nil || *strategyModels.NameDiscoveryModelID != "openai/gpt-5-nano" {
 		t.Fatalf("strategy model settings should parse: %+v %v", strategyModels, ok)
 	}
-	strategyModels, ok = parseAICharacterSummaryStrategyModels(map[string]any{"nameDiscoveryModelId": " "})
+	strategyModels, ok = parseAIExtractionStrategyModels(map[string]any{"nameDiscoveryModelId": " "})
 	if !ok || strategyModels.NameDiscoveryModelID != nil {
 		t.Fatalf("blank strategy model should normalize to nil: %+v %v", strategyModels, ok)
 	}
-	if _, ok := parseAICharacterSummaryStrategyModels(map[string]any{"nameDiscoveryModelId": 123}); ok {
+	if _, ok := parseAIExtractionStrategyModels(map[string]any{"nameDiscoveryModelId": 123}); ok {
 		t.Fatal("numeric strategy model should be rejected")
 	}
-	if _, ok := parseAICharacterSummaryStrategyModels("bad"); ok {
+	if _, ok := parseAIExtractionStrategyModels("bad"); ok {
 		t.Fatal("non-object strategy model settings should be rejected")
 	}
 	if value, ok := boolField(map[string]any{"value": true}, "value", false); !ok || !value {
@@ -5361,7 +5480,7 @@ func waitForCharacterJobStatus(t *testing.T, handler http.Handler, novelID strin
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		response := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/character-jobs", nil, http.StatusOK)
+		response := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/extraction-jobs", nil, http.StatusOK)
 		for _, rawJob := range response["jobs"].([]any) {
 			job := rawJob.(map[string]any)
 			if job["jobId"] == jobID {
@@ -5564,7 +5683,7 @@ func newHTTPAPITestData(t *testing.T) string {
 	if err := os.MkdirAll(filepath.Join(stateDir, "character_profiles"), 0o755); err != nil {
 		t.Fatalf("mkdir character profile fixture: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(stateDir, "character_jobs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(stateDir, "extraction_jobs"), 0o755); err != nil {
 		t.Fatalf("mkdir character job fixture: %v", err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(libraryRoot, "library.sqlite"))
@@ -5649,7 +5768,7 @@ characters:
       - episode_index: "1"
         text: テスト人物。
 `)
-	writeHTTPFixtureFile(t, filepath.Join(stateDir, "character_jobs", "job-1.yaml"), `
+	writeHTTPFixtureFile(t, filepath.Join(stateDir, "extraction_jobs", "job-1.yaml"), `
 job_id: job-1
 novel_id: `+novelID+`
 requested_up_to_episode_index: "1"

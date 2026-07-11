@@ -1,9 +1,10 @@
 package characters
 
 type profilesDocument struct {
-	NovelID                   string             `yaml:"novel_id"`
-	ProcessedUpToEpisodeIndex *string            `yaml:"processed_up_to_episode_index"`
-	Characters                []characterProfile `yaml:"characters"`
+	NovelID                   string               `yaml:"novel_id"`
+	ProcessedUpToEpisodeIndex *string              `yaml:"processed_up_to_episode_index"`
+	IdentityMergeEvents       []identityMergeEvent `yaml:"identity_merge_events,omitempty"`
+	Characters                []characterProfile   `yaml:"characters"`
 }
 
 type characterEventsDocument struct {
@@ -12,6 +13,7 @@ type characterEventsDocument struct {
 	ProcessedUpToEpisodeIndex *string                `yaml:"processed_up_to_episode_index"`
 	NextCharacterOrdinal      int                    `yaml:"next_character_ordinal"`
 	RetiredCharacterIDs       []retiredCharacterID   `yaml:"retired_character_ids,omitempty"`
+	IdentityMergeEvents       []identityMergeEvent   `yaml:"identity_merge_events,omitempty"`
 	UnresolvedMentions        []unresolvedMention    `yaml:"unresolved_mentions,omitempty"`
 	EpisodeEtags              []episodeEtag          `yaml:"episode_etags,omitempty"`
 	Characters                []characterEventRecord `yaml:"characters"`
@@ -20,6 +22,12 @@ type characterEventsDocument struct {
 type retiredCharacterID struct {
 	CharacterID string `yaml:"character_id"`
 	MergedInto  string `yaml:"merged_into,omitempty"`
+}
+
+type identityMergeEvent struct {
+	SourceCharacterID     string `yaml:"source_character_id"`
+	TargetCharacterID     string `yaml:"target_character_id"`
+	EffectiveEpisodeIndex string `yaml:"effective_episode_index"`
 }
 
 type unresolvedMention struct {
@@ -95,50 +103,6 @@ type episodeMentionDoc struct {
 	Count        int    `yaml:"count"`
 }
 
-type jobDocument struct {
-	SchemaVersion             int     `yaml:"schema_version"`
-	Revision                  int     `yaml:"revision"`
-	JobID                     string  `yaml:"job_id"`
-	NovelID                   string  `yaml:"novel_id"`
-	RequestedUpToEpisodeIndex string  `yaml:"requested_up_to_episode_index"`
-	ProfileID                 *string `yaml:"profile_id"`
-	ProfileLabel              *string `yaml:"profile_label"`
-	GenerationMode            string  `yaml:"generation_mode"`
-	GenerationStrategy        string  `yaml:"generation_strategy,omitempty"`
-	ModelID                   *string `yaml:"model_id"`
-	Status                    string  `yaml:"status"`
-	Progress                  *int    `yaml:"progress,omitempty"`
-	ProgressStage             *string `yaml:"progress_stage,omitempty"`
-	CurrentBatchIndex         *int    `yaml:"current_batch_index,omitempty"`
-	BatchCount                *int    `yaml:"batch_count,omitempty"`
-	GeneratedCharacterCount   *int    `yaml:"generated_character_count,omitempty"`
-	CreatedAt                 string  `yaml:"created_at"`
-	StartedAt                 *string `yaml:"started_at"`
-	FinishedAt                *string `yaml:"finished_at"`
-	ErrorMessage              *string `yaml:"error_message"`
-}
-
-type jobsIndexDocument struct {
-	SchemaVersion int      `yaml:"schema_version"`
-	Revision      int      `yaml:"revision"`
-	NovelID       string   `yaml:"novel_id"`
-	ActiveJobID   *string  `yaml:"active_job_id"`
-	JobIDs        []string `yaml:"job_ids"`
-}
-
-type JobWithNovel struct {
-	NovelID string
-	Job     Job
-}
-
-type NovelStatePruneResult struct {
-	ProfileDeleted     bool
-	EventsDeleted      bool
-	JobsDeleted        int
-	JobIndexDeleted    bool
-	CheckpointsDeleted int
-}
-
 type HeuristicEpisode struct {
 	EpisodeIndex string
 	Text         string
@@ -178,6 +142,12 @@ type GeneratedRetiredCharacterID struct {
 	MergedInto  string
 }
 
+type GeneratedIdentityMergeEvent struct {
+	SourceCharacterID     string
+	TargetCharacterID     string
+	EffectiveEpisodeIndex string
+}
+
 type GeneratedEpisodeDigest struct {
 	EpisodeIndex string
 	ContentEtag  string
@@ -189,6 +159,7 @@ type SaveGeneratedSummaryOptions struct {
 	SetUnresolvedMentions   bool
 	IssuedCharacterIDs      []string
 	RetiredCharacterIDs     []GeneratedRetiredCharacterID
+	IdentityMergeEvents     []GeneratedIdentityMergeEvent
 	NextCharacterOrdinal    int
 }
 

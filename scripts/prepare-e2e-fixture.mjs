@@ -23,9 +23,12 @@ const bookmarksPath = path.join(stateDir, "bookmarks.yaml");
 const readerPreferencesPath = path.join(stateDir, "reader_preferences.yaml");
 const aiGenerationSettingsPath = path.join(stateDir, "ai_generation_settings.yaml");
 const aiUsagePath = path.join(stateDir, "ai_usage.sqlite");
-const characterJobsDir = path.join(stateDir, "character_jobs");
-const characterJobsIndexDir = path.join(characterJobsDir, "index");
+const extractionJobsDir = path.join(stateDir, "extraction_jobs");
+const extractionJobsIndexDir = path.join(extractionJobsDir, "index");
+const legacyCharacterJobsDir = path.join(stateDir, "character_jobs");
 const characterProfilesDir = path.join(stateDir, "character_profiles");
+const characterEventsDir = path.join(stateDir, "character_events");
+const termProfilesDir = path.join(stateDir, "term_profiles");
 const command = process.argv[2] ?? "rebuild";
 const novelFetcherServiceDir = path.join(repoRoot, "services", "novel-fetcher");
 
@@ -138,14 +141,22 @@ async function hasCharacterProfilesFixture() {
   return entries.some((entry) => entry.isFile() && entry.name.endsWith(".yaml"));
 }
 
-async function hasCharacterJobsFixture() {
-  if (!(await pathExists(characterJobsIndexDir))) {
+async function hasExtractionJobsFixture() {
+  if (!(await pathExists(extractionJobsIndexDir))) {
     return false;
   }
 
-  const entries = await fs.readdir(characterJobsIndexDir, {
+  const entries = await fs.readdir(extractionJobsIndexDir, {
     withFileTypes: true,
   });
+  return entries.some((entry) => entry.isFile() && entry.name.endsWith(".yaml"));
+}
+
+async function hasTermProfilesFixture() {
+  if (!(await pathExists(termProfilesDir))) {
+    return false;
+  }
+  const entries = await fs.readdir(termProfilesDir, { withFileTypes: true });
   return entries.some((entry) => entry.isFile() && entry.name.endsWith(".yaml"));
 }
 
@@ -157,7 +168,8 @@ async function hasStateFixture() {
     pathExists(aiGenerationSettingsPath),
     pathExists(aiUsagePath),
     hasCharacterProfilesFixture(),
-    hasCharacterJobsFixture(),
+    hasTermProfilesFixture(),
+    hasExtractionJobsFixture(),
   ]);
   return statuses.every(Boolean);
 }
@@ -219,8 +231,11 @@ async function refreshNovelFetcherFixtureIfNeeded() {
 async function writeStateDocuments() {
   await fs.mkdir(stateDir, { recursive: true });
   await Promise.all([
-    fs.rm(characterJobsDir, { recursive: true, force: true }),
+    fs.rm(extractionJobsDir, { recursive: true, force: true }),
+    fs.rm(legacyCharacterJobsDir, { recursive: true, force: true }),
     fs.rm(characterProfilesDir, { recursive: true, force: true }),
+    fs.rm(characterEventsDir, { recursive: true, force: true }),
+    fs.rm(termProfilesDir, { recursive: true, force: true }),
   ]);
   await fs.writeFile(readingStatePath, stringify(createEmptyReadingStateDocument()), "utf8");
   await fs.writeFile(bookmarksPath, stringify(createEmptyBookmarksDocument()), "utf8");
@@ -232,7 +247,8 @@ async function writeStateDocuments() {
   await fs.chmod(aiGenerationSettingsPath, 0o666);
   await writeAiUsageFixture();
   await writeCharacterProfilesFixture();
-  await writeCharacterJobsFixture();
+  await writeTermProfilesFixture();
+  await writeExtractionJobsFixture();
   console.log(`Reset e2e state: ${path.relative(repoRoot, stateDir)}`);
 }
 
@@ -342,7 +358,55 @@ async function writeCharacterProfilesFixture() {
   }
 }
 
-async function writeCharacterJobsFixture() {
+async function writeTermProfilesFixture() {
+  const fixtureRows = await readCharacterFixtureRows();
+  await fs.mkdir(termProfilesDir, { recursive: true });
+  await fs.chmod(termProfilesDir, 0o777);
+  for (const row of fixtureRows) {
+    const novelId = createSiteNovelId(row.site, row.site_work_id);
+    if (!novelId || typeof row.episode_index !== "string" || row.episode_index.length === 0) {
+      continue;
+    }
+    const isTermListFixture = row.site_work_id === "n3234ab";
+    const isPartialWriteFixture = row.site_work_id === "n5234ab";
+    const processedEpisodeIndex = isPartialWriteFixture ? "2" : row.episode_index;
+    const generatedTerms = isTermListFixture
+      ? [
+          {
+            term: "星見の塔",
+            reading_history: [{ text: "ほしみのとう", episode_index: row.episode_index }],
+            category_history: [{ category: "place", episode_index: row.episode_index }],
+            description_history: [
+              { text: "夜空を観測するための合成 fixture の塔。", episode_index: row.episode_index },
+            ],
+          },
+        ]
+      : isPartialWriteFixture
+        ? [
+            {
+              term: "未確定の未来語",
+              reading_history: [],
+              category_history: [{ category: "other", episode_index: "2" }],
+              description_history: [{ text: "character frontier より先行した履歴。", episode_index: "2" }],
+            },
+          ]
+        : [];
+    const profilePath = path.join(termProfilesDir, `${novelId}.yaml`);
+    await fs.writeFile(
+      profilePath,
+      stringify({
+        schema_version: 1,
+        novel_id: novelId,
+        processed_up_to_episode_index: processedEpisodeIndex,
+        terms: generatedTerms,
+      }),
+      "utf8",
+    );
+    await fs.chmod(profilePath, 0o666);
+  }
+}
+
+async function writeExtractionJobsFixture() {
   const fixtureRows = await readCharacterFixtureRows();
   const firstFixture = fixtureRows
     .map((row) => ({
@@ -355,15 +419,15 @@ async function writeCharacterJobsFixture() {
   }
 
   const novelId = firstFixture.novelId;
-  const jobId = "charjob_api_contract_fixture";
+  const jobId = "extraction_api_contract_fixture";
   const timestamp = "2026-05-11T03:43:24.000Z";
 
-  await fs.mkdir(characterJobsIndexDir, { recursive: true });
-  await fs.chmod(characterJobsDir, 0o777);
-  await fs.chmod(characterJobsIndexDir, 0o777);
+  await fs.mkdir(extractionJobsIndexDir, { recursive: true });
+  await fs.chmod(extractionJobsDir, 0o777);
+  await fs.chmod(extractionJobsIndexDir, 0o777);
 
   await fs.writeFile(
-    path.join(characterJobsDir, `${jobId}.yaml`),
+    path.join(extractionJobsDir, `${jobId}.yaml`),
     stringify({
       schema_version: 2,
       revision: 1,
@@ -373,8 +437,13 @@ async function writeCharacterJobsFixture() {
       profile_id: "default",
       profile_label: "Default",
       generation_mode: "heuristic",
+      generation_strategy: "serial",
       model_id: null,
       status: "completed",
+      progress: 100,
+      progress_stage: "completed",
+      generated_character_count: 1,
+      generated_term_count: 0,
       created_at: timestamp,
       started_at: timestamp,
       finished_at: timestamp,
@@ -383,7 +452,7 @@ async function writeCharacterJobsFixture() {
     "utf8",
   );
   await fs.writeFile(
-    path.join(characterJobsIndexDir, `${novelId}.yaml`),
+    path.join(extractionJobsIndexDir, `${novelId}.yaml`),
     stringify({
       schema_version: 2,
       revision: 1,
@@ -393,8 +462,8 @@ async function writeCharacterJobsFixture() {
     }),
     "utf8",
   );
-  await fs.chmod(path.join(characterJobsDir, `${jobId}.yaml`), 0o666);
-  await fs.chmod(path.join(characterJobsIndexDir, `${novelId}.yaml`), 0o666);
+  await fs.chmod(path.join(extractionJobsDir, `${jobId}.yaml`), 0o666);
+  await fs.chmod(path.join(extractionJobsIndexDir, `${novelId}.yaml`), 0o666);
 }
 
 async function readCharacterFixtureRows() {

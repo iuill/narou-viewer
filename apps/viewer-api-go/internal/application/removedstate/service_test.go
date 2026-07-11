@@ -8,6 +8,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
@@ -68,19 +69,28 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := characters.EnsureStateDirs(stateDir); err != nil {
 		t.Fatalf("EnsureStateDirs returned error: %v", err)
 	}
+	if err := extractdomain.EnsureStateDirs(stateDir); err != nil {
+		t.Fatalf("extraction EnsureStateDirs returned error: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "term_profiles"), 0o755); err != nil {
+		t.Fatalf("mkdir term profiles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "term_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\nterms: []\n"), 0o644); err != nil {
+		t.Fatalf("write term profile fixture: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character profile fixture: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "character_events", novelID+".yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character events fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "character_jobs", "index", novelID+".yaml"), []byte("job_ids:\n  - job-remove\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml"), []byte("job_ids:\n  - job-remove\n"), 0o644); err != nil {
 		t.Fatalf("write character job index fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "character_jobs", "job-remove.yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "job-remove.yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character job fixture: %v", err)
 	}
-	checkpointDir := filepath.Join(stateDir, "character_jobs", "checkpoints")
+	checkpointDir := filepath.Join(stateDir, "extraction_jobs", "checkpoints")
 	if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint fixture: %v", err)
 	}
@@ -114,9 +124,10 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	}
 	if result.CharacterProfilesDeleted != 1 ||
 		result.CharacterEventsDeleted != 1 ||
-		result.CharacterJobsDeleted != 1 ||
-		result.CharacterJobIndexesDeleted != 1 ||
-		result.CharacterCheckpointsDeleted != 1 {
+		result.TermProfilesDeleted != 1 ||
+		result.ExtractionJobsDeleted != 1 ||
+		result.ExtractionJobIndexesDeleted != 1 ||
+		result.ExtractionCheckpointsDeleted != 1 {
 		t.Fatalf("unexpected character cleanup result: %+v", result)
 	}
 	if result.PublicationEntriesDeleted != 1 {

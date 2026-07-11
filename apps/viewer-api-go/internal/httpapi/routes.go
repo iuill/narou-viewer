@@ -24,8 +24,8 @@ func (s *Server) registerAIGenerationRoutes() {
 	s.mux.HandleFunc("/api/ai-generation/jobs", s.handleAIJobs)
 	s.mux.HandleFunc("/api/ai-generation/usage/", s.handleUsageDetail)
 	s.mux.HandleFunc("/api/ai-generation/usage", s.handleUsage)
-	s.mux.HandleFunc("/api/ai-generation/playground/character-summary/stream", s.handlePlaygroundStream)
-	s.mux.HandleFunc("/api/ai-generation/playground/character-summary", s.handlePlayground)
+	s.mux.HandleFunc("/api/ai-generation/playground/extraction/stream", s.handlePlaygroundStream)
+	s.mux.HandleFunc("/api/ai-generation/playground/extraction", s.handlePlayground)
 }
 
 func (s *Server) registerReaderRoutes() {

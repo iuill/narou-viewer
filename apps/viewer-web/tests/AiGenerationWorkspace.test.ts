@@ -77,10 +77,14 @@ function createProps(overrides: WorkspaceOverrides = {}): WorkspaceProps {
       aiGenerationSharedGoogleBooksDraft: sharedGoogleBooksDraft,
       onUpdateAiGenerationSharedGoogleBooksDraft: vi.fn(),
       aiGenerationProfileDrafts: [defaultProfile, secondaryProfile],
-      characterSummaryStrategyModelsDraft: {
+      extractionStrategyModelsDraft: {
         nameDiscoveryModelId: "openai/gpt-5-nano"
       },
-      onSetCharacterSummaryStrategyModelsDraft: vi.fn(),
+      extractionRuntimeDraft: {
+        parallelRequestConcurrency: 3
+      },
+      onSetExtractionStrategyModelsDraft: vi.fn(),
+      onSetExtractionRuntimeDraft: vi.fn(),
       defaultAiGenerationProfileDraft: defaultProfile,
       editingAiGenerationProfileId: defaultProfile.id,
       onSelectEditingAiGenerationProfile: vi.fn(),
@@ -276,12 +280,21 @@ describe("AiGenerationWorkspace", () => {
     expect(container.textContent).toContain("AI機能");
     expect(container.textContent).toContain("`AI_GENERATION_SETTINGS_MASTER_PASSPHRASE` が未設定です。");
     expect(container.textContent).toContain("`LLM連携` は viewer-api 内の Go internal AI module から OpenRouter のモデルを使います。");
+    expect(container.textContent).toContain("並列処理数");
 
     await click(getButtonByText(container, "生成テスト"), dom);
     await click(getButtonByText(container, "閉じる"), dom);
     await click(getButtonByText(container, "ヒューリスティック"), dom);
     await click(getButtonByAriaLabel(container, "連携モードの説明を表示"), dom);
     await click(getButtonByText(container, "プロファイル追加"), dom);
+    await click(getButtonByAriaLabel(container, "並列処理数の説明を表示"), dom);
+    const concurrencySelect = Array.from(container.querySelectorAll("select")).find(
+      (select) => select.querySelectorAll("option").length === 20
+    );
+    if (!(concurrencySelect instanceof dom.window.HTMLSelectElement)) {
+      throw new Error("parallel request concurrency select not found");
+    }
+    await changeSelect(concurrencySelect, "5", dom);
     await click(getButtonByText(container, "Profile 2"), dom);
     await click(getButtonByAriaLabel(container, "APIキーの説明を表示"), dom);
     await click(getButtonByAriaLabel(container, "モデルの説明を表示"), dom);
@@ -309,6 +322,10 @@ describe("AiGenerationWorkspace", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
     expect(props.settingsViewProps.onAiGenerationPreferredModeChange).toHaveBeenCalledWith("heuristic");
     expect(props.settingsViewProps.onToggleAiGenerationHelp).toHaveBeenCalledWith("preferredMode");
+    expect(props.settingsViewProps.onToggleAiGenerationHelp).toHaveBeenCalledWith("parallelRequestConcurrency");
+    expect(props.settingsViewProps.onSetExtractionRuntimeDraft).toHaveBeenCalledWith({
+      parallelRequestConcurrency: 5
+    });
     expect(props.settingsViewProps.onAddAiGenerationProfile).toHaveBeenCalledTimes(1);
     expect(props.settingsViewProps.onSelectEditingAiGenerationProfile).toHaveBeenCalledWith("profile-2");
     expect(props.settingsViewProps.onRemoveAiGenerationProfile).toHaveBeenCalledWith("default");
@@ -368,6 +385,14 @@ describe("AiGenerationWorkspace", () => {
               category: "main",
               score: 0.91
             }
+          }
+        ],
+        terms: [
+          {
+            term: "聖剣",
+            reading: "せいけん",
+            category: "item",
+            description: "王家に伝わる剣。"
           }
         ]
       },

@@ -48,6 +48,7 @@ type UseReaderCommandsOptions = {
   hasUnlistedEpisodes: boolean;
   isBookmarkSaving: boolean;
   isCharacterSummaryOpen: boolean;
+  isTermsOpen: boolean;
   isEpisodeLoading: boolean;
   isReaderAiAssistantAvailable: boolean;
   isReaderAiAssistantOpen: boolean;
@@ -110,6 +111,7 @@ export function useReaderCommands({
   hasUnlistedEpisodes,
   isBookmarkSaving,
   isCharacterSummaryOpen,
+  isTermsOpen,
   isEpisodeLoading,
   isReaderAiAssistantAvailable,
   isReaderAiAssistantOpen,
@@ -523,6 +525,7 @@ export function useReaderCommands({
     handleToggleReaderFullscreen,
     isBookmarkSaving,
     isCharacterSummaryOpen,
+    isTermsOpen,
     isEpisodeLoading,
     isReaderAiAssistantAvailable,
     isReaderAiAssistantOpen,

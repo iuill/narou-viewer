@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"narou-viewer/apps/viewer-api-go/internal/application/characterjobs"
-	appcharactersummary "narou-viewer/apps/viewer-api-go/internal/application/charactersummary"
-	"narou-viewer/apps/viewer-api-go/internal/application/charactersummaryruntime"
+	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/application/libraryview"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
@@ -17,11 +17,13 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/removedstate"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/config"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/fetcher"
 	"narou-viewer/apps/viewer-api-go/internal/httpapi"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type HandlerResult struct {
@@ -48,6 +50,8 @@ func NewHandler(dataDir string) HandlerResult {
 	publicationService := publications.NewService(stateDir)
 	publicationInitErr := publicationService.Ensure()
 	characterInitErr := characters.EnsureStateDirs(stateDir)
+	extractionInitErr := extractdomain.EnsureStateDirs(stateDir)
+	termInitErr := terms.EnsureStateDirs(stateDir)
 	fetcherClient := fetcher.NewClient(config.FetcherAPIBaseURL())
 	libraryService := library.NewServiceWithFetcher(filepath.Join(dataDir, "novel-fetcher"), fetcherClient)
 	textCache := readertextcache.New(stateDir)
@@ -64,30 +68,30 @@ func NewHandler(dataDir string) HandlerResult {
 		UsageDBPath: usageDBPath,
 		TextCache:   textCache,
 	})
-	characterSummaryRuntime := charactersummaryruntime.NewRuntime(charactersummaryruntime.RuntimeDependencies{
+	extractionRuntime := extractionruntime.NewRuntime(extractionruntime.RuntimeDependencies{
 		StateDir:    stateDir,
 		UsageDBPath: usageDBPath,
 		Library:     libraryService,
 		Settings:    stateStore,
-		Logger:      httpapi.LogCharacterSummaryTiming,
+		Logger:      httpapi.LogExtractionTiming,
 	})
-	characterJobsService := characterjobs.NewService(stateDir, libraryService, stateStore)
-	characterJobCoordinator := appcharactersummary.NewJobCoordinator(stateDir, characterSummaryRuntime.ProcessJob)
-	joinedInitErr := errors.Join(initErr, publicationInitErr, characterInitErr)
+	extractionJobsService := extractionjobs.NewService(stateDir, libraryService, stateStore)
+	characterJobCoordinator := appextraction.NewJobCoordinator(stateDir, extractionRuntime.ProcessJob)
+	joinedInitErr := errors.Join(initErr, publicationInitErr, characterInitErr, extractionInitErr, termInitErr)
 	handler := httpapi.NewServerWithDependencies(httpapi.ServerDependencies{
-		DataDir:                 dataDir,
-		Library:                 libraryService,
-		Publications:            publicationService,
-		StateStore:              stateStore,
-		FetcherClient:           fetcherClient,
-		FetcherCommand:          fetcherCommands,
-		LibraryView:             libraryViewService,
-		ReaderAssistant:         readerAssistantService,
-		ReaderView:              readerViewService,
-		CharacterSummary:        characterSummaryRuntime,
-		CharacterJobs:           characterJobsService,
-		CharacterJobCoordinator: characterJobCoordinator,
-		StateInitErr:            joinedInitErr,
+		DataDir:                  dataDir,
+		Library:                  libraryService,
+		Publications:             publicationService,
+		StateStore:               stateStore,
+		FetcherClient:            fetcherClient,
+		FetcherCommand:           fetcherCommands,
+		LibraryView:              libraryViewService,
+		ReaderAssistant:          readerAssistantService,
+		ReaderView:               readerViewService,
+		Extraction:               extractionRuntime,
+		ExtractionQueue:          extractionJobsService,
+		ExtractionJobCoordinator: characterJobCoordinator,
+		StateInitErr:             joinedInitErr,
 	})
 
 	result := HandlerResult{

@@ -12,7 +12,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"narou-viewer/apps/viewer-api-go/internal/charactersummary"
+	"narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 )
 
@@ -58,7 +58,7 @@ func BodyText(document library.ReaderDocument) string {
 	for _, block := range document.Blocks {
 		switch block.Type {
 		case "paragraph", "heading":
-			if text := strings.TrimSpace(charactersummary.RenderInlineTokens(block.Inlines)); text != "" {
+			if text := strings.TrimSpace(extraction.RenderInlineTokens(block.Inlines)); text != "" {
 				parts = append(parts, text)
 			}
 		}

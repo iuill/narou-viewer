@@ -9,7 +9,8 @@ import {
   getAiGenerationTriggerSummary,
   toAiGenerationProfileDraft,
   toAiGenerationSharedProviderDraft,
-  type CharacterSummaryStrategyModelsDraft,
+  type ExtractionStrategyModelsDraft,
+  type ExtractionRuntimeDraft,
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft
@@ -43,8 +44,11 @@ export function useAiSettings({
     updatedAt: null
   });
   const [profileDrafts, setProfileDrafts] = useState<AiGenerationProfileDraft[]>([]);
-  const [characterSummaryStrategyModelsDraft, setCharacterSummaryStrategyModelsDraft] = useState<CharacterSummaryStrategyModelsDraft>({
+  const [extractionStrategyModelsDraft, setExtractionStrategyModelsDraft] = useState<ExtractionStrategyModelsDraft>({
     nameDiscoveryModelId: ""
+  });
+  const [extractionRuntimeDraft, setExtractionRuntimeDraft] = useState<ExtractionRuntimeDraft>({
+    parallelRequestConcurrency: 3
   });
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [editingProfileId, setEditingProfileId] = useState("");
@@ -85,8 +89,11 @@ export function useAiSettings({
     );
     const nextDrafts = nextSettings.settings.profiles.map((profile) => toAiGenerationProfileDraft(profile));
     setProfileDrafts(nextDrafts);
-    setCharacterSummaryStrategyModelsDraft({
-      nameDiscoveryModelId: nextSettings.settings.characterSummaryStrategyModels?.nameDiscoveryModelId ?? ""
+    setExtractionStrategyModelsDraft({
+      nameDiscoveryModelId: nextSettings.settings.extractionStrategyModels?.nameDiscoveryModelId ?? ""
+    });
+    setExtractionRuntimeDraft({
+      parallelRequestConcurrency: nextSettings.settings.extractionRuntime?.parallelRequestConcurrency ?? 3
     });
     const nextSelectedProfileId = nextSettings.settings.selectedProfileId ?? nextSettings.settings.profiles[0]?.id ?? "";
     setSelectedProfileId(nextSelectedProfileId);
@@ -199,8 +206,11 @@ export function useAiSettings({
           allowFallbacks: profile.allowFallbacks,
           requireParameters: profile.requireParameters
         })),
-        characterSummaryStrategyModels: {
-          nameDiscoveryModelId: characterSummaryStrategyModelsDraft.nameDiscoveryModelId.trim() || null
+        extractionStrategyModels: {
+          nameDiscoveryModelId: extractionStrategyModelsDraft.nameDiscoveryModelId.trim() || null
+        },
+        extractionRuntime: {
+          parallelRequestConcurrency: extractionRuntimeDraft.parallelRequestConcurrency
         }
       });
       setSettings(nextSettings);
@@ -216,7 +226,8 @@ export function useAiSettings({
       setIsSettingsSaving(false);
     }
   }, [
-    characterSummaryStrategyModelsDraft.nameDiscoveryModelId,
+    extractionStrategyModelsDraft.nameDiscoveryModelId,
+    extractionRuntimeDraft.parallelRequestConcurrency,
     profileDrafts,
     refreshRuntimeStatus,
     selectedProfileId,
@@ -229,7 +240,8 @@ export function useAiSettings({
     addProfile,
     applySettings,
     changePreferredMode,
-    characterSummaryStrategyModelsDraft,
+    extractionStrategyModelsDraft,
+    extractionRuntimeDraft,
     editingProfileId,
     isModeSaving,
     isSettingsLoading,
@@ -245,7 +257,8 @@ export function useAiSettings({
     setNotice,
     setProfileDrafts,
     setSelectedProfileId,
-    setCharacterSummaryStrategyModelsDraft,
+    setExtractionStrategyModelsDraft,
+    setExtractionRuntimeDraft,
     settings,
     settingsError,
     sharedGoogleBooksDraft,

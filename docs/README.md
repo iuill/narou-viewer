@@ -14,7 +14,7 @@
 ## 開発
 
 - [`development.md`](development.md): Dev Container、toolchain、検証コマンド、E2E fixture の開発手順
-- [`ai-experiments.md`](ai-experiments.md): キャラクター一覧生成の prompt / model 比較実験と評価手順
+- [`ai-experiments.md`](ai-experiments.md): 人物・用語抽出の prompt / model 比較実験と評価手順
 
 ## 運用
 
@@ -29,7 +29,7 @@
 
 ## 機能別設計
 
-- [`character-summary.md`](character-summary.md): キャラクター一覧生成機能の仕様
+- [`extraction.md`](extraction.md): 人物・用語抽出機能の仕様
 - [`publication-info.md`](publication-info.md): 書籍情報とカバー画像表示の仕様
 - [`reader-ai-assistant.md`](reader-ai-assistant.md): 本文表示画面の読書AI機能仕様
 - [`state-schema-policy.md`](state-schema-policy.md): YAML state schema の互換ポリシー
@@ -38,7 +38,7 @@
 
 `.agents/skills/` はエージェント向けの discovery root です。repository 共通 skill は通常の tracked file として管理し、下の索引に載せます。個人用の Agent Tools を同じ root に置く場合は `.agents/skills/local-*/` を使います。`local-*` は Git 管理外で、この索引には載せません。agent discovery や lint から見える場合があるため、秘密情報や非公開 endpoint は書かないでください。
 
-- [`.agents/skills/character-summary-run-review/SKILL.md`](../.agents/skills/character-summary-run-review/SKILL.md): synthetic / 自作 / 許諾済み character-summary 実験 run を比較レビューし、prompt 改善案を書く
+- [`.agents/skills/extraction-run-review/SKILL.md`](../.agents/skills/extraction-run-review/SKILL.md): synthetic / 自作 / 許諾済み extraction 実験 run を比較レビューし、prompt 改善案を書く
 - [`.agents/skills/repo-verify/SKILL.md`](../.agents/skills/repo-verify/SKILL.md): 変更範囲に応じた検証コマンドの選択
 - [`.agents/skills/e2e-recovery/SKILL.md`](../.agents/skills/e2e-recovery/SKILL.md): E2E fixture / service / state の復旧手順
 - [`.agents/skills/e2e-smoke/SKILL.md`](../.agents/skills/e2e-smoke/SKILL.md): 内部 E2E service や generic self-host origin の read-only smoke check 判断

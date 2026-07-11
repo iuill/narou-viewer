@@ -48,7 +48,7 @@ services:
       - "${VIEWER_API_HOST_PORT:-8080}:8080"
 
   novel-fetcher:
-    image: golang:1.25.11-bookworm
+    image: golang:1.25.12-bookworm
     init: true
     user: "1000:1000"
     working_dir: /workspace/services/novel-fetcher
@@ -74,7 +74,7 @@ services:
       - "33006"
 
   novel-fetcher-e2e:
-    image: ${NOVEL_FETCHER_E2E_IMAGE:-golang:1.25.11-bookworm}
+    image: ${NOVEL_FETCHER_E2E_IMAGE:-golang:1.25.12-bookworm}
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace/services/novel-fetcher
@@ -101,7 +101,7 @@ services:
       - "33006"
 
   viewer-api-e2e:
-    image: ${VIEWER_API_GO_E2E_IMAGE:-golang:1.25.11-bookworm}
+    image: ${VIEWER_API_GO_E2E_IMAGE:-golang:1.25.12-bookworm}
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace/apps/viewer-api-go

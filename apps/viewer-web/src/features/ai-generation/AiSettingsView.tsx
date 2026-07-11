@@ -5,7 +5,8 @@ import {
   type AiGenerationHelpKey,
   type AiGenerationProfileDraft,
   type AiGenerationSharedProviderDraft,
-  type CharacterSummaryStrategyModelsDraft
+  type ExtractionRuntimeDraft,
+  type ExtractionStrategyModelsDraft
 } from "./model";
 import type { AiGenerationSettingsResponse } from "./types";
 
@@ -24,8 +25,10 @@ export type AiSettingsViewProps = {
   aiGenerationSharedGoogleBooksDraft: AiGenerationSharedProviderDraft;
   onUpdateAiGenerationSharedGoogleBooksDraft: (updater: (current: AiGenerationSharedProviderDraft) => AiGenerationSharedProviderDraft) => void;
   aiGenerationProfileDrafts: AiGenerationProfileDraft[];
-  characterSummaryStrategyModelsDraft: CharacterSummaryStrategyModelsDraft;
-  onSetCharacterSummaryStrategyModelsDraft: (draft: CharacterSummaryStrategyModelsDraft) => void;
+  extractionStrategyModelsDraft: ExtractionStrategyModelsDraft;
+  onSetExtractionStrategyModelsDraft: (draft: ExtractionStrategyModelsDraft) => void;
+  extractionRuntimeDraft: ExtractionRuntimeDraft;
+  onSetExtractionRuntimeDraft: (draft: ExtractionRuntimeDraft) => void;
   defaultAiGenerationProfileDraft: AiGenerationProfileDraft | null;
   editingAiGenerationProfileId: string;
   onSelectEditingAiGenerationProfile: (profileId: string) => void;
@@ -53,8 +56,10 @@ export function AiSettingsView({
   aiGenerationSharedGoogleBooksDraft,
   onUpdateAiGenerationSharedGoogleBooksDraft,
   aiGenerationProfileDrafts,
-  characterSummaryStrategyModelsDraft,
-  onSetCharacterSummaryStrategyModelsDraft,
+  extractionStrategyModelsDraft,
+  onSetExtractionStrategyModelsDraft,
+  extractionRuntimeDraft,
+  onSetExtractionRuntimeDraft,
   defaultAiGenerationProfileDraft,
   editingAiGenerationProfileId,
   onSelectEditingAiGenerationProfile,
@@ -244,10 +249,44 @@ export function AiSettingsView({
           <section className="library-queue-section">
             <div className="panel-header compact library-queue-header">
               <div>
-                <h3>キャラクター生成モデル</h3>
-                <p>名前発見 + 並列抽出 + 補正で使う補助モデルを指定します。</p>
+                <h3>人物・用語抽出</h3>
+                <p>並列方式の同時リクエスト数と、事前発見で使う補助モデルを指定します。</p>
               </div>
             </div>
+            <label className="download-form-field">
+              <span>
+                並列処理数
+                <button
+                  aria-expanded={openAiGenerationHelpKey === "parallelRequestConcurrency"}
+                  aria-label="並列処理数の説明を表示"
+                  className="field-help"
+                  onClick={() => onToggleAiGenerationHelp("parallelRequestConcurrency")}
+                  type="button"
+                >
+                  i
+                </button>
+              </span>
+              <select
+                onChange={(event) =>
+                  onSetExtractionRuntimeDraft({
+                    ...extractionRuntimeDraft,
+                    parallelRequestConcurrency: Number(event.target.value)
+                  })
+                }
+                value={extractionRuntimeDraft.parallelRequestConcurrency}
+              >
+                {Array.from({ length: 20 }, (_, index) => index + 1).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+              {openAiGenerationHelpKey === "parallelRequestConcurrency" ? (
+                <p className="field-help-text">
+                  並列抽出を選んだときに、人物・用語抽出のLLMリクエストを同時に実行する上限です。既定は3、最大20です。大きくすると速くなる場合がありますが、providerのrate limitや端末・サーバー負荷も増えます。順次抽出には適用されません。
+                </p>
+              ) : null}
+            </label>
             <label className="download-form-field">
               <span>
                 名前発見モデル
@@ -263,14 +302,14 @@ export function AiSettingsView({
               </span>
               <input
                 onChange={(event) =>
-                  onSetCharacterSummaryStrategyModelsDraft({
-                    ...characterSummaryStrategyModelsDraft,
+                  onSetExtractionStrategyModelsDraft({
+                    ...extractionStrategyModelsDraft,
                     nameDiscoveryModelId: event.target.value
                   })
                 }
                 placeholder="未指定なら既定プロファイルのモデル"
                 type="text"
-                value={characterSummaryStrategyModelsDraft.nameDiscoveryModelId}
+                value={extractionStrategyModelsDraft.nameDiscoveryModelId}
               />
               {openAiGenerationHelpKey === "nameDiscoveryModelId" ? (
                 <p className="field-help-text">
@@ -409,7 +448,7 @@ export function AiSettingsView({
                 />
                 {openAiGenerationHelpKey === "modelId" ? (
                   <p className="field-help-text">
-                    キャラクター一覧生成に使う OpenRouter の実モデルIDです。例: `openai/gpt-5-mini`
+                    人物と用語の抽出に使う OpenRouter の実モデルIDです。例: `openai/gpt-5-mini`
                   </p>
                 ) : null}
                 {editingAiGenerationProfileDraft.modelInfo ? (
@@ -531,7 +570,7 @@ export function AiSettingsView({
             <p className="message">編集するプロファイルを選択してください。</p>
           )}
           <p className="message">
-            `プロファイル設定を保存` で、共通 APIキー と編集中プロファイル、既定プロファイル、キャラクター生成モデルの指定が反映されます。APIキー欄を空のまま保存すると、既存のキーは変更しません。
+            `プロファイル設定を保存` で、共通 APIキー と編集中プロファイル、既定プロファイル、抽出モデルの指定が反映されます。APIキー欄を空のまま保存すると、既存のキーは変更しません。
           </p>
 
   </div>;

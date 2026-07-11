@@ -1,0 +1,93 @@
+{
+  "extracted": [
+    {
+      "episodeIndex": "1",
+      "text": "アリスは銀髪の少女だ。アリスは主人公の仲間だ。 剣城（ツルギ）瑛人（エイト）は旅に出た。"
+    },
+    {
+      "episodeIndex": "2",
+      "text": "アリス・スミスは冷静に判断した。ボブは男性の騎士だ。"
+    },
+    {
+      "episodeIndex": "3",
+      "text": "ボブは主人公を守る。"
+    }
+  ],
+  "heuristicResult": {
+    "processedUpToEpisodeIndex": "3",
+    "terms": [],
+    "characters": [
+      {
+        "characterId": "char_60f8b911bf12",
+        "canonicalName": { "text": "アリス", "episodeIndex": "1" },
+        "fullName": { "text": "アリス・スミス", "episodeIndex": "2" },
+        "gender": { "text": "女性", "episodeIndex": "1" },
+        "firstAppearanceEpisodeIndex": "1",
+        "aliases": [
+          { "text": "アリス", "episodeIndex": "1" },
+          { "text": "アリス・スミス", "episodeIndex": "2" }
+        ],
+        "importanceMetrics": { "episodeMentions": [] },
+        "appearanceHistory": [{ "episodeIndex": "1", "text": "アリスは銀髪の少女だ。" }],
+        "personalityHistory": [{ "episodeIndex": "2", "text": "アリス・スミスは冷静に判断した。" }],
+        "summaryHistory": [{ "episodeIndex": "1", "text": "アリスは主人公の仲間だ。" }]
+      },
+      {
+        "characterId": "char_61f1a050e9e4",
+        "canonicalName": { "text": "ボブ", "episodeIndex": "2" },
+        "fullName": null,
+        "gender": { "text": "男性", "episodeIndex": "2" },
+        "firstAppearanceEpisodeIndex": "2",
+        "aliases": [{ "text": "ボブ", "episodeIndex": "2" }],
+        "importanceMetrics": { "episodeMentions": [] },
+        "appearanceHistory": [],
+        "personalityHistory": [],
+        "summaryHistory": [{ "episodeIndex": "3", "text": "ボブは主人公を守る。" }]
+      }
+    ]
+  },
+  "promptPreview": {
+    "requiredSystemPromptPhrases": [
+      "本文に明示された事実だけを使い、推測や補完はしないでください。",
+      "抽出対象は「人として登場する個人キャラクター」だけです。",
+      "本文が同一人物だと明示する複数名義は、必ず 1 人に統合してください。"
+    ],
+    "batches": [
+      {
+        "batchIndex": 1,
+        "batchCount": 1,
+        "episodeIndexes": ["1", "2", "3"],
+        "chunkCount": 3,
+        "chunks": [
+          {
+            "episodeIndex": "1",
+            "title": "第一話",
+            "chapter": null,
+            "subchapter": null,
+            "chunkIndex": 1,
+            "chunkCount": 1,
+            "text": "アリスは銀髪の少女だ。アリスは主人公の仲間だ。 剣城《ツルギ》瑛人《エイト》は旅に出た。"
+          },
+          {
+            "episodeIndex": "2",
+            "title": "第二話",
+            "chapter": null,
+            "subchapter": null,
+            "chunkIndex": 1,
+            "chunkCount": 1,
+            "text": "アリス・スミスは冷静に判断した。ボブは男性の騎士だ。"
+          },
+          {
+            "episodeIndex": "3",
+            "title": "第三話",
+            "chapter": null,
+            "subchapter": null,
+            "chunkIndex": 1,
+            "chunkCount": 1,
+            "text": "ボブは主人公を守る。"
+          }
+        ]
+      }
+    ]
+  }
+}

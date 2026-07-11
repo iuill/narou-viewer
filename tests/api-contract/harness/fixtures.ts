@@ -154,12 +154,17 @@ async function findReadyCharacterFixtureCandidate(
       continue;
     }
 
-    const response = await requestJson<{ status?: string }>(
+    const response = await requestJson<{ status?: string; characters?: unknown[] }>(
       `/api/library/novels/${encodeURIComponent(candidate.novelId)}/characters?upToEpisodeIndex=${encodeURIComponent(
         candidate.episodeIndex,
       )}`,
     );
-    if (response.status === 200 && response.json.status === "ready") {
+    if (
+      response.status === 200 &&
+      response.json.status === "ready" &&
+      Array.isArray(response.json.characters) &&
+      response.json.characters.length > 0
+    ) {
       return candidate;
     }
   }

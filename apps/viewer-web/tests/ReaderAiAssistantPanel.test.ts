@@ -14,6 +14,7 @@ type PanelProps = ComponentProps<typeof ReaderAiAssistantPanel>;
 function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
   return {
     currentEpisodeIndex: "2",
+    previousEpisodeIndex: "1",
     formatEpisodeOrderLabel: (episodeIndex) => episodeIndex,
     getCurrentPosition: () => 123,
     novelId: "novel-a",
@@ -87,9 +88,13 @@ afterEach(() => {
 
 describe("ReaderAiAssistantPanel", () => {
   it("shows concise suggested prompts for resuming reading", async () => {
-    const { container, root } = await renderPanel(createProps());
+    const { container, root, dom } = await renderPanel(createProps());
 
     try {
+      const checkbox = container.querySelector('input[type="checkbox"]');
+      expect(checkbox).toBeInstanceOf(dom.window.HTMLInputElement);
+      expect((checkbox as HTMLInputElement).checked).toBe(false);
+      expect(container.textContent).toContain("新規参照上限 第1話");
       expect(container.textContent).toContain("直近5話の流れを要約して");
       expect(container.textContent).toContain("前話で何があった？");
       expect(container.textContent).toContain("Ctrl+Enter");
@@ -176,6 +181,12 @@ describe("ReaderAiAssistantPanel", () => {
     const { container, root, dom } = await renderPanel(createProps());
 
     try {
+      const checkbox = container.querySelector('input[type="checkbox"]');
+      if (!(checkbox instanceof dom.window.HTMLInputElement)) {
+        throw new Error("boundary checkbox not found");
+      }
+      await act(async () => checkbox.click());
+
       const promptButton = Array.from(container.querySelectorAll("button")).find(
         (button) => button.textContent === "直近5話の流れを要約して"
       );
@@ -209,6 +220,68 @@ describe("ReaderAiAssistantPanel", () => {
       await act(async () => {
         root.unmount();
       });
+    }
+  });
+
+  it("uses the previous episode as the boundary when the current episode is excluded", async () => {
+    const fetchMock = vi.fn(async () =>
+      createNdjsonResponse([
+        {
+          type: "result",
+          response: {
+            answer: "第1話までを確認しました。",
+            maxEpisodeIndex: "1",
+            novelId: "novel-a",
+            runId: null,
+            toolRequests: [],
+            generationMode: "remote",
+            toolResults: []
+          }
+        }
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, root, dom } = await renderPanel(createProps());
+
+    try {
+      expect(container.textContent).toContain("新規参照上限 第1話");
+
+      const promptButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "直近5話の流れを要約して"
+      );
+      if (!(promptButton instanceof dom.window.HTMLButtonElement)) {
+        throw new Error("prompt button not found");
+      }
+      await act(async () => {
+        promptButton.click();
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/library/novels/novel-a/reader-assistant/chat/stream",
+        expect.objectContaining({
+          body: JSON.stringify({
+            message: "直近5話の流れを要約して",
+            currentEpisodeIndex: "1",
+            position: 0,
+            history: []
+          })
+        })
+      );
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("disables questions when the current episode is excluded on episode one", async () => {
+    const { container, root } = await renderPanel(
+      createProps({ currentEpisodeIndex: "1", previousEpisodeIndex: null })
+    );
+
+    try {
+      expect(container.textContent).toContain("第1話より前には参照できる話がありません。");
+      expect(container.querySelector("textarea")?.hasAttribute("disabled")).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
     }
   });
 
@@ -320,7 +393,7 @@ describe("ReaderAiAssistantPanel", () => {
         expect.objectContaining({
           body: JSON.stringify({
             message: "直近5話の流れを要約して",
-            currentEpisodeIndex: "2",
+            currentEpisodeIndex: "1",
             position: 0,
             history: []
           })
@@ -400,8 +473,8 @@ describe("ReaderAiAssistantPanel", () => {
         expect.objectContaining({
           body: JSON.stringify({
             message: "それは誰？",
-            currentEpisodeIndex: "2",
-            position: 123,
+            currentEpisodeIndex: "1",
+            position: 0,
             history: [
               {
                 role: "user",
@@ -524,6 +597,101 @@ describe("ReaderAiAssistantPanel", () => {
       await act(async () => {
         root.unmount();
       });
+    }
+  });
+
+  it("preserves completed conversation when moving within the same novel", async () => {
+    let assistantState = {
+      ...createEmptyReaderAiAssistantState(),
+      messages: [
+        {
+          createdAt: "2026-05-10T00:00:00.000Z",
+          id: "user-1",
+          role: "user" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "ここまでの流れは？",
+          turnId: "turn-1"
+        },
+        {
+          createdAt: "2026-05-10T00:00:01.000Z",
+          id: "assistant-1",
+          role: "assistant" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "第1話までの流れです。",
+          turnId: "turn-1"
+        }
+      ]
+    };
+    const onAssistantStateChange = vi.fn((updater: (current: typeof assistantState) => typeof assistantState) => {
+      assistantState = updater(assistantState);
+    });
+    const { container, root } = await renderPanel(
+      createProps({
+        assistantState,
+        onAssistantStateChange
+      })
+    );
+
+    try {
+      await act(async () => {
+        root.render(
+          createElement(
+            ReaderAiAssistantPanel,
+            createProps({
+              assistantState,
+              currentEpisodeIndex: "3",
+              previousEpisodeIndex: "2",
+              onAssistantStateChange
+            })
+          )
+        );
+      });
+
+      expect(assistantState.messages).toHaveLength(2);
+      expect(container.textContent).toContain("第1話までの流れです。");
+      expect(container.textContent).toContain("参照上限 第1話");
+      expect(container.textContent).toContain("新規参照上限 第2話");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("preserves conversation when changing the new-reference boundary", async () => {
+    let assistantState = {
+      ...createEmptyReaderAiAssistantState(),
+      messages: [
+        {
+          createdAt: "2026-05-10T00:00:00.000Z",
+          id: "assistant-1",
+          role: "assistant" as const,
+          spoilerBoundaryEpisodeIndex: "1",
+          text: "残す回答",
+          turnId: "turn-1"
+        }
+      ]
+    };
+    const onAssistantStateChange = vi.fn((updater: (current: typeof assistantState) => typeof assistantState) => {
+      assistantState = updater(assistantState);
+    });
+    const { container, root, dom } = await renderPanel(
+      createProps({
+        assistantState,
+        onAssistantStateChange
+      })
+    );
+
+    try {
+      const checkbox = container.querySelector('input[type="checkbox"]');
+      if (!(checkbox instanceof dom.window.HTMLInputElement)) {
+        throw new Error("boundary checkbox not found");
+      }
+      await act(async () => checkbox.click());
+
+      expect(assistantState.includeCurrentEpisode).toBe(true);
+      expect(assistantState.messages).toHaveLength(1);
+      expect(assistantState.messages[0]?.text).toBe("残す回答");
+    } finally {
+      await act(async () => root.unmount());
     }
   });
 

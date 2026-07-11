@@ -11,14 +11,19 @@ type SettingsResponse struct {
 }
 
 type SettingsMetadata struct {
-	SelectedProfileID              *string                        `json:"selectedProfileId"`
-	SharedProviders                SharedProviders                `json:"sharedProviders"`
-	Profiles                       []Profile                      `json:"profiles"`
-	CharacterSummaryStrategyModels CharacterSummaryStrategyModels `json:"characterSummaryStrategyModels"`
+	SelectedProfileID        *string                  `json:"selectedProfileId"`
+	SharedProviders          SharedProviders          `json:"sharedProviders"`
+	Profiles                 []Profile                `json:"profiles"`
+	ExtractionStrategyModels ExtractionStrategyModels `json:"extractionStrategyModels"`
+	ExtractionRuntime        ExtractionRuntime        `json:"extractionRuntime"`
 }
 
-type CharacterSummaryStrategyModels struct {
+type ExtractionStrategyModels struct {
 	NameDiscoveryModelID *string `json:"nameDiscoveryModelId"`
+}
+
+type ExtractionRuntime struct {
+	ParallelRequestConcurrency int `json:"parallelRequestConcurrency"`
 }
 
 type SharedProviders struct {
@@ -121,26 +126,37 @@ type UsageRequest struct {
 }
 
 type Job struct {
-	JobID                     string  `json:"jobId"`
-	NovelID                   string  `json:"novelId"`
-	NovelTitle                *string `json:"novelTitle"`
-	NovelAuthor               *string `json:"novelAuthor"`
-	RequestedUpToEpisodeIndex string  `json:"requestedUpToEpisodeIndex"`
-	ProfileID                 *string `json:"profileId"`
-	ProfileLabel              *string `json:"profileLabel"`
-	GenerationMode            string  `json:"generationMode"`
-	GenerationStrategy        string  `json:"generationStrategy,omitempty"`
-	ModelID                   *string `json:"modelId"`
-	Status                    string  `json:"status"`
-	Progress                  *int    `json:"progress,omitempty"`
-	ProgressStage             *string `json:"progressStage,omitempty"`
-	CurrentBatchIndex         *int    `json:"currentBatchIndex,omitempty"`
-	BatchCount                *int    `json:"batchCount,omitempty"`
-	GeneratedCharacterCount   *int    `json:"generatedCharacterCount,omitempty"`
-	CreatedAt                 string  `json:"createdAt"`
-	StartedAt                 *string `json:"startedAt"`
-	FinishedAt                *string `json:"finishedAt"`
-	ErrorMessage              *string `json:"errorMessage"`
+	JobID                     string            `json:"jobId"`
+	NovelID                   string            `json:"novelId"`
+	NovelTitle                *string           `json:"novelTitle"`
+	NovelAuthor               *string           `json:"novelAuthor"`
+	RequestedUpToEpisodeIndex string            `json:"requestedUpToEpisodeIndex"`
+	ProfileID                 *string           `json:"profileId"`
+	ProfileLabel              *string           `json:"profileLabel"`
+	GenerationMode            string            `json:"generationMode"`
+	GenerationStrategy        string            `json:"generationStrategy,omitempty"`
+	ModelID                   *string           `json:"modelId"`
+	Status                    string            `json:"status"`
+	Progress                  *int              `json:"progress,omitempty"`
+	ProgressStage             *string           `json:"progressStage,omitempty"`
+	CurrentBatchIndex         *int              `json:"currentBatchIndex,omitempty"`
+	BatchCount                *int              `json:"batchCount,omitempty"`
+	CompletedBatchCount       *int              `json:"completedBatchCount,omitempty"`
+	GeneratedCharacterCount   *int              `json:"generatedCharacterCount,omitempty"`
+	GeneratedTermCount        *int              `json:"generatedTermCount,omitempty"`
+	ActiveWorkers             []JobActiveWorker `json:"activeWorkers,omitempty"`
+	CreatedAt                 string            `json:"createdAt"`
+	StartedAt                 *string           `json:"startedAt"`
+	FinishedAt                *string           `json:"finishedAt"`
+	ErrorMessage              *string           `json:"errorMessage"`
+}
+
+type JobActiveWorker struct {
+	WorkerIndex       int    `json:"workerIndex"`
+	BatchIndex        int    `json:"batchIndex"`
+	StartEpisodeIndex string `json:"startEpisodeIndex"`
+	EndEpisodeIndex   string `json:"endEpisodeIndex"`
+	Phase             string `json:"phase"`
 }
 
 func DefaultSettings(preferredMode string) SettingsResponse {
@@ -183,7 +199,8 @@ func DefaultSettings(preferredMode string) SettingsResponse {
 					UpdatedAt:         nil,
 				},
 			},
-			CharacterSummaryStrategyModels: CharacterSummaryStrategyModels{},
+			ExtractionStrategyModels: ExtractionStrategyModels{},
+			ExtractionRuntime:        ExtractionRuntime{ParallelRequestConcurrency: 3},
 		},
 	}
 }

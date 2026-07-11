@@ -9,14 +9,14 @@
 .summary-action-button {
   min-height: 42px;
   padding: 0 16px;
-  border: 1px solid rgba(157, 75, 47, 0.22);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
   border-radius: 999px;
-  background: #fffaf2;
+  background: var(--reader-panel-surface, var(--panel));
   color: var(--accent-strong);
 }
 
 .summary-action-button:hover {
-  border-color: rgba(157, 75, 47, 0.36);
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
   background: var(--accent-soft);
 }
 
@@ -36,9 +36,9 @@
   gap: 6px;
   margin-top: 18px;
   padding: 4px;
-  border: 1px solid rgba(84, 58, 22, 0.12);
+  border: 1px solid var(--reader-surface-border, var(--panel-border));
   border-radius: 14px;
-  background: rgba(120, 98, 70, 0.08);
+  background: color-mix(in srgb, var(--reader-panel-surface, var(--panel)) 88%, var(--reader-surface-border, var(--panel-border)));
 }
 
 .toc-section-tabs button {
@@ -58,10 +58,10 @@
 }
 
 .toc-section-tabs button[aria-selected="true"] {
-  border-color: rgba(157, 75, 47, 0.2);
-  background: #fffaf2;
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+  background: var(--reader-panel-surface, var(--panel));
   color: var(--accent-strong);
-  box-shadow: 0 8px 18px rgba(84, 58, 22, 0.08);
+  box-shadow: var(--reader-surface-shadow, var(--shadow));
 }
 
 .toc-section-tabs span {
@@ -220,15 +220,15 @@
 .toc-back-button {
   min-height: 38px;
   padding: 0 14px;
-  border: 1px solid rgba(84, 58, 22, 0.14);
+  border: 1px solid var(--reader-surface-border, var(--panel-border));
   border-radius: 999px;
-  background: rgba(255, 250, 242, 0.88);
+  background: var(--reader-surface, var(--panel));
   color: var(--text);
 }
 
 .toc-action-button:hover,
 .toc-back-button:hover {
-  border-color: rgba(157, 75, 47, 0.3);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-soft);
 }
 

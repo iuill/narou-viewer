@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 )
 
 func TestStorePersistsReaderStatePreferencesAndBookmarks(t *testing.T) {
@@ -502,14 +503,14 @@ func TestStoreReadsCharacterCompatibilityFixtures(t *testing.T) {
 		t.Fatalf("unexpected character profile: %+v", character)
 	}
 
-	jobs, ok, err := characters.LoadJobs(stateDir, "novel-character")
+	jobs, ok, err := extractdomain.LoadJobs(stateDir, "novel-character")
 	if err != nil {
 		t.Fatalf("LoadJobs returned error: %v", err)
 	}
 	if !ok || len(jobs) != 2 {
 		t.Fatalf("unexpected character jobs: ok=%v jobs=%+v", ok, jobs)
 	}
-	byID := map[string]characters.Job{}
+	byID := map[string]extractdomain.Job{}
 	for _, job := range jobs {
 		byID[job.JobID] = job
 	}
@@ -525,7 +526,7 @@ func TestStoreReadsCharacterCompatibilityFixtures(t *testing.T) {
 	if err := characters.SaveGeneratedSummary(stateDir, "novel-character", "4", nil); err != nil {
 		t.Fatalf("SaveGeneratedSummary returned error: %v", err)
 	}
-	reloadedJobs, ok, err := characters.LoadJobs(stateDir, "novel-character")
+	reloadedJobs, ok, err := extractdomain.LoadJobs(stateDir, "novel-character")
 	if err != nil {
 		t.Fatalf("LoadJobs after summary write returned error: %v", err)
 	}
@@ -651,7 +652,7 @@ func TestNormalizers(t *testing.T) {
 }
 
 func TestCharacterStateDirInitializationFailsForBlockedManagedDirectories(t *testing.T) {
-	for _, blockedName := range []string{"character_profiles", "character_events", filepath.Join("character_jobs", "index")} {
+	for _, blockedName := range []string{"character_profiles", "character_events"} {
 		t.Run(blockedName, func(t *testing.T) {
 			dataDir := t.TempDir()
 			stateDir := filepath.Join(dataDir, "state")
@@ -667,6 +668,19 @@ func TestCharacterStateDirInitializationFailsForBlockedManagedDirectories(t *tes
 			}
 		})
 	}
+	t.Run("extraction_jobs/index", func(t *testing.T) {
+		stateDir := t.TempDir()
+		blockedPath := filepath.Join(stateDir, "extraction_jobs", "index")
+		if err := os.MkdirAll(filepath.Dir(blockedPath), 0o755); err != nil {
+			t.Fatalf("mkdir blocked path parent: %v", err)
+		}
+		if err := os.WriteFile(blockedPath, []byte("not a directory"), 0o644); err != nil {
+			t.Fatalf("write blocked path: %v", err)
+		}
+		if err := extractdomain.EnsureStateDirs(stateDir); err == nil {
+			t.Fatal("extraction EnsureStateDirs should fail when a managed directory is blocked")
+		}
+	})
 }
 
 func TestStoreHandlesMissingAndCorruptDocuments(t *testing.T) {

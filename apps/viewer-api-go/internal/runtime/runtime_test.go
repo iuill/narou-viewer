@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 )
 
 func TestNewHandlerInitializesRuntime(t *testing.T) {
@@ -84,7 +85,7 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 		t.Fatalf("EnsureStateDirs returned error: %v", err)
 	}
 	startedAt := "2026-01-01T00:00:00Z"
-	job := characters.Job{
+	job := extractdomain.Job{
 		JobID:                     "job-running",
 		RequestedUpToEpisodeIndex: "1",
 		GenerationMode:            "heuristic",
@@ -92,7 +93,7 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 		CreatedAt:                 "2026-01-01T00:00:00Z",
 		StartedAt:                 &startedAt,
 	}
-	if err := characters.SaveJob(stateDir, "novel-1", job); err != nil {
+	if err := extractdomain.SaveJob(stateDir, "novel-1", job); err != nil {
 		t.Fatalf("SaveJob returned error: %v", err)
 	}
 
@@ -108,7 +109,7 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 		}
 	})
 
-	jobs, ok, err := characters.LoadJobs(stateDir, "novel-1")
+	jobs, ok, err := extractdomain.LoadJobs(stateDir, "novel-1")
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after NewHandler: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
@@ -121,7 +122,7 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 	if err := result.StartBackground(ctx); err != nil {
 		t.Fatalf("StartBackground returned error: %v", err)
 	}
-	jobs, ok, err = characters.LoadJobs(stateDir, "novel-1")
+	jobs, ok, err = extractdomain.LoadJobs(stateDir, "novel-1")
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after StartBackground: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}

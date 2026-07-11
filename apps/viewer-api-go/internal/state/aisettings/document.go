@@ -11,13 +11,15 @@ import (
 )
 
 type aiGenerationSettingsDocument struct {
-	SchemaVersion                  int                                      `yaml:"schema_version"`
-	Revision                       int                                      `yaml:"revision"`
-	PreferredMode                  string                                   `yaml:"preferred_mode"`
-	SelectedProfileID              *string                                  `yaml:"selected_profile_id"`
-	SharedProviders                aiSharedProvidersDocument                `yaml:"shared_providers"`
-	Profiles                       []aiGenerationProfileRecord              `yaml:"profiles"`
-	CharacterSummaryStrategyModels aiCharacterSummaryStrategyModelsDocument `yaml:"character_summary_strategy_models,omitempty"`
+	SchemaVersion                 int                                `yaml:"schema_version"`
+	Revision                      int                                `yaml:"revision"`
+	PreferredMode                 string                             `yaml:"preferred_mode"`
+	SelectedProfileID             *string                            `yaml:"selected_profile_id"`
+	SharedProviders               aiSharedProvidersDocument          `yaml:"shared_providers"`
+	Profiles                      []aiGenerationProfileRecord        `yaml:"profiles"`
+	ExtractionStrategyModels      aiExtractionStrategyModelsDocument `yaml:"extraction_strategy_models,omitempty"`
+	ExtractionRuntime             aiExtractionRuntimeDocument        `yaml:"extraction_runtime,omitempty"`
+	LegacyCharacterStrategyModels aiExtractionStrategyModelsDocument `yaml:"character_summary_strategy_models,omitempty"`
 }
 
 type aiSharedProvidersDocument struct {
@@ -35,8 +37,12 @@ type aiAPIKeyDocument struct {
 	UpdatedAt       *string `yaml:"updated_at"`
 }
 
-type aiCharacterSummaryStrategyModelsDocument struct {
+type aiExtractionStrategyModelsDocument struct {
 	NameDiscoveryModelID *string `yaml:"name_discovery_model_id,omitempty"`
+}
+
+type aiExtractionRuntimeDocument struct {
+	ParallelRequestConcurrency int `yaml:"parallel_request_concurrency"`
 }
 
 type aiGenerationProfileRecord struct {
@@ -107,6 +113,7 @@ func emptyAiGenerationSettingsDocument() aiGenerationSettingsDocument {
 				UpdatedAt:         nil,
 			},
 		},
+		ExtractionRuntime: aiExtractionRuntimeDocument{ParallelRequestConcurrency: 3},
 	}
 }
 
@@ -120,8 +127,15 @@ func normalizeAIGenerationSettingsDocument(raw aiGenerationSettingsDocument) aiG
 	}
 	doc.SharedProviders.OpenRouter = normalizeAIAPIKeyDocument(raw.SharedProviders.OpenRouter)
 	doc.SharedProviders.GoogleBooks = normalizeAIAPIKeyDocument(raw.SharedProviders.GoogleBooks)
-	doc.CharacterSummaryStrategyModels = aiCharacterSummaryStrategyModelsDocument{
-		NameDiscoveryModelID: normalizeStringPtr(raw.CharacterSummaryStrategyModels.NameDiscoveryModelID),
+	strategyModels := raw.ExtractionStrategyModels
+	if normalizeStringPtr(strategyModels.NameDiscoveryModelID) == nil {
+		strategyModels = raw.LegacyCharacterStrategyModels
+	}
+	doc.ExtractionStrategyModels = aiExtractionStrategyModelsDocument{
+		NameDiscoveryModelID: normalizeStringPtr(strategyModels.NameDiscoveryModelID),
+	}
+	doc.ExtractionRuntime = aiExtractionRuntimeDocument{
+		ParallelRequestConcurrency: normalizeParallelRequestConcurrency(raw.ExtractionRuntime.ParallelRequestConcurrency),
 	}
 	profiles := make([]aiGenerationProfileRecord, 0, len(raw.Profiles))
 	for _, profile := range raw.Profiles {
@@ -207,11 +221,24 @@ func toAIGenerationSettingsResponse(doc aiGenerationSettingsDocument) ai.Setting
 				},
 			},
 			Profiles: profiles,
-			CharacterSummaryStrategyModels: ai.CharacterSummaryStrategyModels{
-				NameDiscoveryModelID: normalizeStringPtr(doc.CharacterSummaryStrategyModels.NameDiscoveryModelID),
+			ExtractionStrategyModels: ai.ExtractionStrategyModels{
+				NameDiscoveryModelID: normalizeStringPtr(doc.ExtractionStrategyModels.NameDiscoveryModelID),
+			},
+			ExtractionRuntime: ai.ExtractionRuntime{
+				ParallelRequestConcurrency: normalizeParallelRequestConcurrency(doc.ExtractionRuntime.ParallelRequestConcurrency),
 			},
 		},
 	}
+}
+
+func normalizeParallelRequestConcurrency(value int) int {
+	if value < 1 {
+		return 3
+	}
+	if value > 20 {
+		return 20
+	}
+	return value
 }
 
 func normalizeAIAPIKeyDocument(value aiAPIKeyDocument) aiAPIKeyDocument {

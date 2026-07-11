@@ -13,14 +13,15 @@ import (
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
-	"narou-viewer/apps/viewer-api-go/internal/application/characterjobs"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerview"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
-	"narou-viewer/apps/viewer-api-go/internal/charactersummary"
+	"narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func (s *Server) handleNovelSubroute(w http.ResponseWriter, r *http.Request) {
@@ -63,8 +64,12 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 	switch suffix {
 	case "characters":
 		s.handleCharacters(w, r, novelID)
-	case "character-jobs":
-		s.handleCharacterJobs(w, r, novelID)
+	case "terms":
+		s.handleTerms(w, r, novelID)
+	case "extraction":
+		s.handleExtractionClear(w, r, novelID)
+	case "extraction-jobs":
+		s.handleExtractionJobs(w, r, novelID)
 	case "reader-settings":
 		s.handleNovelReaderSettings(w, r, novelID)
 	case "reader-assistant/chat":
@@ -234,17 +239,53 @@ func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request, novelID str
 }
 
 func (s *Server) handleCharacters(w http.ResponseWriter, r *http.Request, novelID string) {
-	switch r.Method {
-	case http.MethodGet:
-		s.handleCharacterSummary(w, r, novelID)
-	case http.MethodDelete:
-		s.handleCharacterSummaryClear(w, r, novelID)
-	default:
-		methodOnly(w, r, http.MethodGet, http.MethodDelete)
+	if !methodOnly(w, r, http.MethodGet) {
+		return
 	}
+	s.handleExtraction(w, r, novelID)
 }
 
-func (s *Server) handleCharacterSummary(w http.ResponseWriter, r *http.Request, novelID string) {
+func (s *Server) handleTerms(w http.ResponseWriter, r *http.Request, novelID string) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	upToEpisodeIndex := r.URL.Query().Get("upToEpisodeIndex")
+	if !isDigits(upToEpisodeIndex) {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
+		return
+	}
+	novelFound, episodeFound, err := s.validateNovelEpisode(r.Context(), novelID, upToEpisodeIndex)
+	if err != nil {
+		writeLibraryLookupError(w, r, novelID, upToEpisodeIndex, err)
+		return
+	}
+	if !novelFound {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	if !episodeFound {
+		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
+		return
+	}
+
+	committedFrontier := ""
+	characterSummary, _, err := characters.LoadSummaryForEpisodes(s.stateDir(), novelID, upToEpisodeIndex, s.episodeIndexes(r.Context(), novelID))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Character profiles could not be read.")
+		return
+	}
+	if characterSummary.ProcessedUpToEpisodeIndex != nil {
+		committedFrontier = *characterSummary.ProcessedUpToEpisodeIndex
+	}
+	response, err := terms.BuildResponse(s.stateDir(), novelID, upToEpisodeIndex, committedFrontier)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Term profiles could not be read.")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleExtraction(w http.ResponseWriter, r *http.Request, novelID string) {
 	upToEpisodeIndex := r.URL.Query().Get("upToEpisodeIndex")
 	if !isDigits(upToEpisodeIndex) {
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
@@ -279,35 +320,38 @@ func (s *Server) handleCharacterSummary(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-func (s *Server) handleCharacterSummaryClear(w http.ResponseWriter, r *http.Request, novelID string) {
-	if s.characterJobQueue == nil {
+func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, novelID string) {
+	if !methodOnly(w, r, http.MethodDelete) {
+		return
+	}
+	if s.extractionJobQueue == nil {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
-	result, err := s.characterJobQueue.Clear(r.Context(), novelID)
-	if errors.Is(err, characterjobs.ErrNovelNotFound) {
+	result, err := s.extractionJobQueue.Clear(r.Context(), novelID)
+	if errors.Is(err, extractionjobs.ErrNovelNotFound) {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
-	if errors.Is(err, characterjobs.ErrSummaryClear) {
-		writeError(w, http.StatusInternalServerError, "Character summary state could not be cleared.")
+	if errors.Is(err, extractionjobs.ErrExtractionClear) {
+		writeError(w, http.StatusInternalServerError, "Extraction state could not be cleared.")
 		return
 	}
-	if errors.Is(err, characterjobs.ErrSummaryActive) {
-		writeError(w, http.StatusConflict, "Character summary generation is still running.")
+	if errors.Is(err, extractionjobs.ErrExtractionActive) {
+		writeError(w, http.StatusConflict, "Extraction is still running.")
 		return
 	}
 	writeResult(w, result, err)
 }
 
-func (s *Server) handleCharacterJobs(w http.ResponseWriter, r *http.Request, novelID string) {
-	if s.characterJobQueue == nil {
+func (s *Server) handleExtractionJobs(w http.ResponseWriter, r *http.Request, novelID string) {
+	if s.extractionJobQueue == nil {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		result, err := s.characterJobQueue.List(r.Context(), novelID)
+		result, err := s.extractionJobQueue.List(r.Context(), novelID)
 		s.writeCharacterJobsResult(w, result, err)
 	case http.MethodPost:
 		body, ok := decodeObjectOrBadRequest(w, r)
@@ -328,7 +372,7 @@ func (s *Server) handleCharacterJobs(w http.ResponseWriter, r *http.Request, nov
 			}
 			generationStrategy = &strategy
 		}
-		result, created, err := s.characterJobQueue.Enqueue(r.Context(), novelID, characterjobs.EnqueueInput{
+		result, created, err := s.extractionJobQueue.Enqueue(r.Context(), novelID, extractionjobs.EnqueueInput{
 			UpToEpisodeIndex:   upToEpisodeIndex,
 			GenerationStrategy: generationStrategy,
 		})
@@ -336,43 +380,43 @@ func (s *Server) handleCharacterJobs(w http.ResponseWriter, r *http.Request, nov
 			return
 		}
 		if created {
-			s.characterJobs.Kick(s.ctx)
+			s.extractionJobs.Kick(s.ctx)
 		}
 	default:
 		methodOnly(w, r, http.MethodGet, http.MethodPost)
 	}
 }
 
-func (s *Server) writeCharacterJobsResult(w http.ResponseWriter, result characterjobs.JobsResponse, err error) {
-	if errors.Is(err, characterjobs.ErrNovelNotFound) {
+func (s *Server) writeCharacterJobsResult(w http.ResponseWriter, result extractionjobs.JobsResponse, err error) {
+	if errors.Is(err, extractionjobs.ErrNovelNotFound) {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
-	if errors.Is(err, characterjobs.ErrJobsRead) {
+	if errors.Is(err, extractionjobs.ErrJobsRead) {
 		writeError(w, http.StatusInternalServerError, "Character jobs could not be read.")
 		return
 	}
 	writeResult(w, result, err)
 }
 
-func (s *Server) writeCharacterJobEnqueueResult(w http.ResponseWriter, result characterjobs.EnqueueResponse, created bool, err error) bool {
+func (s *Server) writeCharacterJobEnqueueResult(w http.ResponseWriter, result extractionjobs.EnqueueResponse, created bool, err error) bool {
 	switch {
-	case errors.Is(err, characterjobs.ErrInvalidUpToEpisodeIndex):
+	case errors.Is(err, extractionjobs.ErrInvalidUpToEpisodeIndex):
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
 		return false
-	case errors.Is(err, characterjobs.ErrNovelNotFound):
+	case errors.Is(err, extractionjobs.ErrNovelNotFound):
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return false
-	case errors.Is(err, characterjobs.ErrEpisodeOutOfRange):
+	case errors.Is(err, extractionjobs.ErrEpisodeOutOfRange):
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is out of range.")
 		return false
-	case errors.Is(err, characterjobs.ErrInvalidGenerationStrategy):
+	case errors.Is(err, extractionjobs.ErrInvalidGenerationStrategy):
 		writeError(w, http.StatusBadRequest, "generationStrategy is invalid.")
 		return false
-	case errors.Is(err, characterjobs.ErrSettingsRead):
+	case errors.Is(err, extractionjobs.ErrSettingsRead):
 		writeError(w, http.StatusInternalServerError, "AI generation settings could not be read.")
 		return false
-	case errors.Is(err, characterjobs.ErrJobSave):
+	case errors.Is(err, extractionjobs.ErrJobSave):
 		writeError(w, http.StatusInternalServerError, "Character job could not be saved.")
 		return false
 	case err != nil:
@@ -387,7 +431,7 @@ func (s *Server) writeCharacterJobEnqueueResult(w http.ResponseWriter, result ch
 	return true
 }
 
-func (s *Server) characterSummaryHeuristicEpisodes(ctx context.Context, novelID string, upToEpisodeIndex string) []characters.HeuristicEpisode {
+func (s *Server) extractionHeuristicEpisodes(ctx context.Context, novelID string, upToEpisodeIndex string) []characters.HeuristicEpisode {
 	if s.library == nil {
 		return []characters.HeuristicEpisode{}
 	}
@@ -404,7 +448,7 @@ func (s *Server) characterSummaryHeuristicEpisodes(ctx context.Context, novelID 
 		if err != nil || episode == nil {
 			continue
 		}
-		text := charactersummary.ExtractEpisodeText(charactersummary.EpisodeInput{
+		text := extraction.ExtractEpisodeText(extraction.EpisodeInput{
 			EpisodeIndex:   episode.EpisodeIndex,
 			Title:          episode.Title,
 			Chapter:        episode.Chapter,
@@ -545,12 +589,12 @@ func readerAssistantErrorMessage(err error) string {
 	return err.Error()
 }
 
-func resolveCharacterSummaryBatchBudget(ctx context.Context, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) characterSummaryBatchBudget {
-	fallbackTokens := charactersummary.TokensFromChars(fallbackMaxBatchChars)
-	if configuredTokens := charactersummary.PositiveEnvInt("CHARACTER_SUMMARY_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
-		return characterSummaryBatchBudget{MaxTextTokens: configuredTokens}
+func resolveExtractionBatchBudget(ctx context.Context, config *store.ResolvedAIGenerationConfig, fallbackMaxBatchChars int) extractionBatchBudget {
+	fallbackTokens := extraction.TokensFromChars(fallbackMaxBatchChars)
+	if configuredTokens := extraction.PositiveEnvInt("EXTRACTION_MAX_BATCH_TOKENS", 0); configuredTokens > 0 {
+		return extractionBatchBudget{MaxTextTokens: configuredTokens}
 	}
-	budget := characterSummaryBatchBudget{MaxTextChars: fallbackMaxBatchChars, MaxTextTokens: fallbackTokens}
+	budget := extractionBatchBudget{MaxTextChars: fallbackMaxBatchChars, MaxTextTokens: fallbackTokens}
 	if config == nil {
 		return budget
 	}
@@ -560,7 +604,7 @@ func resolveCharacterSummaryBatchBudget(ctx context.Context, config *store.Resol
 	if !ok || info.ContextLength <= 0 {
 		return budget
 	}
-	return charactersummary.ResolveBatchBudget(fallbackMaxBatchChars, info.ContextLength, info.MaxCompletionTokens)
+	return extraction.ResolveBatchBudget(fallbackMaxBatchChars, info.ContextLength, info.MaxCompletionTokens)
 }
 
 func (s *Server) validateNovelEpisode(ctx context.Context, novelID string, episodeIndex string) (bool, bool, error) {

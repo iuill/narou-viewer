@@ -1,4 +1,4 @@
-FROM golang:1.25.11-bookworm AS build
+FROM golang:1.25.12-bookworm AS build
 
 WORKDIR /workspace/services/novel-fetcher
 

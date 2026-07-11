@@ -25,7 +25,7 @@ narou-viewer は、Web 小説を自分の環境に保存し、ライブラリ管
 - 本文リーダーの音声読み上げ、速度・音声・ルビ読み設定
 - 通信が切れたときに、開いていた画面へ戻りやすくする最低限のオフライン補助
 - 作品ごとのストレージ使用量表示
-- AI 生成のキャラクター一覧と、AI チャットによる小説内容の確認・整理
+- AI 生成のキャラクター・用語一覧と、AI チャットによる小説内容の確認・整理
 - 書籍化情報やカバー候補を扱う publication 情報表示
 
 本文内容を校閲したり別の文章へ改変したりするものではなく、保存済み HTML を読書画面で扱いやすい形に整えます。
@@ -47,6 +47,10 @@ narou-viewer は、Web 小説を自分の環境に保存し、ライブラリ管
 読書AIパネルでは、開いている話数までをネタバレ境界として、作品内の人物や状況を確認できます。
 
 <img src="docs/assets/reader-ai-desktop.png" alt="読書AIパネル" width="900">
+
+人物・用語一覧では、ネタバレ境界を指定して抽出し、並列workerの進み具合と生成済みの人物・用語を同じパネルで確認できます。
+
+<img src="docs/assets/reader-extraction-desktop.png" alt="人物・用語一覧と並列抽出の進捗" width="900">
 
 本文画面は、明るさや色味の異なるテーマへ切り替えられます。
 
@@ -111,7 +115,7 @@ compose の主な service:
 
 - 入口: [`docs/README.md`](docs/README.md)
 - アーキテクチャ: [`docs/architecture.md`](docs/architecture.md)
-- 機能別仕様: [`docs/character-summary.md`](docs/character-summary.md), [`docs/publication-info.md`](docs/publication-info.md), [`docs/reader-ai-assistant.md`](docs/reader-ai-assistant.md), [`docs/state-schema-policy.md`](docs/state-schema-policy.md)
+- 機能別仕様: [`docs/extraction.md`](docs/extraction.md), [`docs/publication-info.md`](docs/publication-info.md), [`docs/reader-ai-assistant.md`](docs/reader-ai-assistant.md), [`docs/state-schema-policy.md`](docs/state-schema-policy.md)
 - 開発手順: [`docs/development.md`](docs/development.md)
 - テスト方針: [`docs/testing/testing-strategy.md`](docs/testing/testing-strategy.md), [`docs/testing/e2e-setup.md`](docs/testing/e2e-setup.md)
 - self-host とデプロイ方針: [`docs/deployment.md`](docs/deployment.md)
@@ -119,6 +123,8 @@ compose の主な service:
 - エージェント向け手順: [`docs/README.md` の Skills 索引](docs/README.md#エージェント向け-skills)
 
 ## 開発
+
+ローカルの Go コマンドは Go 1.25.12 (`GOTOOLCHAIN=local`) を使用します。Dev Container では同じバージョンが導入されます。
 
 日常的な確認では、まず lint と高速テストを実行します。
 

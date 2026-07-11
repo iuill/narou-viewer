@@ -77,7 +77,7 @@ export async function putAiGenerationPreferredMode(mode: "llm" | "heuristic"): P
 }
 
 export async function postAiGenerationPlaygroundStream(payload: AiGenerationPlaygroundRequest): Promise<Response> {
-  const response = await apiFetch("/api/ai-generation/playground/character-summary/stream", {
+  const response = await apiFetch("/api/ai-generation/playground/extraction/stream", {
     method: "POST",
     headers: {
       "content-type": "application/json"

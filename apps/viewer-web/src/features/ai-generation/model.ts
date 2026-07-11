@@ -1,4 +1,4 @@
-import type { CharacterGenerationStrategy } from "../characters/types";
+import type { ExtractionGenerationStrategy as CharacterGenerationStrategy } from "../extraction/types";
 
 export type AiGenerationMode = "openrouter" | "heuristic" | "disabled" | null;
 
@@ -41,8 +41,11 @@ export type AiGenerationSettingsLike = {
       };
     };
     profiles: AiGenerationSettingsProfileLike[];
-    characterSummaryStrategyModels?: {
+    extractionStrategyModels?: {
       nameDiscoveryModelId?: string | null;
+    };
+    extractionRuntime?: {
+      parallelRequestConcurrency?: number;
     };
   };
 };
@@ -82,8 +85,12 @@ export type AiGenerationProfileDraft = {
   requireParameters: boolean;
 };
 
-export type CharacterSummaryStrategyModelsDraft = {
+export type ExtractionStrategyModelsDraft = {
   nameDiscoveryModelId: string;
+};
+
+export type ExtractionRuntimeDraft = {
+  parallelRequestConcurrency: number;
 };
 
 export type AiGenerationJobStatus = "queued" | "running" | "completed" | "failed";
@@ -97,6 +104,7 @@ export type AiGenerationHelpKey =
   | "apiKeySource"
   | "modelId"
   | "nameDiscoveryModelId"
+  | "parallelRequestConcurrency"
   | "providerOrder"
   | "allowFallbacks"
   | "requireParameters";
@@ -135,13 +143,13 @@ export function getAiGenerationModeLabel(mode: AiGenerationMode): string {
 export function getCharacterGenerationStrategyLabel(strategy: CharacterGenerationStrategy | null | undefined): string {
   switch (strategy) {
     case "discovery_parallel_correction":
-      return "名前発見 + 並列抽出 + 補正";
+      return "事前発見 + 並列抽出 + 補正";
     case "parallel_identity":
-      return "並列抽出 + 同一人物解決";
+      return "並列抽出 + 人物・用語統合";
     case "serial":
-      return "現行 serial";
+      return "順次抽出";
     default:
-      return "現行 serial";
+      return "順次抽出";
   }
 }
 

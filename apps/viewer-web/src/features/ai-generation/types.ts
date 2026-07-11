@@ -1,5 +1,10 @@
-import type { CharacterGenerationStrategy, CharacterJobSummary, CharacterSummaryEntry } from "../characters/types";
+import type { CharacterSummaryEntry } from "../characters/types";
+import type {
+  ExtractionGenerationStrategy as CharacterGenerationStrategy,
+  ExtractionJobSummary as CharacterJobSummary
+} from "../extraction/types";
 import type { EpisodeIndex } from "../reader/types";
+import type { TermEntry } from "../terms/types";
 
 export type AiGenerationSettingsResponse = {
   apiBaseUrlConfigured: boolean;
@@ -41,8 +46,11 @@ export type AiGenerationSettingsResponse = {
       requireParameters: boolean;
       updatedAt: string | null;
     }>;
-    characterSummaryStrategyModels: {
+    extractionStrategyModels: {
       nameDiscoveryModelId: string | null;
+    };
+    extractionRuntime: {
+      parallelRequestConcurrency: number;
     };
   };
 };
@@ -71,8 +79,11 @@ export type AiGenerationSettingsRequest = Partial<{
     allowFallbacks: boolean;
     requireParameters: boolean;
   }>;
-  characterSummaryStrategyModels: {
+  extractionStrategyModels: {
     nameDiscoveryModelId: string | null;
+  };
+  extractionRuntime: {
+    parallelRequestConcurrency: number;
   };
 }>;
 
@@ -104,6 +115,7 @@ export type AiGenerationPlaygroundResponse = {
   generationStrategy?: CharacterGenerationStrategy | null;
   modelId: string | null;
   characters: CharacterSummaryEntry[];
+  terms: TermEntry[];
 };
 
 export type AiGenerationPlaygroundRequest = {
@@ -138,7 +150,16 @@ export type AiGenerationPlaygroundBatchTiming = {
   chunkCount: number;
   elapsedMs: number;
   generatedCharacterCount: number;
+  generatedTermCount?: number;
+  activeWorkers?: Array<{
+    workerIndex: number;
+    batchIndex: number;
+    startEpisodeIndex: EpisodeIndex;
+    endEpisodeIndex: EpisodeIndex;
+    phase: "discovery" | "extraction" | string;
+  }>;
   mergedCharacterCount: number;
+  mergedTermCount?: number;
   message: string;
 };
 
@@ -173,7 +194,7 @@ export type AiUsageSummary = {
 
 export type AiUsageRunSummary = {
   runId: string;
-  feature: "reader-assistant" | "character-summary" | string;
+  feature: "reader-assistant" | "extraction" | string;
   workflowName: string;
   status: "completed" | "failed";
   startedAt: string;

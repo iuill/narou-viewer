@@ -18,6 +18,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 type Library interface {
@@ -564,7 +565,7 @@ func buildReaderAssistantInstructions(context readerAssistantContext) string {
 		"あなたは長編小説を読むユーザーを助ける「読書AI」です。",
 		"必ず日本語で、簡潔かつ根拠に忠実に答えてください。",
 		"読める範囲は現在のネタバレ境界までです。境界より先の話、未読話のタイトル、未読話の内容を推測・言及してはいけません。",
-		"必要な情報はツールで確認してください。手元にない本文・人物情報を記憶や推測で補わないでください。",
+		"必要な情報はツールで確認してください。手元にない本文・人物・用語情報を記憶や推測で補わないでください。",
 		"現在地の確認だけなら get_current_episode を使ってください。",
 		"前話を尋ねられた場合は get_previous_episode を使ってください。",
 		"複数話の流れ、1〜5話のような範囲指定、ここまでの状況、読書再開用の確認では load_episode_range を使ってください。",
@@ -576,7 +577,9 @@ func buildReaderAssistantInstructions(context readerAssistantContext) string {
 		"load_passages の hitIds は一度に最大5件です。6件以上読みたい場合は複数回に分けて呼び出してください。",
 		"search_episodes は範囲が明確な小さな検索だけに使い、ユーザー発話全文を検索語にしないでください。",
 		"人物関係や呼称を整理したいときは get_character_snapshot を使ってください。",
-		"人物名・用語など具体語について尋ねられ、get_character_snapshot が未生成または情報不足なら、具体語を query にして search_full_text で既読範囲を探してください。",
+		"作品固有の用語、地名、組織、物品などの説明を確認したいときは get_term_snapshot を使ってください。",
+		"人物について get_character_snapshot が未生成または情報不足なら、具体的な人物名を query にして search_full_text で既読範囲を探してください。",
+		"用語について get_term_snapshot が未生成または情報不足なら、具体的な用語を query にして search_full_text で既読範囲を探してください。",
 		"回答では Markdown の見出し記法（# や ##）と水平線（---）を使ってはいけません。節を分ける場合は普通の短い行や箇条書きにしてください。",
 		"ツール結果で分からないことは分からないと明示し、断定しないでください。",
 		"現在の作品: " + context.NovelTitle,
@@ -675,6 +678,7 @@ func readerAssistantToolDefinitions() []ai.ToolDefinition {
 			"required":   []string{"episodeIndex"},
 		}),
 		readerAssistantTool("get_character_snapshot", "生成済みの人物情報スナップショットを取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
+		readerAssistantTool("get_term_snapshot", "生成済みの用語情報スナップショットを取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
 	}
 }
 
@@ -756,6 +760,8 @@ func (s *Service) executeReaderAssistantTool(ctx context.Context, contextInfo re
 		return readerAssistantToolResult{Name: name, Result: s.loadEpisodeResult(ctx, contextInfo.NovelID, episodeIndex)}
 	case "get_character_snapshot":
 		return readerAssistantToolResult{Name: name, Result: s.characterSnapshotResult(contextInfo.NovelID, contextInfo.CurrentEpisodeIndex, contextInfo.TocEpisodes)}
+	case "get_term_snapshot":
+		return readerAssistantToolResult{Name: name, Result: s.termSnapshotResult(contextInfo.NovelID, contextInfo.CurrentEpisodeIndex, contextInfo.TocEpisodes)}
 	default:
 		return readerAssistantToolRecovery(name, errors.New("unsupported reader assistant tool: "+name))
 	}
@@ -859,6 +865,12 @@ func (s *Service) readerAssistantToolContext(ctx context.Context, novelID string
 		return requests, results, false
 	}
 
+	if !addTool("get_term_snapshot", map[string]any{
+		"upToEpisodeIndex": currentEpisodeIndex,
+	}, s.termSnapshotResult(novelID, currentEpisodeIndex, tocEpisodes)) {
+		return requests, results, false
+	}
+
 	if summary := s.summarizeEpisodeRangeResult(ctx, novelID, tocEpisodes, startNumber, endNumber, "reader_resume", nil); summary != nil {
 		if !addTool("summarize_episode_range", map[string]any{
 			"startEpisodeNumber": startNumber,
@@ -917,6 +929,8 @@ func readerAssistantToolCallMessage(name string) string {
 		return "指定話を読み込んでいます。"
 	case "get_character_snapshot":
 		return "キャラクター情報を確認しています。"
+	case "get_term_snapshot":
+		return "用語情報を確認しています。"
 	default:
 		return "読書文脈を確認しています。"
 	}
@@ -938,6 +952,8 @@ func readerAssistantToolResultMessage(name string) string {
 		return "指定話を読み込みました。"
 	case "get_character_snapshot":
 		return "キャラクター情報を確認しました。"
+	case "get_term_snapshot":
+		return "用語情報を確認しました。"
 	default:
 		return "読書文脈を確認しました。"
 	}
@@ -1368,7 +1384,7 @@ func (s *Service) loadPassagesResult(ctx context.Context, contextInfo readerAssi
 func (s *Service) characterSnapshotResult(novelID string, currentEpisodeIndex string, tocEpisodes []library.TocEpisodeSummary) map[string]any {
 	episodeIndexes := episodeIndexesFromToc(tocEpisodes)
 	summary, ok, err := characters.LoadSummaryForEpisodes(s.stateDir, novelID, currentEpisodeIndex, episodeIndexes)
-	if err != nil || !ok || summary.Status != "ready" {
+	if err != nil || !ok || summary.Status == "not_generated" {
 		return map[string]any{
 			"status":                    "not_generated",
 			"processedUpToEpisodeIndex": nil,
@@ -1389,11 +1405,75 @@ func (s *Service) characterSnapshotResult(novelID string, currentEpisodeIndex st
 			"summary":       character.Summary,
 		})
 	}
-	return map[string]any{
-		"status":                    "ready",
+	result := map[string]any{
+		"status":                    summary.Status,
 		"processedUpToEpisodeIndex": summary.ProcessedUpToEpisodeIndex,
 		"characterCount":            len(summary.Characters),
 		"characters":                items,
+	}
+	if summary.Status == "partial" {
+		result["fallbackTool"] = "search_full_text"
+		result["fallbackHint"] = "人物一覧は生成済みの話までの内容です。現在のネタバレ境界までを確認する場合は、search_full_text で既読範囲を検索できます。"
+	}
+	return result
+}
+
+func (s *Service) termSnapshotResult(novelID string, currentEpisodeIndex string, tocEpisodes []library.TocEpisodeSummary) map[string]any {
+	episodeIndexes := episodeIndexesFromToc(tocEpisodes)
+	characterSummary, _, err := characters.LoadSummaryForEpisodes(s.stateDir, novelID, currentEpisodeIndex, episodeIndexes)
+	if err != nil {
+		return termSnapshotNotGenerated("用語一覧を読み込めませんでした。具体的な用語を search_full_text で検索してください。")
+	}
+	committedFrontier := ""
+	if characterSummary.ProcessedUpToEpisodeIndex != nil {
+		committedFrontier = *characterSummary.ProcessedUpToEpisodeIndex
+	}
+	response, err := terms.BuildResponse(s.stateDir, novelID, currentEpisodeIndex, committedFrontier)
+	if err != nil {
+		return termSnapshotNotGenerated("用語一覧を読み込めませんでした。具体的な用語を search_full_text で検索してください。")
+	}
+	items := make([]map[string]any, 0, min(len(response.Terms), 30))
+	for _, term := range response.Terms {
+		if len(items) >= 30 {
+			break
+		}
+		items = append(items, map[string]any{
+			"term":        term.Term,
+			"reading":     term.Reading,
+			"category":    term.Category,
+			"description": term.Description,
+		})
+	}
+	result := map[string]any{
+		"status":                    response.Status,
+		"processedUpToEpisodeIndex": response.ProcessedUpToEpisodeIndex,
+		"termCount":                 len(response.Terms),
+		"terms":                     items,
+	}
+	if len(response.Terms) > len(items) {
+		result["truncated"] = true
+		result["fallbackTool"] = "search_full_text"
+		result["fallbackHint"] = "用語一覧は件数が多いため先頭30件のみ返しています。含まれない用語は search_full_text で既読範囲から検索できます。"
+	}
+	if response.Status != "ready" {
+		result["fallbackTool"] = "search_full_text"
+		if response.Status == "partial" {
+			result["fallbackHint"] = "用語一覧は生成済みの話までの内容です。現在のネタバレ境界までを確認する場合は、search_full_text で既読範囲を検索できます。"
+		} else {
+			result["fallbackHint"] = "ネタバレ境界までの用語一覧はまだ生成されていません。具体的な用語を search_full_text で既読範囲から検索できます。"
+		}
+	}
+	return result
+}
+
+func termSnapshotNotGenerated(hint string) map[string]any {
+	return map[string]any{
+		"status":                    "not_generated",
+		"processedUpToEpisodeIndex": nil,
+		"termCount":                 0,
+		"terms":                     []any{},
+		"fallbackTool":              "search_full_text",
+		"fallbackHint":              hint,
 	}
 }
 
@@ -2495,6 +2575,10 @@ func (s *Service) Episode(ctx context.Context, novelID string, episodeIndex stri
 
 func (s *Service) CharacterSnapshotResult(novelID string, currentEpisodeIndex string, tocEpisodes []library.TocEpisodeSummary) map[string]any {
 	return s.characterSnapshotResult(novelID, currentEpisodeIndex, tocEpisodes)
+}
+
+func (s *Service) TermSnapshotResult(novelID string, currentEpisodeIndex string, tocEpisodes []library.TocEpisodeSummary) map[string]any {
+	return s.termSnapshotResult(novelID, currentEpisodeIndex, tocEpisodes)
 }
 
 func (s *Service) ResolveConfig() (*store.ResolvedAIGenerationConfig, error) {

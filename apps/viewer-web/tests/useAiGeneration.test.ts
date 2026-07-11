@@ -108,8 +108,11 @@ function createSettings(): AiGenerationSettingsResponse {
           updatedAt: "2026-06-15T00:00:00.000Z"
         }
       ],
-      characterSummaryStrategyModels: {
+      extractionStrategyModels: {
         nameDiscoveryModelId: "openai/gpt-5-nano"
+      },
+      extractionRuntime: {
+        parallelRequestConcurrency: 4
       }
     }
   };
@@ -224,7 +227,8 @@ describe("useAiGeneration", () => {
     expect(latest?.preferredMode).toBe("llm");
     expect(latest?.selectedProfileId).toBe("profile-a");
     expect(latest?.profileDrafts).toHaveLength(1);
-    expect(latest?.characterSummaryStrategyModelsDraft.nameDiscoveryModelId).toBe("openai/gpt-5-nano");
+    expect(latest?.extractionStrategyModelsDraft.nameDiscoveryModelId).toBe("openai/gpt-5-nano");
+    expect(latest?.extractionRuntimeDraft.parallelRequestConcurrency).toBe(4);
     expect(latest?.activeJobs).toHaveLength(1);
     expect(latest?.playgroundNovelId).toBe("novel-a");
 

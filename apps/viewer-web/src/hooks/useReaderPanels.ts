@@ -9,6 +9,7 @@ export type ReaderPanelView =
   | "experimental-font"
   | "info"
   | "characters"
+  | "terms"
   | "reader-ai";
 
 type UseReaderPanelsParams = {
@@ -38,13 +39,18 @@ export function useReaderPanels({
     setActiveReaderPanel(null);
   }, []);
 
-  const closeCharacterSummaryPanel = useCallback(() => {
-    setActiveReaderPanel((current) => (current === "characters" ? null : current));
+  const closeExtractionPanel = useCallback(() => {
+    setActiveReaderPanel((current) => (current === "characters" || current === "terms" ? null : current));
   }, []);
 
   const openCharacterSummaryPanel = useCallback(() => {
     setIsReaderOverflowOpen(false);
     setActiveReaderPanel("characters");
+  }, []);
+
+  const openTermsPanel = useCallback(() => {
+    setIsReaderOverflowOpen(false);
+    setActiveReaderPanel("terms");
   }, []);
 
   const toggleReaderPanel = useCallback((panel: Exclude<ReaderPanelView, "characters">) => {
@@ -116,9 +122,10 @@ export function useReaderPanels({
   return {
     activeReaderPanel,
     closeActiveReaderPanel,
-    closeCharacterSummaryPanel,
+    closeExtractionPanel,
     closeReaderPanel,
     isCharacterSummaryOpen: activeReaderPanel === "characters",
+    isTermsOpen: activeReaderPanel === "terms",
     isReaderAiAssistantOpen: activeReaderPanel === "reader-ai",
     isReaderBookmarksOpen: activeReaderPanel === "bookmarks",
     isReaderExperimentalFontOpen: activeReaderPanel === "experimental-font",
@@ -128,6 +135,7 @@ export function useReaderPanels({
     isReaderSpeechOpen: activeReaderPanel === "speech",
     isReaderTocOpen: activeReaderPanel === "toc",
     openCharacterSummaryPanel,
+    openTermsPanel,
     setActiveReaderPanel,
     setIsReaderOverflowOpen,
     toggleReaderPanel

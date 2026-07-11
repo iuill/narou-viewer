@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"narou-viewer/apps/viewer-api-go/internal/application/characterjobs"
-	appcharactersummary "narou-viewer/apps/viewer-api-go/internal/application/charactersummary"
-	"narou-viewer/apps/viewer-api-go/internal/application/charactersummaryruntime"
+	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
+	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/application/libraryview"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
@@ -53,42 +53,42 @@ type apiErrorResponse struct {
 }
 
 type Server struct {
-	mux               *http.ServeMux
-	ctx               context.Context
-	cancel            context.CancelFunc
-	preferredMode     string
-	dataDir           string
-	library           *library.Service
-	publications      *publications.Service
-	stateStore        *store.Store
-	fetcherClient     *fetcher.Client
-	fetcherCommands   *fetchercommands.Service
-	libraryView       *libraryview.Service
-	readerAssistant   *readerassistant.Service
-	readerView        *readerview.Service
-	characterSummary  *charactersummaryruntime.Runtime
-	characterJobQueue *characterjobs.Service
-	stateInitErr      error
-	characterJobs     *appcharactersummary.JobCoordinator
-	storageProgress   *storageUsageProgressStore
-	backgroundOnce    sync.Once
+	mux                *http.ServeMux
+	ctx                context.Context
+	cancel             context.CancelFunc
+	preferredMode      string
+	dataDir            string
+	library            *library.Service
+	publications       *publications.Service
+	stateStore         *store.Store
+	fetcherClient      *fetcher.Client
+	fetcherCommands    *fetchercommands.Service
+	libraryView        *libraryview.Service
+	readerAssistant    *readerassistant.Service
+	readerView         *readerview.Service
+	extraction         *extractionruntime.Runtime
+	extractionJobQueue *extractionjobs.Service
+	stateInitErr       error
+	extractionJobs     *appextraction.JobCoordinator
+	storageProgress    *storageUsageProgressStore
+	backgroundOnce     sync.Once
 }
 
 type ServerDependencies struct {
-	DataDir                        string
-	Library                        *library.Service
-	Publications                   *publications.Service
-	StateStore                     *store.Store
-	FetcherClient                  *fetcher.Client
-	FetcherCommand                 *fetchercommands.Service
-	LibraryView                    *libraryview.Service
-	ReaderAssistant                *readerassistant.Service
-	ReaderView                     *readerview.Service
-	CharacterSummary               *charactersummaryruntime.Runtime
-	CharacterJobs                  *characterjobs.Service
-	CharacterJobCoordinator        *appcharactersummary.JobCoordinator
-	CharacterJobCoordinatorFactory func(charactersummaryruntime.Workflow, string, charactersummaryruntime.Logger) *appcharactersummary.JobCoordinator
-	StateInitErr                   error
+	DataDir                         string
+	Library                         *library.Service
+	Publications                    *publications.Service
+	StateStore                      *store.Store
+	FetcherClient                   *fetcher.Client
+	FetcherCommand                  *fetchercommands.Service
+	LibraryView                     *libraryview.Service
+	ReaderAssistant                 *readerassistant.Service
+	ReaderView                      *readerview.Service
+	Extraction                      *extractionruntime.Runtime
+	ExtractionQueue                 *extractionjobs.Service
+	ExtractionJobCoordinator        *appextraction.JobCoordinator
+	ExtractionJobCoordinatorFactory func(extractionruntime.Workflow, string, extractionruntime.Logger) *appextraction.JobCoordinator
+	StateInitErr                    error
 }
 
 func NewServerWithDependencies(deps ServerDependencies) http.Handler {
@@ -117,45 +117,45 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 			TextCache:   textCache,
 		})
 	}
-	characterSummaryRuntime := deps.CharacterSummary
-	if characterSummaryRuntime == nil {
-		characterSummaryRuntime = charactersummaryruntime.NewRuntime(charactersummaryruntime.RuntimeDependencies{
+	extractionRuntime := deps.Extraction
+	if extractionRuntime == nil {
+		extractionRuntime = extractionruntime.NewRuntime(extractionruntime.RuntimeDependencies{
 			StateDir:    stateDir,
 			UsageDBPath: filepath.Join(stateDir, "ai_usage.sqlite"),
 			Library:     deps.Library,
 			Settings:    deps.StateStore,
-			Logger:      logCharacterSummaryTiming,
+			Logger:      logExtractionTiming,
 		})
 	}
-	characterJobQueue := deps.CharacterJobs
-	if characterJobQueue == nil {
-		characterJobQueue = characterjobs.NewService(filepath.Join(deps.DataDir, "state"), deps.Library, deps.StateStore)
+	extractionJobQueue := deps.ExtractionQueue
+	if extractionJobQueue == nil {
+		extractionJobQueue = extractionjobs.NewService(filepath.Join(deps.DataDir, "state"), deps.Library, deps.StateStore)
 	}
 	s := &Server{
-		mux:               http.NewServeMux(),
-		ctx:               serverCtx,
-		cancel:            cancel,
-		preferredMode:     "heuristic",
-		dataDir:           deps.DataDir,
-		library:           deps.Library,
-		publications:      publicationService,
-		stateStore:        deps.StateStore,
-		fetcherClient:     deps.FetcherClient,
-		fetcherCommands:   deps.FetcherCommand,
-		libraryView:       libraryViewService,
-		readerAssistant:   readerAssistantService,
-		readerView:        readerViewService,
-		characterSummary:  characterSummaryRuntime,
-		characterJobQueue: characterJobQueue,
-		stateInitErr:      deps.StateInitErr,
-		storageProgress:   newStorageUsageProgressStore(),
+		mux:                http.NewServeMux(),
+		ctx:                serverCtx,
+		cancel:             cancel,
+		preferredMode:      "heuristic",
+		dataDir:            deps.DataDir,
+		library:            deps.Library,
+		publications:       publicationService,
+		stateStore:         deps.StateStore,
+		fetcherClient:      deps.FetcherClient,
+		fetcherCommands:    deps.FetcherCommand,
+		libraryView:        libraryViewService,
+		readerAssistant:    readerAssistantService,
+		readerView:         readerViewService,
+		extraction:         extractionRuntime,
+		extractionJobQueue: extractionJobQueue,
+		stateInitErr:       deps.StateInitErr,
+		storageProgress:    newStorageUsageProgressStore(),
 	}
-	s.characterJobs = deps.CharacterJobCoordinator
-	if s.characterJobs == nil && deps.CharacterJobCoordinatorFactory != nil {
-		s.characterJobs = deps.CharacterJobCoordinatorFactory(s.characterSummary.Workflow(), s.stateDir(), logCharacterSummaryTiming)
+	s.extractionJobs = deps.ExtractionJobCoordinator
+	if s.extractionJobs == nil && deps.ExtractionJobCoordinatorFactory != nil {
+		s.extractionJobs = deps.ExtractionJobCoordinatorFactory(s.extraction.Workflow(), s.stateDir(), logExtractionTiming)
 	}
-	if s.characterJobs == nil {
-		s.characterJobs = appcharactersummary.NewJobCoordinator(s.stateDir(), s.characterSummary.ProcessJob)
+	if s.extractionJobs == nil {
+		s.extractionJobs = appextraction.NewJobCoordinator(s.stateDir(), s.extraction.ProcessJob)
 	}
 	s.routes()
 	return s
@@ -169,8 +169,8 @@ func (s *Server) StartBackground(ctx context.Context) {
 		if ctx == nil {
 			ctx = s.ctx
 		}
-		s.characterJobs.Recover()
-		s.characterJobs.Kick(ctx)
+		s.extractionJobs.Recover()
+		s.extractionJobs.Kick(ctx)
 	})
 }
 
@@ -181,21 +181,21 @@ func (s *Server) Shutdown(context.Context) error {
 	return nil
 }
 
-func (s *Server) characterSummaryRuntime() *charactersummaryruntime.Runtime {
+func (s *Server) extractionRuntime() *extractionruntime.Runtime {
 	if s == nil {
-		return charactersummaryruntime.NewRuntime(charactersummaryruntime.RuntimeDependencies{Logger: logCharacterSummaryTiming})
+		return extractionruntime.NewRuntime(extractionruntime.RuntimeDependencies{Logger: logExtractionTiming})
 	}
-	if s.characterSummary == nil {
+	if s.extraction == nil {
 		stateDir := s.stateDir()
-		s.characterSummary = charactersummaryruntime.NewRuntime(charactersummaryruntime.RuntimeDependencies{
+		s.extraction = extractionruntime.NewRuntime(extractionruntime.RuntimeDependencies{
 			StateDir:    stateDir,
 			UsageDBPath: filepath.Join(stateDir, "ai_usage.sqlite"),
 			Library:     s.library,
 			Settings:    s.stateStore,
-			Logger:      logCharacterSummaryTiming,
+			Logger:      logExtractionTiming,
 		})
 	}
-	return s.characterSummary
+	return s.extraction
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

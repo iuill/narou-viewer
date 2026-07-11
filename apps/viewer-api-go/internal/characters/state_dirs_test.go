@@ -14,7 +14,6 @@ func TestEnsureStateDirsCreatesManagedDirectories(t *testing.T) {
 	for _, dir := range []string{
 		filepath.Join(stateDir, "character_profiles"),
 		filepath.Join(stateDir, "character_events"),
-		filepath.Join(stateDir, "character_jobs", "index"),
 	} {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			t.Fatalf("managed directory was not created: dir=%s info=%+v err=%v", dir, info, err)
