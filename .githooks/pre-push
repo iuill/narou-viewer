@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+remote_name="${1:-origin}"
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+bash ./scripts/scan-sensitive-changes.sh pre-push "$remote_name"
