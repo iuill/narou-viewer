@@ -48,6 +48,10 @@ narou-viewer は、Web 小説を自分の環境に保存し、ライブラリ管
 
 <img src="docs/assets/reader-ai-desktop.png" alt="読書AIパネル" width="900">
 
+人物・用語一覧では、ネタバレ境界を指定して抽出し、並列workerの進み具合と生成済みの人物・用語を同じパネルで確認できます。
+
+<img src="docs/assets/reader-extraction-desktop.png" alt="人物・用語一覧と並列抽出の進捗" width="900">
+
 本文画面は、明るさや色味の異なるテーマへ切り替えられます。
 
 森林テーマ:

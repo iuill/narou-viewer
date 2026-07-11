@@ -30,6 +30,9 @@ import {
   resolveCharacterSummaryRefreshTarget,
 } from "../characterSummaryUtils";
 
+const ACTIVE_EXTRACTION_POLL_INTERVAL_MS = 2000;
+const IDLE_EXTRACTION_POLL_INTERVAL_MS = 4000;
+
 type UseExtractionOptions = {
   currentTocEpisodeIndex: number;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
@@ -337,15 +340,19 @@ export function useExtraction({
       return;
     }
 
+    const pollInterval = activeJobs.length > 0
+      ? ACTIVE_EXTRACTION_POLL_INTERVAL_MS
+      : IDLE_EXTRACTION_POLL_INTERVAL_MS;
     const intervalId = window.setInterval(() => {
       refreshInBackground(refreshTargetEpisodeIndex);
-    }, 4000);
+    }, pollInterval);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, [
     defaultUpToEpisodeIndex,
+    activeJobs.length,
     isOpen,
     requestedUpToEpisodeOrder,
     selectedNovelId,

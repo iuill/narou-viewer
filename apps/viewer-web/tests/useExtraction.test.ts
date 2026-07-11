@@ -209,8 +209,57 @@ function renderHookHarness(props: {
 
 describe("useExtraction", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("polls every two seconds while an extraction job is active", async () => {
+    const dom = installDom();
+    const intervalSpy = vi.spyOn(dom.window, "setInterval");
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({
+      jobs: [
+        {
+          jobId: "job-running",
+          requestedUpToEpisodeIndex: "2",
+          generationMode: "openrouter",
+          generationStrategy: "parallel_identity",
+          modelId: "synthetic/model",
+          status: "running",
+          createdAt: "2026-07-11T00:00:00Z",
+          startedAt: "2026-07-11T00:00:01Z",
+          finishedAt: null,
+          errorMessage: null,
+        },
+      ],
+    });
+    vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
+    vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
+
+    let latest: HookResult | null = null;
+    let root: Root | null = null;
+    await act(async () => {
+      root = renderHookHarness({
+        currentTocEpisodeIndex: 2,
+        onRender: (result) => {
+          latest = result;
+        },
+      });
+      await flushAsyncWork();
+    });
+
+    expect(intervalSpy.mock.calls.at(-1)?.[1]).toBe(4000);
+
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+
+    expect(intervalSpy.mock.calls.at(-1)?.[1]).toBe(2000);
+
+    await act(async () => {
+      root?.unmount();
+    });
   });
 
   it("opens at the previous episode by default and keeps partial extraction data visible", async () => {

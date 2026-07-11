@@ -1,50 +1,60 @@
 package extraction
 
+type ActiveWorker struct {
+	WorkerIndex       int    `json:"workerIndex" yaml:"worker_index"`
+	BatchIndex        int    `json:"batchIndex" yaml:"batch_index"`
+	StartEpisodeIndex string `json:"startEpisodeIndex" yaml:"start_episode_index"`
+	EndEpisodeIndex   string `json:"endEpisodeIndex" yaml:"end_episode_index"`
+	Phase             string `json:"phase" yaml:"phase"`
+}
+
 type Job struct {
-	JobID                     string  `json:"jobId"`
-	RequestedUpToEpisodeIndex string  `json:"requestedUpToEpisodeIndex"`
-	ProfileID                 *string `json:"profileId"`
-	ProfileLabel              *string `json:"profileLabel"`
-	GenerationMode            string  `json:"generationMode"`
-	GenerationStrategy        string  `json:"generationStrategy"`
-	ModelID                   *string `json:"modelId"`
-	Status                    string  `json:"status"`
-	Progress                  *int    `json:"progress,omitempty"`
-	ProgressStage             *string `json:"progressStage,omitempty"`
-	CurrentBatchIndex         *int    `json:"currentBatchIndex,omitempty"`
-	BatchCount                *int    `json:"batchCount,omitempty"`
-	CompletedBatchCount       *int    `json:"completedBatchCount,omitempty"`
-	GeneratedCharacterCount   *int    `json:"generatedCharacterCount,omitempty"`
-	GeneratedTermCount        *int    `json:"generatedTermCount,omitempty"`
-	CreatedAt                 string  `json:"createdAt"`
-	StartedAt                 *string `json:"startedAt"`
-	FinishedAt                *string `json:"finishedAt"`
-	ErrorMessage              *string `json:"errorMessage"`
+	JobID                     string         `json:"jobId"`
+	RequestedUpToEpisodeIndex string         `json:"requestedUpToEpisodeIndex"`
+	ProfileID                 *string        `json:"profileId"`
+	ProfileLabel              *string        `json:"profileLabel"`
+	GenerationMode            string         `json:"generationMode"`
+	GenerationStrategy        string         `json:"generationStrategy"`
+	ModelID                   *string        `json:"modelId"`
+	Status                    string         `json:"status"`
+	Progress                  *int           `json:"progress,omitempty"`
+	ProgressStage             *string        `json:"progressStage,omitempty"`
+	CurrentBatchIndex         *int           `json:"currentBatchIndex,omitempty"`
+	BatchCount                *int           `json:"batchCount,omitempty"`
+	CompletedBatchCount       *int           `json:"completedBatchCount,omitempty"`
+	GeneratedCharacterCount   *int           `json:"generatedCharacterCount,omitempty"`
+	GeneratedTermCount        *int           `json:"generatedTermCount,omitempty"`
+	ActiveWorkers             []ActiveWorker `json:"activeWorkers,omitempty"`
+	CreatedAt                 string         `json:"createdAt"`
+	StartedAt                 *string        `json:"startedAt"`
+	FinishedAt                *string        `json:"finishedAt"`
+	ErrorMessage              *string        `json:"errorMessage"`
 }
 
 type jobDocument struct {
-	SchemaVersion             int     `yaml:"schema_version"`
-	Revision                  int     `yaml:"revision"`
-	JobID                     string  `yaml:"job_id"`
-	NovelID                   string  `yaml:"novel_id"`
-	RequestedUpToEpisodeIndex string  `yaml:"requested_up_to_episode_index"`
-	ProfileID                 *string `yaml:"profile_id"`
-	ProfileLabel              *string `yaml:"profile_label"`
-	GenerationMode            string  `yaml:"generation_mode"`
-	GenerationStrategy        string  `yaml:"generation_strategy,omitempty"`
-	ModelID                   *string `yaml:"model_id"`
-	Status                    string  `yaml:"status"`
-	Progress                  *int    `yaml:"progress,omitempty"`
-	ProgressStage             *string `yaml:"progress_stage,omitempty"`
-	CurrentBatchIndex         *int    `yaml:"current_batch_index,omitempty"`
-	BatchCount                *int    `yaml:"batch_count,omitempty"`
-	CompletedBatchCount       *int    `yaml:"completed_batch_count,omitempty"`
-	GeneratedCharacterCount   *int    `yaml:"generated_character_count,omitempty"`
-	GeneratedTermCount        *int    `yaml:"generated_term_count,omitempty"`
-	CreatedAt                 string  `yaml:"created_at"`
-	StartedAt                 *string `yaml:"started_at"`
-	FinishedAt                *string `yaml:"finished_at"`
-	ErrorMessage              *string `yaml:"error_message"`
+	SchemaVersion             int            `yaml:"schema_version"`
+	Revision                  int            `yaml:"revision"`
+	JobID                     string         `yaml:"job_id"`
+	NovelID                   string         `yaml:"novel_id"`
+	RequestedUpToEpisodeIndex string         `yaml:"requested_up_to_episode_index"`
+	ProfileID                 *string        `yaml:"profile_id"`
+	ProfileLabel              *string        `yaml:"profile_label"`
+	GenerationMode            string         `yaml:"generation_mode"`
+	GenerationStrategy        string         `yaml:"generation_strategy,omitempty"`
+	ModelID                   *string        `yaml:"model_id"`
+	Status                    string         `yaml:"status"`
+	Progress                  *int           `yaml:"progress,omitempty"`
+	ProgressStage             *string        `yaml:"progress_stage,omitempty"`
+	CurrentBatchIndex         *int           `yaml:"current_batch_index,omitempty"`
+	BatchCount                *int           `yaml:"batch_count,omitempty"`
+	CompletedBatchCount       *int           `yaml:"completed_batch_count,omitempty"`
+	GeneratedCharacterCount   *int           `yaml:"generated_character_count,omitempty"`
+	GeneratedTermCount        *int           `yaml:"generated_term_count,omitempty"`
+	ActiveWorkers             []ActiveWorker `yaml:"active_workers,omitempty"`
+	CreatedAt                 string         `yaml:"created_at"`
+	StartedAt                 *string        `yaml:"started_at"`
+	FinishedAt                *string        `yaml:"finished_at"`
+	ErrorMessage              *string        `yaml:"error_message"`
 }
 
 type jobsIndexDocument struct {

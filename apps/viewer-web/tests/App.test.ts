@@ -6334,7 +6334,7 @@ describe("App", () => {
     expect(container.textContent).toContain(
       "第1話時点までの生成済み人物一覧を表示しています。第2話時点まではまだ生成されていません。"
     );
-    expect(container.textContent).toContain("第1話時点 / 1 / 1 人");
+    expect(container.textContent).toContain("第1話時点人物 1 of 1");
 
     await act(async () => {
       root.unmount();

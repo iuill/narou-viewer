@@ -3,6 +3,7 @@ package extractionruntime
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -105,20 +106,36 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 			return
 		}
 		switch progress.Phase {
+		case "discoveryStart":
+			SetExtractionJobProgress(&job, ExtractionJobDiscoveryProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "discovery", nil, nil, job.GeneratedCharacterCount, job.GeneratedTermCount)
+			SetExtractionJobActiveWorker(&job, progress, "discovery")
+		case "discoveryComplete":
+			RemoveExtractionJobActiveWorker(&job, progress.WorkerIndex)
+			SetExtractionJobProgress(&job, ExtractionJobDiscoveryProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "discovery", nil, nil, job.GeneratedCharacterCount, job.GeneratedTermCount)
+		case "discoveryError":
+			RemoveExtractionJobActiveWorker(&job, progress.WorkerIndex)
 		case "parallelStart":
 			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
 			SetExtractionJobCompletedBatchCount(&job, progress.CompletedBatchCount)
+			SetExtractionJobActiveWorker(&job, progress, "extraction")
 		case "start":
 			completedBatches := progress.Batch.BatchIndex - 1
 			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
 			SetExtractionJobCompletedBatchCount(&job, completedBatches)
 		case "complete":
+			RemoveExtractionJobActiveWorker(&job, progress.WorkerIndex)
 			completedBatches := progress.Batch.BatchIndex
 			if progress.CompletedBatchCount > 0 {
 				completedBatches = progress.CompletedBatchCount
 			}
-			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), "batchComplete", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, &progress.MergedCharacterCount, &progress.MergedTermCount)
+			stage := "batchComplete"
+			if len(job.ActiveWorkers) > 0 {
+				stage = "batch"
+			}
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(completedBatches, progress.Batch.BatchCount), stage, &progress.Batch.BatchIndex, &progress.Batch.BatchCount, &progress.MergedCharacterCount, &progress.MergedTermCount)
 			SetExtractionJobCompletedBatchCount(&job, completedBatches)
+		case "error":
+			RemoveExtractionJobActiveWorker(&job, progress.WorkerIndex)
 		default:
 			return
 		}
@@ -223,6 +240,45 @@ func SetExtractionJobProgress(job *extractdomain.Job, progress int, stage string
 	job.BatchCount = batchCount
 	job.GeneratedCharacterCount = generatedCharacterCount
 	job.GeneratedTermCount = generatedTermCount
+	if stage == "preparing" || stage == "completed" || stage == "failed" || stage == "recovered" {
+		job.ActiveWorkers = nil
+	}
+}
+
+func SetExtractionJobActiveWorker(job *extractdomain.Job, progress appextraction.BatchProgress, phase string) {
+	if job == nil || progress.WorkerIndex < 1 || len(progress.Batch.EpisodeIndexes) == 0 {
+		return
+	}
+	worker := extractdomain.ActiveWorker{
+		WorkerIndex:       progress.WorkerIndex,
+		BatchIndex:        progress.Batch.BatchIndex,
+		StartEpisodeIndex: progress.Batch.EpisodeIndexes[0],
+		EndEpisodeIndex:   progress.Batch.EpisodeIndexes[len(progress.Batch.EpisodeIndexes)-1],
+		Phase:             phase,
+	}
+	for index := range job.ActiveWorkers {
+		if job.ActiveWorkers[index].WorkerIndex == worker.WorkerIndex {
+			job.ActiveWorkers[index] = worker
+			return
+		}
+	}
+	job.ActiveWorkers = append(job.ActiveWorkers, worker)
+	sort.Slice(job.ActiveWorkers, func(i, j int) bool {
+		return job.ActiveWorkers[i].WorkerIndex < job.ActiveWorkers[j].WorkerIndex
+	})
+}
+
+func RemoveExtractionJobActiveWorker(job *extractdomain.Job, workerIndex int) {
+	if job == nil || workerIndex < 1 || len(job.ActiveWorkers) == 0 {
+		return
+	}
+	workers := job.ActiveWorkers[:0]
+	for _, worker := range job.ActiveWorkers {
+		if worker.WorkerIndex != workerIndex {
+			workers = append(workers, worker)
+		}
+	}
+	job.ActiveWorkers = workers
 }
 
 func SetExtractionJobCompletedBatchCount(job *extractdomain.Job, completedBatchCount int) {
@@ -240,6 +296,19 @@ func ExtractionJobBatchProgressPercent(completedBatches int, batchCount int) int
 		return 70
 	}
 	return 35 + completedBatches*55/batchCount
+}
+
+func ExtractionJobDiscoveryProgressPercent(completedBatches int, batchCount int) int {
+	if batchCount <= 0 {
+		return 5
+	}
+	if completedBatches < 0 {
+		completedBatches = 0
+	}
+	if completedBatches > batchCount {
+		completedBatches = batchCount
+	}
+	return 5 + completedBatches*25/batchCount
 }
 
 func ValueOrDefaultInt(value *int, fallback int) int {

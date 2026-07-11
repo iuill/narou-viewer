@@ -127,7 +127,7 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrectionWithSee
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
-	discovered, discoveryUsage, err := r.discoverParallelIdentityNames(ctx, extractionNameDiscoveryConfig(config), novelID, upToEpisodeIndex, discoveryBatches)
+	discovered, discoveryUsage, err := r.discoverParallelIdentityNames(ctx, extractionNameDiscoveryConfig(config), novelID, upToEpisodeIndex, discoveryBatches, progressSink)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), discoveryUsage, err
 	}
@@ -351,6 +351,17 @@ func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, concurrency i
 	return firstErr
 }
 
+func newParallelWorkerSlots(concurrency int) chan int {
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	slots := make(chan int, concurrency)
+	for workerIndex := 1; workerIndex <= concurrency; workerIndex++ {
+		slots <- workerIndex
+	}
+	return slots
+}
+
 func (r *Runtime) extractParallelIdentityCandidates(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
 	return r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, nil, knownTerms, batches, progressSink, initialUnresolved)
 }
@@ -365,7 +376,11 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	completedCount := 0
 	completedCandidateCount := 0
 	completedTermNames := map[string]bool{}
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), parallelIdentityLLMConcurrency(config), func(requestCtx context.Context, index int) error {
+	concurrency := parallelIdentityLLMConcurrency(config)
+	workerSlots := newParallelWorkerSlots(concurrency)
+	runErr := runParallelIdentityLLMJobs(ctx, len(batches), concurrency, func(requestCtx context.Context, index int) error {
+		workerIndex := <-workerSlots
+		defer func() { workerSlots <- workerIndex }()
 		batch := batches[index]
 		boundary := extractionBatchBoundary(batch)
 		projectedCharacters := projectGeneratedCharactersAtBoundary(knownCharacters, boundary)
@@ -374,7 +389,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		startedAt := time.Now()
 		if progressSink != nil {
 			sinkMu.Lock()
-			progressSink(appextraction.BatchProgress{Phase: "parallelStart", Batch: batch, CompletedBatchCount: completedCount})
+			progressSink(appextraction.BatchProgress{Phase: "parallelStart", Batch: batch, WorkerIndex: workerIndex, CompletedBatchCount: completedCount})
 			sinkMu.Unlock()
 		}
 		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, "parallel_entities", projectedUnresolved)
@@ -409,6 +424,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 			progressSink(appextraction.BatchProgress{
 				Phase:                   phase,
 				Batch:                   batch,
+				WorkerIndex:             workerIndex,
 				CompletedBatchCount:     completedCount,
 				ElapsedMs:               time.Since(startedAt).Milliseconds(),
 				GeneratedCharacterCount: len(extraction.Candidates),
@@ -719,7 +735,7 @@ type parallelIdentityDiscoveredName struct {
 	Reason       string   `json:"reason"`
 }
 
-func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, batches []extractionBatch) ([]characters.GeneratedCharacter, []ai.UsageRequest, error) {
+func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, batches []extractionBatch, progressSink func(appextraction.BatchProgress)) ([]characters.GeneratedCharacter, []ai.UsageRequest, error) {
 	if len(batches) == 0 {
 		return nil, nil, nil
 	}
@@ -730,9 +746,39 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 		Err          error
 	}
 	results := make([]discoveryResult, len(batches))
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), parallelIdentityLLMConcurrency(config), func(requestCtx context.Context, index int) error {
-		names, usage, err := r.discoverParallelIdentityNamesForBatch(requestCtx, config, novelID, upToEpisodeIndex, index, batches[index])
+	concurrency := parallelIdentityLLMConcurrency(config)
+	workerSlots := newParallelWorkerSlots(concurrency)
+	var sinkMu sync.Mutex
+	completedCount := 0
+	runErr := runParallelIdentityLLMJobs(ctx, len(batches), concurrency, func(requestCtx context.Context, index int) error {
+		workerIndex := <-workerSlots
+		defer func() { workerSlots <- workerIndex }()
+		batch := batches[index]
+		startedAt := time.Now()
+		if progressSink != nil {
+			sinkMu.Lock()
+			progressSink(appextraction.BatchProgress{Phase: "discoveryStart", Batch: batch, WorkerIndex: workerIndex, CompletedBatchCount: completedCount})
+			sinkMu.Unlock()
+		}
+		names, usage, err := r.discoverParallelIdentityNamesForBatch(requestCtx, config, novelID, upToEpisodeIndex, index, batch)
 		results[index] = discoveryResult{RequestIndex: index, Names: names, Usage: usage, Err: err}
+		if progressSink != nil {
+			sinkMu.Lock()
+			phase := "discoveryError"
+			if err == nil {
+				phase = "discoveryComplete"
+				completedCount++
+			}
+			progressSink(appextraction.BatchProgress{
+				Phase:                   phase,
+				Batch:                   batch,
+				WorkerIndex:             workerIndex,
+				CompletedBatchCount:     completedCount,
+				ElapsedMs:               time.Since(startedAt).Milliseconds(),
+				GeneratedCharacterCount: len(names),
+			})
+			sinkMu.Unlock()
+		}
 		return err
 	})
 	merged := []parallelIdentityDiscoveredName{}

@@ -630,6 +630,7 @@ func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
 			CompletedBatchCount:       record.Job.CompletedBatchCount,
 			GeneratedCharacterCount:   record.Job.GeneratedCharacterCount,
 			GeneratedTermCount:        record.Job.GeneratedTermCount,
+			ActiveWorkers:             mapExtractionJobActiveWorkers(record.Job.ActiveWorkers),
 			CreatedAt:                 record.Job.CreatedAt,
 			StartedAt:                 record.Job.StartedAt,
 			FinishedAt:                record.Job.FinishedAt,
@@ -637,6 +638,20 @@ func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+func mapExtractionJobActiveWorkers(workers []extraction.ActiveWorker) []ai.JobActiveWorker {
+	result := make([]ai.JobActiveWorker, 0, len(workers))
+	for _, worker := range workers {
+		result = append(result, ai.JobActiveWorker{
+			WorkerIndex:       worker.WorkerIndex,
+			BatchIndex:        worker.BatchIndex,
+			StartEpisodeIndex: worker.StartEpisodeIndex,
+			EndEpisodeIndex:   worker.EndEpisodeIndex,
+			Phase:             worker.Phase,
+		})
+	}
+	return result
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {

@@ -68,6 +68,13 @@ created_at: 2026-01-02T00:00:00Z
 	batchCount := 2
 	completedBatchCount := 1
 	generatedCharacterCount := 3
+	activeWorkers := []ActiveWorker{{
+		WorkerIndex:       1,
+		BatchIndex:        2,
+		StartEpisodeIndex: "3",
+		EndEpisodeIndex:   "4",
+		Phase:             "extraction",
+	}}
 	if err := SaveJob(stateDir, "novel-1", Job{
 		JobID:                     "go-job-new",
 		RequestedUpToEpisodeIndex: "4",
@@ -79,6 +86,7 @@ created_at: 2026-01-02T00:00:00Z
 		BatchCount:                &batchCount,
 		CompletedBatchCount:       &completedBatchCount,
 		GeneratedCharacterCount:   &generatedCharacterCount,
+		ActiveWorkers:             activeWorkers,
 		CreatedAt:                 createdAt,
 	}); err != nil {
 		t.Fatalf("SaveJob returned error: %v", err)
@@ -93,7 +101,8 @@ created_at: 2026-01-02T00:00:00Z
 	if jobs[0].Progress == nil || *jobs[0].Progress != progress || jobs[0].ProgressStage == nil || *jobs[0].ProgressStage != progressStage ||
 		jobs[0].CurrentBatchIndex == nil || *jobs[0].CurrentBatchIndex != currentBatchIndex || jobs[0].BatchCount == nil || *jobs[0].BatchCount != batchCount ||
 		jobs[0].CompletedBatchCount == nil || *jobs[0].CompletedBatchCount != completedBatchCount ||
-		jobs[0].GeneratedCharacterCount == nil || *jobs[0].GeneratedCharacterCount != generatedCharacterCount {
+		jobs[0].GeneratedCharacterCount == nil || *jobs[0].GeneratedCharacterCount != generatedCharacterCount ||
+		len(jobs[0].ActiveWorkers) != 1 || jobs[0].ActiveWorkers[0] != activeWorkers[0] {
 		t.Fatalf("saved job progress metadata should be loaded: %+v", jobs[0])
 	}
 	allJobs, err := LoadAllJobs(stateDir)

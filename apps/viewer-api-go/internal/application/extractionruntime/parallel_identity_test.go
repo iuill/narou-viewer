@@ -216,6 +216,9 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	mergedCharacterCounts := []int{}
 	mergedTermCounts := []int{}
 	for _, progress := range progressEvents {
+		if progress.WorkerIndex != 1 {
+			t.Fatalf("single-concurrency progress should use worker 1: %+v", progressEvents)
+		}
 		if progress.Phase == "complete" {
 			completedCounts = append(completedCounts, progress.CompletedBatchCount)
 			mergedCharacterCounts = append(mergedCharacterCounts, progress.MergedCharacterCount)
@@ -1118,12 +1121,18 @@ func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
 		EpisodeIndexes: []string{"1"},
 		Chunks:         []extractionChunk{{EpisodeIndex: "1", Title: "第一話", Text: "アリスが来た。"}},
 	}}
-	generated, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-nano", AllowFallbacks: true}, "novel-1", "1", batches)
+	progressEvents := []appextraction.BatchProgress{}
+	generated, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-nano", AllowFallbacks: true}, "novel-1", "1", batches, func(progress appextraction.BatchProgress) {
+		progressEvents = append(progressEvents, progress)
+	})
 	if err != nil {
 		t.Fatalf("discoverParallelIdentityNames returned error: %v", err)
 	}
 	if len(generated) != 1 || generated[0].CanonicalName != "アリス" || len(usage) != 1 || usage[0].Kind != "extraction_name_discovery" || usage[0].TotalTokens != 36 {
 		t.Fatalf("generated=%+v usage=%+v", generated, usage)
+	}
+	if len(progressEvents) != 2 || progressEvents[0].Phase != "discoveryStart" || progressEvents[1].Phase != "discoveryComplete" || progressEvents[0].WorkerIndex != 1 || progressEvents[1].CompletedBatchCount != 1 {
+		t.Fatalf("unexpected discovery progress: %+v", progressEvents)
 	}
 }
 
@@ -1168,7 +1177,7 @@ func TestDiscoverParallelIdentityNamesReturnsPartialUsageOnFailure(t *testing.T)
 		{EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文1"}}},
 		{EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "本文2"}}},
 	}
-	_, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model", ExtractionParallelConcurrency: 1}, "novel-1", "2", batches)
+	_, usage, err := runtime.discoverParallelIdentityNames(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model", ExtractionParallelConcurrency: 1}, "novel-1", "2", batches, nil)
 	if err == nil || len(usage) != 2 || usage[0].TotalTokens == 0 || usage[1].TotalTokens == 0 {
 		t.Fatalf("discovery usage lost: usage=%+v err=%v", usage, err)
 	}

@@ -72,7 +72,8 @@ describe("ReaderTermListPanel", () => {
     expect(container.textContent).toContain("物品");
     expect(container.textContent).toContain("北の塔");
     expect(container.textContent).toContain("場所");
-    expect(container.textContent).toContain("第2話時点 / 2 / 2 用語");
+    expect(container.textContent).toContain("第2話時点");
+    expect(container.textContent).toContain("用語 2 of 2");
     expect(container.querySelectorAll(".reader-term-title span")).toHaveLength(
       1,
     );
@@ -86,7 +87,8 @@ describe("ReaderTermListPanel", () => {
       categorySelect.value = "item";
       categorySelect.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     });
-    expect(container.textContent).toContain("第2話時点 / 1 / 2 用語");
+    expect(container.textContent).toContain("第2話時点");
+    expect(container.textContent).toContain("用語 1 of 2");
     expect(container.textContent).not.toContain("北の塔");
     await act(async () => root.unmount());
   });

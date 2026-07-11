@@ -1331,6 +1331,29 @@
   margin-bottom: 0;
 }
 
+.reader-extraction-list-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.reader-extraction-list-summary span {
+  padding: 2px 7px;
+  border: 1px solid var(--reader-surface-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reader-panel-surface) 86%, var(--accent-soft) 14%);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.reader-extraction-list-summary span:last-child {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--reader-surface-border) 80%);
+  background: color-mix(in srgb, var(--accent-soft) 42%, var(--reader-panel-surface) 58%);
+  color: var(--text);
+}
+
 .reader-extraction-filter {
   display: grid;
   gap: 4px;
@@ -1370,6 +1393,75 @@
 .reader-character-job-progress {
   display: grid;
   gap: 6px;
+}
+
+.reader-extraction-workers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 7px;
+  max-height: 176px;
+  margin: 2px 0 0;
+  padding: 0 2px 0 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.reader-extraction-workers li {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--reader-surface-border) 76%);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-soft) 38%, var(--reader-panel-surface) 62%);
+}
+
+.reader-extraction-worker-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 48%, transparent);
+  animation: reader-extraction-worker-pulse 1.8s ease-out infinite;
+}
+
+.reader-extraction-worker-name {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.reader-extraction-worker-batch {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-soft);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.reader-extraction-worker-activity {
+  grid-column: 2 / -1;
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+@keyframes reader-extraction-worker-pulse {
+  70%,
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reader-extraction-worker-pulse {
+    animation: none;
+  }
 }
 
 .reader-character-job-header,
@@ -1474,9 +1566,42 @@
   color: color-mix(in srgb, var(--text) 82%, var(--accent) 18%);
 }
 
-.reader-character-job-progress p {
+.reader-extraction-progress-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.reader-extraction-progress-stats > div {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 28%, var(--reader-panel-surface) 72%);
+}
+
+.reader-extraction-progress-stats dt {
   color: var(--text-soft);
-  font-size: 0.84rem;
+  font-size: 0.68rem;
+}
+
+.reader-extraction-progress-stats dd {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin: 1px 0 0;
+  white-space: nowrap;
+}
+
+.reader-extraction-progress-stats strong {
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+
+.reader-extraction-progress-stats dd span {
+  color: var(--text-soft);
+  font-size: 0.65rem;
 }
 
 .reader-character-job-history {

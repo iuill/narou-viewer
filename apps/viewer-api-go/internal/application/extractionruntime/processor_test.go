@@ -40,11 +40,22 @@ type fakeWorkflow struct {
 
 type multiBatchWorkflow struct{}
 
+type parallelWorkerWorkflow struct{}
+
 func (multiBatchWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, _ *store.ResolvedAIGenerationConfig, _ string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
 	progressSink(appextraction.BatchProgress{Phase: "start", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}})
 	progressSink(appextraction.BatchProgress{Phase: "complete", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}, CompletedBatchCount: 1, MergedCharacterCount: 3, MergedTermCount: 2})
 	progressSink(appextraction.BatchProgress{Phase: "start", Batch: core.Batch{BatchIndex: 2, BatchCount: 2}})
 	return appextraction.FinalCounts{CharacterCount: 3, TermCount: 2}, nil
+}
+
+func (parallelWorkerWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, _ *store.ResolvedAIGenerationConfig, _ string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
+	first := core.Batch{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}}
+	second := core.Batch{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2", "3"}}
+	progressSink(appextraction.BatchProgress{Phase: "parallelStart", Batch: first, WorkerIndex: 1})
+	progressSink(appextraction.BatchProgress{Phase: "parallelStart", Batch: second, WorkerIndex: 2})
+	progressSink(appextraction.BatchProgress{Phase: "complete", Batch: first, WorkerIndex: 1, CompletedBatchCount: 1, MergedCharacterCount: 2, MergedTermCount: 1})
+	return appextraction.FinalCounts{CharacterCount: 2, TermCount: 1}, nil
 }
 
 func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
@@ -68,6 +79,7 @@ type fakeJobStore struct {
 }
 
 func (s *fakeJobStore) Save(_ string, job core.Job) error {
+	job.ActiveWorkers = append([]core.ActiveWorker(nil), job.ActiveWorkers...)
 	s.jobs = append(s.jobs, job)
 	return s.err
 }
@@ -114,6 +126,31 @@ func TestProcessorKeepsGeneratedCountsWhileNextBatchRuns(t *testing.T) {
 		}
 	}
 	t.Fatalf("second batch progress was not saved: %+v", jobStore.jobs)
+}
+
+func TestProcessorTracksActiveParallelWorkers(t *testing.T) {
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{Workflow: parallelWorkerWorkflow{}, JobStore: jobStore})
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "3"}) {
+		t.Fatal("processor should report success")
+	}
+	foundTwoWorkers := false
+	foundRemainingWorker := false
+	for _, job := range jobStore.jobs {
+		if len(job.ActiveWorkers) == 2 {
+			foundTwoWorkers = job.ActiveWorkers[0].WorkerIndex == 1 && job.ActiveWorkers[1].WorkerIndex == 2 && job.ActiveWorkers[1].EndEpisodeIndex == "3"
+		}
+		if len(job.ActiveWorkers) == 1 && job.ActiveWorkers[0].WorkerIndex == 2 {
+			foundRemainingWorker = job.ProgressStage != nil && *job.ProgressStage == "batch"
+		}
+	}
+	if !foundTwoWorkers || !foundRemainingWorker {
+		t.Fatalf("active worker snapshots were not preserved correctly: %+v", jobStore.jobs)
+	}
+	last := jobStore.jobs[len(jobStore.jobs)-1]
+	if len(last.ActiveWorkers) != 0 {
+		t.Fatalf("completed job should clear active workers: %+v", last.ActiveWorkers)
+	}
 }
 
 func TestProcessorUpdatesJobMetadataToResolvedExecutionProfile(t *testing.T) {
@@ -248,6 +285,24 @@ func TestProgressHelpers(t *testing.T) {
 	}
 	if ExtractionJobBatchProgressPercent(0, 0) != 70 || ExtractionJobBatchProgressPercent(2, 4) != 62 {
 		t.Fatal("batch progress percent returned an unexpected value")
+	}
+	if ExtractionJobDiscoveryProgressPercent(0, 4) != 5 || ExtractionJobDiscoveryProgressPercent(4, 4) != 30 {
+		t.Fatal("discovery progress percent returned an unexpected value")
+	}
+	workerProgress := appextraction.BatchProgress{
+		WorkerIndex: 2,
+		Batch: core.Batch{
+			BatchIndex:     3,
+			EpisodeIndexes: []string{"10", "11"},
+		},
+	}
+	SetExtractionJobActiveWorker(&job, workerProgress, "extraction")
+	if len(job.ActiveWorkers) != 1 || job.ActiveWorkers[0].WorkerIndex != 2 || job.ActiveWorkers[0].StartEpisodeIndex != "10" || job.ActiveWorkers[0].EndEpisodeIndex != "11" {
+		t.Fatalf("active worker should expose its episode range: %+v", job.ActiveWorkers)
+	}
+	RemoveExtractionJobActiveWorker(&job, 2)
+	if len(job.ActiveWorkers) != 0 {
+		t.Fatalf("completed worker should be removed: %+v", job.ActiveWorkers)
 	}
 	stage := "batch"
 	if ValueOrDefaultString(nil, "fallback") != "fallback" || ValueOrDefaultString(&stage, "fallback") != "batch" {

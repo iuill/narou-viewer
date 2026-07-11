@@ -26,6 +26,7 @@ type RequestOptions struct {
 type BatchProgress struct {
 	Phase                   string
 	Batch                   core.Batch
+	WorkerIndex             int
 	CompletedBatchCount     int
 	ElapsedMs               int64
 	GeneratedCharacterCount int

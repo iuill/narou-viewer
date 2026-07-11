@@ -36,6 +36,13 @@ export type ExtractionJobSummary = {
   completedBatchCount?: number;
   generatedCharacterCount?: number;
   generatedTermCount?: number;
+  activeWorkers?: Array<{
+    workerIndex: number;
+    batchIndex: number;
+    startEpisodeIndex: EpisodeIndex;
+    endEpisodeIndex: EpisodeIndex;
+    phase: "discovery" | "extraction" | string;
+  }>;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

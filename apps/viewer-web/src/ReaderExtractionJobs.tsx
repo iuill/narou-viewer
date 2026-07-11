@@ -14,6 +14,7 @@ const EXTRACTION_JOB_STAGE_LABELS: Record<string, string> = {
   preparing: "準備中",
   batch: "人物・用語一覧を生成中",
   batchComplete: "人物・用語一覧を反映中",
+  discovery: "人物候補を発見中",
   completed: "完了",
   failed: "失敗",
   recovered: "再開待ち"
@@ -68,26 +69,41 @@ function ExtractionJobCard({
         </strong>
         <span>{formatExtractionJobStage(job)}</span>
       </div>
-      <ExtractionJobProgress job={job} />
+      <ExtractionJobProgress formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} />
       <p>{formatDate(job.createdAt)}</p>
       {job.errorMessage ? <p className="message error">{job.errorMessage}</p> : null}
     </article>
   );
 }
 
-function ExtractionJobProgress({ job }: { job: ExtractionJobSummary }) {
+function ExtractionJobProgress({
+  formatEpisodeOrderLabel,
+  job
+}: {
+  formatEpisodeOrderLabel: (episodeIndex: string) => string;
+  job: ExtractionJobSummary;
+}) {
   const progress = clampProgress(job.progress);
-  const batchLabel =
+  const batchStat =
     typeof job.completedBatchCount === "number" && job.batchCount
-      ? `batch 完了 ${job.completedBatchCount}/${job.batchCount}`
+      ? { value: `${job.completedBatchCount} of ${job.batchCount}`, detail: "完了" }
       : job.currentBatchIndex && job.batchCount
-        ? `batch 実行中 ${job.currentBatchIndex}/${job.batchCount}`
+        ? { value: `${job.currentBatchIndex} of ${job.batchCount}`, detail: "実行中" }
         : null;
-  const generatedLabel =
-    typeof job.generatedCharacterCount === "number" ? `${job.generatedCharacterCount} 人まで反映` : null;
-  const generatedTermLabel = typeof job.generatedTermCount === "number" ? `${job.generatedTermCount} 用語まで反映` : null;
 
-  if (progress === null && batchLabel === null && generatedLabel === null && generatedTermLabel === null) {
+  const activeWorkers = job.activeWorkers ?? [];
+  const progressStats = [
+    progress !== null ? { label: "全体", value: `${progress}%`, detail: "" } : null,
+    batchStat ? { label: "batch", ...batchStat } : null,
+    typeof job.generatedCharacterCount === "number"
+      ? { label: "人物", value: String(job.generatedCharacterCount), detail: "反映済" }
+      : null,
+    typeof job.generatedTermCount === "number"
+      ? { label: "用語", value: String(job.generatedTermCount), detail: "反映済" }
+      : null
+  ].filter((value): value is { label: string; value: string; detail: string } => value !== null);
+
+  if (progressStats.length === 0 && activeWorkers.length === 0) {
     return null;
   }
 
@@ -105,14 +121,39 @@ function ExtractionJobProgress({ job }: { job: ExtractionJobSummary }) {
           <span style={{ width: `${progress}%` }} />
         </div>
       ) : null}
-      <p>
-        {progress !== null ? `全体 ${progress}%` : null}
-        {batchLabel ? `${progress !== null ? " / " : ""}${batchLabel}` : null}
-        {generatedLabel ? `${progress !== null || batchLabel ? " / " : ""}${generatedLabel}` : null}
-        {generatedTermLabel
-          ? `${progress !== null || batchLabel || generatedLabel ? " / " : ""}${generatedTermLabel}`
-          : null}
-      </p>
+      {progressStats.length > 0 ? (
+        <dl className="reader-extraction-progress-stats">
+          {progressStats.map((stat) => (
+            <div key={stat.label}>
+              <dt>{stat.label}</dt>
+              <dd>
+                <strong>{stat.value}</strong>
+                {stat.detail ? <span>{stat.detail}</span> : null}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {activeWorkers.length > 0 ? (
+        <ul aria-label="並列処理中のworker" className="reader-extraction-workers">
+          {activeWorkers.map((worker) => {
+            const start = formatEpisodeOrderLabel(worker.startEpisodeIndex);
+            const end = formatEpisodeOrderLabel(worker.endEpisodeIndex);
+            const episodeRange = start === end ? `第${start}話` : `第${start}〜${end}話`;
+            const activity = worker.phase === "discovery" ? "人物候補を探索中…" : "人物・用語を抽出中…";
+            return (
+              <li key={`${worker.workerIndex}-${worker.batchIndex}-${worker.phase}`}>
+                <span aria-hidden="true" className="reader-extraction-worker-pulse" />
+                <span className="reader-extraction-worker-name">worker {worker.workerIndex}</span>
+                <span className="reader-extraction-worker-batch">batch {worker.batchIndex}</span>
+                <span className="reader-extraction-worker-activity">
+                  {episodeRange} {activity}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
     </div>
   );
 }

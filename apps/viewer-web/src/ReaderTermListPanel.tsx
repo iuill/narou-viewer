@@ -134,8 +134,9 @@ export function ReaderTermListPanel({
             <div className="panel-header compact reader-extraction-list-header">
               <div>
                 <h3>一覧</h3>
-                <p>
-                  第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点 / {visibleTerms.length} / {data.terms.length} 用語
+                <p className="reader-extraction-list-summary">
+                  <span>第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点</span>
+                  <span>用語 {visibleTerms.length} of {data.terms.length}</span>
                 </p>
               </div>
               <label className="reader-extraction-filter">

@@ -232,6 +232,7 @@ func (d jobDocument) toJob() Job {
 		CompletedBatchCount:       d.CompletedBatchCount,
 		GeneratedCharacterCount:   d.GeneratedCharacterCount,
 		GeneratedTermCount:        d.GeneratedTermCount,
+		ActiveWorkers:             append([]ActiveWorker(nil), d.ActiveWorkers...),
 		CreatedAt:                 d.CreatedAt,
 		StartedAt:                 d.StartedAt,
 		FinishedAt:                d.FinishedAt,
@@ -292,6 +293,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 		job.CompletedBatchCount = nil
 		job.GeneratedCharacterCount = nil
 		job.GeneratedTermCount = nil
+		job.ActiveWorkers = nil
 		if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
 			return recovered, err
 		}
@@ -320,6 +322,7 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		CompletedBatchCount:       job.CompletedBatchCount,
 		GeneratedCharacterCount:   job.GeneratedCharacterCount,
 		GeneratedTermCount:        job.GeneratedTermCount,
+		ActiveWorkers:             append([]ActiveWorker(nil), job.ActiveWorkers...),
 		CreatedAt:                 job.CreatedAt,
 		StartedAt:                 job.StartedAt,
 		FinishedAt:                job.FinishedAt,

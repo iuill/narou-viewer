@@ -125,6 +125,22 @@ describe("ReaderCharacterSummaryPanel", () => {
           batchCount: 4,
           completedBatchCount: 2,
           generatedCharacterCount: 5,
+          activeWorkers: [
+            {
+              workerIndex: 1,
+              batchIndex: 3,
+              startEpisodeIndex: "9",
+              endEpisodeIndex: "10",
+              phase: "extraction"
+            },
+            {
+              workerIndex: 2,
+              batchIndex: 4,
+              startEpisodeIndex: "11",
+              endEpisodeIndex: "11",
+              phase: "discovery"
+            }
+          ],
           createdAt: "2026-03-22T10:00:00Z",
           errorMessage: null
         }
@@ -193,7 +209,11 @@ describe("ReaderCharacterSummaryPanel", () => {
     expect(container.textContent).toContain("並列抽出 + 人物・用語統合");
     expect(container.textContent).toContain("事前発見 + 並列抽出 + 補正");
     expect(container.textContent).toContain("人物・用語一覧を生成中");
-    expect(container.textContent).toContain("全体 62% / batch 完了 2/4 / 5 人まで反映");
+    expect(container.textContent).toContain("全体62%");
+    expect(container.textContent).toContain("batch2 of 4完了");
+    expect(container.textContent).toContain("人物5反映済");
+    expect(container.textContent).toContain("worker 1batch 3第9〜10話 人物・用語を抽出中…");
+    expect(container.textContent).toContain("worker 2batch 4第11話 人物候補を探索中…");
     expect(container.textContent).toContain("過去の生成履歴");
     expect(container.textContent).toContain("順次抽出");
     expect(container.textContent).toContain("timeout");
@@ -422,7 +442,8 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(container.textContent).toContain("第2話時点 / 1 / 1 人");
+    expect(container.textContent).toContain("第2話時点");
+    expect(container.textContent).toContain("人物 1 of 1");
     expect(container.textContent).toContain("初登場第1話");
     expect(container.textContent).toContain("第2話まで");
     expect(container.textContent).toContain("第3話まで");

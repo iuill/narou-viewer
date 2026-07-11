@@ -138,8 +138,9 @@ export function ReaderCharacterSummaryPanel({
             <div className="panel-header compact reader-extraction-list-header">
               <div>
                 <h3>一覧</h3>
-                <p>
-                  第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点 / {visibleCharacters.length} / {data.characters.length} 人
+                <p className="reader-extraction-list-summary">
+                  <span>第{formatEpisodeOrderLabel(displayedBoundary ?? data.upToEpisodeIndex)}話時点</span>
+                  <span>人物 {visibleCharacters.length} of {data.characters.length}</span>
                 </p>
               </div>
               <label className="reader-extraction-filter">

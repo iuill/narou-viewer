@@ -151,6 +151,13 @@ export type AiGenerationPlaygroundBatchTiming = {
   elapsedMs: number;
   generatedCharacterCount: number;
   generatedTermCount?: number;
+  activeWorkers?: Array<{
+    workerIndex: number;
+    batchIndex: number;
+    startEpisodeIndex: EpisodeIndex;
+    endEpisodeIndex: EpisodeIndex;
+    phase: "discovery" | "extraction" | string;
+  }>;
   mergedCharacterCount: number;
   mergedTermCount?: number;
   message: string;
