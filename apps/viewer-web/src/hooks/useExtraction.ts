@@ -103,6 +103,7 @@ export function useExtraction({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jobPollError, setJobPollError] = useState<string | null>(null);
   const requestSeqRef = useRef(0);
   const loadInFlightCountRef = useRef(0);
   const jobPollTokenRef = useRef<object | null>(null);
@@ -183,6 +184,7 @@ export function useExtraction({
       setJobs(null);
       setNotice(null);
       setError(null);
+      setJobPollError(null);
     }
   }
 
@@ -208,6 +210,7 @@ export function useExtraction({
     }
 
     setError(null);
+    setJobPollError(null);
 
     try {
       const novelId = scope.novelId;
@@ -310,6 +313,7 @@ export function useExtraction({
         }
 
         setJobs(nextJobs);
+        setJobPollError(null);
         const hasActiveJobs = nextJobs.jobs.some((job) =>
           isCharacterSummaryActiveJob(job.status),
         );
@@ -325,7 +329,7 @@ export function useExtraction({
           return false;
         }
 
-        setError(
+        setJobPollError(
           pollError instanceof Error ? pollError.message : "Unknown error",
         );
         return true;
@@ -341,6 +345,7 @@ export function useExtraction({
     setTermsData(null);
     setJobs(null);
     setError(null);
+    setJobPollError(null);
     setNotice(null);
     setRequestedUpToEpisodeIndex("");
     setRequestedGenerationStrategy("parallel_identity");
@@ -502,6 +507,7 @@ export function useExtraction({
       setJobs(null);
       setNotice(null);
       setError(null);
+      setJobPollError(null);
     }
   }
 
@@ -516,6 +522,7 @@ export function useExtraction({
       setJobs(null);
       setNotice(null);
       setError(null);
+      setJobPollError(null);
     }
   }
 
@@ -533,6 +540,7 @@ export function useExtraction({
       requestedUpToEpisodeActualIndex ?? defaultUpToEpisodeActualIndex;
     setIsClearing(true);
     setError(null);
+    setJobPollError(null);
 
     try {
       const result = await clearExtraction(novelId);
@@ -585,6 +593,7 @@ export function useExtraction({
 
     setIsSubmitting(true);
     setError(null);
+    setJobPollError(null);
 
     try {
       const result = await submitExtraction(novelId, {
@@ -618,7 +627,7 @@ export function useExtraction({
     data,
     termsData,
     defaultUpToEpisodeIndex,
-    error,
+    error: error ?? jobPollError,
     handleClear,
     handleGenerate,
     handleOpen,

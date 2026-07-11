@@ -279,6 +279,9 @@ describe("useExtraction", () => {
           return { jobs: [runningJob] };
         }
         if (jobRequestCount === 2) {
+          throw new Error("ジョブ状態の取得に失敗しました。");
+        }
+        if (jobRequestCount === 3) {
           return await delayedPoll.promise;
         }
         return {
@@ -335,8 +338,17 @@ describe("useExtraction", () => {
     });
 
     expect(jobRequestCount).toBe(2);
-    expect(timersWithDelay(2000)).toHaveLength(0);
     expect(maxInFlightJobRequests).toBe(1);
+    expect(latest?.error).toBe("ジョブ状態の取得に失敗しました。");
+    expect(timersWithDelay(2000)).toHaveLength(1);
+
+    await act(async () => {
+      runNextTimer(2000);
+      await flushAsyncWork();
+    });
+
+    expect(jobRequestCount).toBe(3);
+    expect(timersWithDelay(2000)).toHaveLength(0);
 
     await act(async () => {
       delayedPoll.resolve({
@@ -354,6 +366,7 @@ describe("useExtraction", () => {
     });
 
     expect(latest?.activeJobs[0]?.progress).toBe(75);
+    expect(latest?.error).toBeNull();
     expect(timersWithDelay(2000)).toHaveLength(1);
     expect(fetchCharacterSummary).toHaveBeenCalledTimes(1);
     expect(fetchTerms).toHaveBeenCalledTimes(1);
@@ -364,7 +377,7 @@ describe("useExtraction", () => {
     });
 
     expect(maxInFlightJobRequests).toBe(1);
-    expect(jobRequestCount).toBe(4);
+    expect(jobRequestCount).toBe(5);
     expect(timersWithDelay(4000)).toHaveLength(1);
     expect(fetchCharacterSummary).toHaveBeenCalledTimes(2);
     expect(fetchTerms).toHaveBeenCalledTimes(2);
@@ -376,7 +389,7 @@ describe("useExtraction", () => {
 
     expect(fetchCharacterSummary).toHaveBeenCalledTimes(2);
     expect(fetchTerms).toHaveBeenCalledTimes(2);
-    expect(jobRequestCount).toBe(4);
+    expect(jobRequestCount).toBe(5);
     expect(timersWithDelay(4000)).toHaveLength(1);
 
     await act(async () => {
