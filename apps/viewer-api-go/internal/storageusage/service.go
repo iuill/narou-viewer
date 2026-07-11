@@ -182,6 +182,9 @@ func (s *Service) CollectWithProgress(ctx context.Context, report ProgressReport
 			return nil
 		}
 		if d.IsDir() {
+			if filepath.Dir(path) == dataDir && isLegacyDataDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()
@@ -338,9 +341,6 @@ func classifyPath(rel string, index workUsageIndex) fileClassification {
 	if target, rest, ok := fallbackNovelFetcherWork(rel); ok {
 		return fileClassification{category: classifyWorkFile(rest), novel: target}
 	}
-	if target, rest, ok := legacyNovelWork(rel); ok {
-		return fileClassification{category: classifyLegacyWorkFile(rest), novel: target}
-	}
 	if isCachePath(rel) {
 		return fileClassification{category: CategoryCache}
 	}
@@ -435,60 +435,6 @@ func novelFetcherWorkPathKey(rel string) (string, string, bool) {
 	return key, parts[2], true
 }
 
-func legacyNovelWork(rel string) (*workUsageTarget, string, bool) {
-	const prefix = "小説データ/"
-	if !strings.HasPrefix(rel, prefix) {
-		return nil, "", false
-	}
-	rest := strings.TrimPrefix(rel, prefix)
-	parts := strings.SplitN(rest, "/", 3)
-	if len(parts) < 3 || parts[0] == "" || parts[1] == "" {
-		return nil, "", false
-	}
-	title := legacyNovelTitle(parts[1])
-	target := &workUsageTarget{
-		relDir:   prefix + parts[0] + "/" + parts[1],
-		novelID:  "legacy:" + parts[0] + ":" + parts[1],
-		title:    title,
-		siteName: parts[0],
-		source:   "legacy",
-	}
-	return target, parts[2], true
-}
-
-func legacyNovelTitle(dirName string) string {
-	first, rest, ok := strings.Cut(dirName, " ")
-	if !ok || !looksLikeLegacyWorkID(first) {
-		return dirName
-	}
-	trimmed := strings.TrimSpace(rest)
-	if trimmed == "" {
-		return dirName
-	}
-	return trimmed
-}
-
-func looksLikeLegacyWorkID(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if len(value) < 2 || value[0] != 'n' {
-		return false
-	}
-	index := 1
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	if index == 1 {
-		return false
-	}
-	for index < len(value) {
-		if value[index] < 'a' || value[index] > 'z' {
-			return false
-		}
-		index++
-	}
-	return true
-}
-
 func classifyWorkFile(rest string) CategoryID {
 	first := firstPathSegment(rest)
 	switch first {
@@ -501,20 +447,14 @@ func classifyWorkFile(rest string) CategoryID {
 	}
 }
 
-func classifyLegacyWorkFile(rest string) CategoryID {
-	switch firstPathSegment(rest) {
-	case "raw":
-		return CategoryCache
-	default:
-		return CategoryNovelData
-	}
-}
-
 func isCachePath(rel string) bool {
 	return rel == "state/reader_search.sqlite" ||
 		strings.HasPrefix(rel, "state/reader_search.sqlite-") ||
-		strings.HasPrefix(rel, "tmp/") ||
-		strings.HasPrefix(rel, ".narou/")
+		strings.HasPrefix(rel, "tmp/")
+}
+
+func isLegacyDataDir(rel string) bool {
+	return rel == ".narou" || rel == "小説データ"
 }
 
 func firstPathSegment(path string) string {

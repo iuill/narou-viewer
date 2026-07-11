@@ -97,7 +97,6 @@
 - ライブラリ読取:
   - `data/novel-fetcher/library.sqlite` から一覧を構成できるか
   - site + siteWorkID から `novelId` が安定するか
-  - legacy read-only データは互換用途に限定されるか
 - 話一覧組み立て:
   - `episode_index` と fetcher 側 episode ID の対応が正しいか
   - title / chapter / subchapter の fallback が正しいか

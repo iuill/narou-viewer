@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,18 +23,16 @@ func TestCollectClassifiesNovelDataCacheAndOtherStorage(t *testing.T) {
 	writeFile(t, filepath.Join(dataDir, "novel-fetcher", "works", "syosetu", "n1234", "assets", "episodes", "1", "pic.jpg"), "jpg")
 	writeFile(t, filepath.Join(dataDir, "state", "reader_search.sqlite"), "reader-cache")
 	writeFile(t, filepath.Join(dataDir, "state", "bookmarks.yaml"), "state")
-	writeFile(t, filepath.Join(dataDir, "小説データ", "小説家になろう", "n9999 Legacy", "本文", "1.txt"), "legacy-body")
-	writeFile(t, filepath.Join(dataDir, "小説データ", "小説家になろう", "n9999 Legacy", "raw", "1.html"), "legacy-raw")
 
 	usage, err := New(dataDir).Collect(nil)
 	if err != nil {
 		t.Fatalf("Collect returned error: %v", err)
 	}
 
-	if got := categoryBytes(usage, CategoryNovelData); got != int64(len("episode-json")+len("jpg")+len("legacy-body")) {
+	if got := categoryBytes(usage, CategoryNovelData); got != int64(len("episode-json")+len("jpg")) {
 		t.Fatalf("novel data bytes = %d", got)
 	}
-	if got := categoryBytes(usage, CategoryCache); got != int64(len("raw-html")+len("reader-cache")+len("legacy-raw")) {
+	if got := categoryBytes(usage, CategoryCache); got != int64(len("raw-html")+len("reader-cache")) {
 		t.Fatalf("cache bytes = %d", got)
 	}
 	if got := categoryBytes(usage, CategoryOther); got <= int64(len("state")) {
@@ -42,8 +41,8 @@ func TestCollectClassifiesNovelDataCacheAndOtherStorage(t *testing.T) {
 	if usage.TotalBytes != categoryBytes(usage, CategoryNovelData)+categoryBytes(usage, CategoryCache)+categoryBytes(usage, CategoryOther) {
 		t.Fatalf("total bytes should match category sum: %+v", usage)
 	}
-	if len(usage.Novels) != 2 {
-		t.Fatalf("expected current and legacy novels, got %+v", usage.Novels)
+	if len(usage.Novels) != 1 {
+		t.Fatalf("expected only the current novel, got %+v", usage.Novels)
 	}
 	current := findNovelByTitle(usage, "Fixture Novel")
 	if current == nil {
@@ -52,9 +51,33 @@ func TestCollectClassifiesNovelDataCacheAndOtherStorage(t *testing.T) {
 	if current.NovelDataBytes != int64(len("episode-json")+len("jpg")) || current.CacheBytes != int64(len("raw-html")) {
 		t.Fatalf("current novel bytes = %+v", current)
 	}
-	legacy := findNovelByTitle(usage, "Legacy")
-	if legacy == nil || legacy.Source != "legacy" || legacy.NovelDataBytes != int64(len("legacy-body")) || legacy.CacheBytes != int64(len("legacy-raw")) {
-		t.Fatalf("legacy novel bytes = %+v", legacy)
+}
+
+func TestCollectExcludesLegacyDataDirectoriesFromAllTotals(t *testing.T) {
+	dataDir := t.TempDir()
+	createLibrarySQLite(t, filepath.Join(dataDir, "novel-fetcher", "library.sqlite"))
+	writeFile(t, filepath.Join(dataDir, "novel-fetcher", "works", "syosetu", "n1234", "episodes", "1.json"), "episode-json")
+
+	service := New(dataDir)
+	before, err := service.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect before legacy fixtures returned error: %v", err)
+	}
+
+	writeFile(t, filepath.Join(dataDir, "小説データ", "小説家になろう", "n9999 Legacy", "本文", "1.txt"), "legacy-body")
+	writeFile(t, filepath.Join(dataDir, "小説データ", "小説家になろう", "n9999 Legacy", "raw", "1.html"), "legacy-raw")
+	writeFile(t, filepath.Join(dataDir, ".narou", "n9999", "1.txt"), "legacy-narou")
+
+	after, err := service.Collect(context.Background())
+	if err != nil {
+		t.Fatalf("Collect after legacy fixtures returned error: %v", err)
+	}
+
+	if before.TotalBytes != after.TotalBytes ||
+		!reflect.DeepEqual(before.Categories, after.Categories) ||
+		!reflect.DeepEqual(before.Novels, after.Novels) ||
+		!reflect.DeepEqual(before.Warnings, after.Warnings) {
+		t.Fatalf("legacy directories changed storage usage:\nbefore=%+v\nafter=%+v", before, after)
 	}
 }
 
@@ -72,8 +95,8 @@ func TestCollectReportsRoughNovelProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectWithProgress returned error: %v", err)
 	}
-	if len(usage.Novels) != 2 {
-		t.Fatalf("expected two novels, got %+v", usage.Novels)
+	if len(usage.Novels) != 1 {
+		t.Fatalf("expected one current novel, got %+v", usage.Novels)
 	}
 	if len(progressEvents) == 0 {
 		t.Fatal("expected progress events")
@@ -82,8 +105,8 @@ func TestCollectReportsRoughNovelProgress(t *testing.T) {
 		t.Fatalf("first progress event should be preparing, got %+v", progressEvents[0])
 	}
 	last := progressEvents[len(progressEvents)-1]
-	if last.Phase != ProgressPhaseCompleted || last.CheckedNovels != 2 || last.TotalNovels != 2 {
-		t.Fatalf("last progress event should complete two novels, got %+v", last)
+	if last.Phase != ProgressPhaseCompleted || last.CheckedNovels != 1 || last.TotalNovels != 1 {
+		t.Fatalf("last progress event should complete one novel, got %+v", last)
 	}
 }
 
@@ -314,11 +337,8 @@ func TestStorageUsageHelpersCoverFallbackBranches(t *testing.T) {
 	if got := cleanRelPath("."); got != "" {
 		t.Fatalf("cleanRelPath('.') = %q", got)
 	}
-	if target, _, ok := legacyNovelWork("小説データ/site/My Novel/本文/1.txt"); !ok || target.title != "My Novel" {
-		t.Fatalf("legacy title without id prefix should be preserved: %+v", target)
-	}
-	if target, _, ok := legacyNovelWork("小説データ/site/n1234a Title/本文/1.txt"); !ok || target.title != "Title" {
-		t.Fatalf("legacy title with ncode prefix should be trimmed: %+v", target)
+	if !isLegacyDataDir(".narou") || !isLegacyDataDir("小説データ") || isLegacyDataDir("novel-fetcher") {
+		t.Fatal("legacy data directories should be identified only at the data root")
 	}
 	if got := displayOrFallback("", " fallback "); got != "fallback" {
 		t.Fatalf("displayOrFallback should trim fallback, got %q", got)
