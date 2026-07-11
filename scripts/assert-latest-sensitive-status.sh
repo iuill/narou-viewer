@@ -11,7 +11,7 @@ repository="${GITHUB_REPOSITORY:-}"
 }
 
 latest_target_url="$(gh api "repos/${repository}/commits/${sha}/statuses" \
-  --jq '[.[] | select(.context == "trusted-sensitive-information/metadata")][0].target_url // ""')"
+  --jq '[.[] | select(.context == "sensitive-information/metadata-advisory")][0].target_url // ""')"
 [[ "$latest_target_url" == "$expected_target_url" ]] || {
   echo "より新しい機微情報検査が開始されたため、この結果は発行しません。" >&2
   exit 1

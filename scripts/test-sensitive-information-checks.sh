@@ -42,7 +42,7 @@ if [[ "${1:-}" == "git" ]]; then
     exit 1
   fi
 fi
-if [[ "${1:-}" == "github" && "${FAKE_GITHUB_CONTENT:-}" == *SECRET_TEST_TOKEN* ]]; then
+if [[ "${1:-}" == "github" && ( "${FAKE_GITHUB_CONTENT:-}" == *SECRET_TEST_TOKEN* || " $* " == *" ${FAKE_DIRTY_PR_URL:-__none__} "* ) ]]; then
   echo "secret detected (redacted)" >&2
   exit 1
 fi
@@ -58,8 +58,12 @@ if [[ -n "${FAKE_LATEST_TARGET_URL:-}" ]]; then
   exit 0
 fi
 if [[ -n "${EXPECT_STATUS_TARGET_URL:-}" ]]; then
-  [[ " $* " == *" context=trusted-sensitive-information/metadata "* ]]
+  [[ " $* " == *" context=sensitive-information/metadata-advisory "* ]]
   [[ " $* " == *" target_url=${EXPECT_STATUS_TARGET_URL} "* ]]
+  exit 0
+fi
+if [[ -n "${FAKE_PRS_JSON_FILE:-}" ]]; then
+  cat "$FAKE_PRS_JSON_FILE"
   exit 0
 fi
 cat "$FAKE_PR_JSON_FILE"
@@ -127,6 +131,25 @@ GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
   PATH="$fake_bin:$PATH" bash "$source_root/scripts/update-sensitive-status.sh" \
   1111111111111111111111111111111111111111 pending test "$status_target"
 
+# A clean PR cannot overwrite a dirty PR when both share the same head SHA.
+prs_json="$tmpdir/prs.json"
+cat >"$prs_json" <<'EOF'
+[[{"number":41,"html_url":"https://github.com/example/repository/pull/41","head":{"sha":"1111111111111111111111111111111111111111"}},{"number":42,"html_url":"https://github.com/example/repository/pull/42","head":{"sha":"1111111111111111111111111111111111111111"}},{"number":43,"html_url":"https://github.com/example/repository/pull/43","head":{"sha":"3333333333333333333333333333333333333333"}}]]
+EOF
+metadata_dir="$tmpdir/shared-head-metadata"
+if GITHUB_REPOSITORY=example/repository FAKE_PRS_JSON_FILE="$prs_json" \
+  FAKE_DIRTY_PR_URL=https://github.com/example/repository/pull/41 PATH="$fake_bin:$PATH" \
+  bash "$source_root/scripts/scan-pull-request-metadata-for-head.sh" \
+  1111111111111111111111111111111111111111 "$metadata_dir" >/dev/null 2>&1; then
+  echo "expected dirty PR metadata sharing a head SHA to fail the combined scan" >&2
+  exit 1
+fi
+rm -rf "$metadata_dir"
+GITHUB_REPOSITORY=example/repository FAKE_PRS_JSON_FILE="$prs_json" \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/scan-pull-request-metadata-for-head.sh" \
+  1111111111111111111111111111111111111111 "$metadata_dir" >/dev/null
+[[ "$(paste -sd, "$metadata_dir/pr-numbers")" == "41,42" ]]
+
 new_repo() {
   local repo="$1"
   git init -q -b main "$repo"
@@ -166,6 +189,43 @@ commit_all() {
 
 public_ip_a="8.8.4.$((2 + 2))"
 public_ip_b="9.9.9.$((8 + 1))"
+
+# NUL-containing destination blobs are scanned directly in every Git mode.
+repo="$tmpdir/binary-blob"
+remote="$tmpdir/binary-blob.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+printf '\0SECRET_TEST_TOKEN\n' >"$repo/allowed.dat"
+printf '*.dat diff\n' >"$repo/.gitattributes"
+git -C "$repo" add allowed.dat
+git -C "$repo" add .gitattributes
+scan_fails "$repo" staged
+commit_all "$repo" binary-secret
+local_sha="$(git -C "$repo" rev-parse HEAD)"
+zero_sha="0000000000000000000000000000000000000000"
+scan_fails "$repo" range "$base_sha" HEAD
+scan_fails "$repo" history
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
+  scan_passes "$repo" pre-push origin; then
+  echo "expected existing-branch binary blob scan to fail" >&2
+  exit 1
+fi
+if printf 'refs/heads/new %s refs/heads/new %s\n' "$local_sha" "$zero_sha" |
+  scan_passes "$repo" pre-push origin; then
+  echo "expected new-branch binary blob scan to fail" >&2
+  exit 1
+fi
+
+repo="$tmpdir/binary-public-ip"
+new_repo "$repo"
+printf '\0%s\n' "$public_ip_b" >"$repo/allowed.dat"
+git -C "$repo" add allowed.dat
+scan_fails "$repo" staged
 
 # betterleaks:allow cannot suppress findings in staged, range, pre-push, or history scans.
 repo="$tmpdir/allow-marker"

@@ -16,7 +16,7 @@ args=(
   --method POST
   "repos/${repository}/statuses/${sha}"
   -f "state=$state"
-  -f "context=trusted-sensitive-information/metadata"
+  -f "context=sensitive-information/metadata-advisory"
   -f "description=${description:0:140}"
 )
 [[ -z "$target_url" ]] || args+=(-f "target_url=$target_url")

@@ -43,6 +43,41 @@ scan_commit_messages() (
   scan_message_file "$message_file"
 )
 
+declare -A scanned_binary_candidates=()
+
+scan_binary_blob_if_needed() (
+  local object_id="$1"
+  local path="$2"
+  local blob_file
+  blob_file="$(mktemp)"
+  trap 'rm -f "$blob_file"' EXIT
+  git cat-file blob "$object_id" >"$blob_file"
+  if ! head -c 8000 "$blob_file" | LC_ALL=C od -An -v -t x1 | grep ' 00' >/dev/null; then
+    exit 0
+  fi
+  echo "binary blobを検査します: $path" >&2
+  tr '\000' '\n' <"$blob_file" | bash ./scripts/check-sensitive-content.sh
+  run_betterleaks stdin --redact=100 --no-banner <"$blob_file"
+)
+
+scan_changed_raw() {
+  local header path old_mode new_mode old_object new_object status
+  while IFS= read -r -d '' header && IFS= read -r -d '' path; do
+    read -r old_mode new_mode old_object new_object status <<<"${header#:}"
+    [[ "$new_mode" == "160000" || "$new_object" =~ ^0+$ ]] && continue
+    [[ -n "${scanned_binary_candidates[$new_object]:-}" ]] && continue
+    scanned_binary_candidates[$new_object]=1
+    scan_binary_blob_if_needed "$new_object" "$path"
+  done
+}
+
+scan_binary_commits() {
+  scan_changed_raw < <(
+    git log --root --diff-merges=remerge --no-renames --raw --no-abbrev \
+      --format= -z --diff-filter=ACMR "$@"
+  )
+}
+
 check_added_content() {
   awk '
     /^diff --/ { in_hunk = 0; next }
@@ -58,6 +93,7 @@ scan_range() {
   git log --diff-merges=remerge --no-renames --format= --name-only --diff-filter=ACMR -z "$range" |
     bash ./scripts/check-sensitive-paths.sh --stdin0
   git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" | check_added_content
+  scan_binary_commits "$range"
   scan_commit_messages "$range"
   run_betterleaks git --git-workers=1 --redact=100 --no-banner --log-opts="$log_opts" .
 }
@@ -67,6 +103,9 @@ case "$mode" in
     git diff --cached --no-renames --name-only --diff-filter=ACMR -z |
       bash ./scripts/check-sensitive-paths.sh --stdin0
     git diff --cached --unified=0 --no-ext-diff --no-color | check_added_content
+    scan_changed_raw < <(
+      git diff --cached --no-renames --raw --no-abbrev -z --diff-filter=ACMR
+    )
     run_betterleaks git --staged --redact=100 --no-banner .
     ;;
   message)
@@ -89,6 +128,7 @@ case "$mode" in
         git log --diff-merges=remerge --format= -p --unified=0 --no-color \
           "$local_sha" --not --remotes="$remote_name" |
           check_added_content
+        scan_binary_commits "$local_sha" --not --remotes="$remote_name"
         scan_commit_messages "$local_sha" --not --remotes="$remote_name"
       else
         range="$remote_sha..$local_sha"
@@ -97,6 +137,7 @@ case "$mode" in
           bash ./scripts/check-sensitive-paths.sh --stdin0
         git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" |
           check_added_content
+        scan_binary_commits "$range"
         scan_commit_messages "$range"
       fi
       run_betterleaks git --git-workers=1 --redact=100 --no-banner --log-opts="$log_opts" .
@@ -105,6 +146,7 @@ case "$mode" in
   history)
     git log --all --diff-merges=remerge --format= --name-only -z |
       bash ./scripts/check-sensitive-paths.sh --stdin0
+    scan_binary_commits --all
     scan_commit_messages --all
     run_betterleaks git --git-workers=1 --redact=100 --no-banner \
       --log-opts="--diff-merges=remerge --all" .
