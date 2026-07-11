@@ -26,6 +26,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run sensitive information regression tests
+        run: bash ./scripts/test-sensitive-information-checks.sh
+
       - name: Scan pushed commits
         if: github.event_name == 'push'
         env:

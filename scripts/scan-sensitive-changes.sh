@@ -19,20 +19,27 @@ actual_gitleaks_version="$($gitleaks version 2>/dev/null | grep -Eo '[0-9]+(\.[0
 mode="${1:-}"
 
 check_added_content() {
-  awk '/^\+\+\+ / { next } /^\+/ { print substr($0, 2) }' |
+  awk '
+    /^diff --/ { in_hunk = 0; next }
+    /^@@/ { in_hunk = 1; next }
+    in_hunk && /^\+/ { print substr($0, 2) }
+  ' |
     bash ./scripts/check-sensitive-content.sh
 }
 
 scan_range() {
   local range="$1"
-  git log --format= --name-only -z "$range" | bash ./scripts/check-sensitive-paths.sh --stdin0
-  git log --format= -p --unified=0 --no-color "$range" | check_added_content
-  "$gitleaks" git --redact=100 --no-banner --log-opts="$range" .
+  local log_opts="--diff-merges=remerge $range"
+  git log --diff-merges=remerge --no-renames --format= --name-only --diff-filter=ACMR -z "$range" |
+    bash ./scripts/check-sensitive-paths.sh --stdin0
+  git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" | check_added_content
+  "$gitleaks" git --redact=100 --no-banner --log-opts="$log_opts" .
 }
 
 case "$mode" in
   staged)
-    git diff --cached --name-only --diff-filter=ACMR -z | bash ./scripts/check-sensitive-paths.sh --stdin0
+    git diff --cached --no-renames --name-only --diff-filter=ACMR -z |
+      bash ./scripts/check-sensitive-paths.sh --stdin0
     git diff --cached --unified=0 --no-ext-diff --no-color | check_added_content
     "$gitleaks" git --staged --redact=100 --no-banner .
     ;;
@@ -45,23 +52,28 @@ case "$mode" in
     while read -r _local_ref local_sha _remote_ref remote_sha; do
       [[ "$local_sha" =~ ^0+$ ]] && continue
       if [[ "$remote_sha" =~ ^0+$ ]]; then
-        log_opts="$local_sha --not --remotes=$remote_name"
-        git log --format= --name-only -z "$local_sha" --not --remotes="$remote_name" |
+        log_opts="--diff-merges=remerge $local_sha --not --remotes=$remote_name"
+        git log --diff-merges=remerge --no-renames --format= --name-only --diff-filter=ACMR -z \
+          "$local_sha" --not --remotes="$remote_name" |
           bash ./scripts/check-sensitive-paths.sh --stdin0
-        git log --format= -p --unified=0 --no-color "$local_sha" --not --remotes="$remote_name" |
+        git log --diff-merges=remerge --format= -p --unified=0 --no-color \
+          "$local_sha" --not --remotes="$remote_name" |
           check_added_content
       else
-        log_opts="$remote_sha..$local_sha"
-        git log --format= --name-only -z "$log_opts" |
+        range="$remote_sha..$local_sha"
+        log_opts="--diff-merges=remerge $range"
+        git log --diff-merges=remerge --no-renames --format= --name-only --diff-filter=ACMR -z "$range" |
           bash ./scripts/check-sensitive-paths.sh --stdin0
-        git log --format= -p --unified=0 --no-color "$log_opts" | check_added_content
+        git log --diff-merges=remerge --format= -p --unified=0 --no-color "$range" |
+          check_added_content
       fi
       "$gitleaks" git --redact=100 --no-banner --log-opts="$log_opts" .
     done
     ;;
   history)
-    git log --all --format= --name-only -z | bash ./scripts/check-sensitive-paths.sh --stdin0
-    "$gitleaks" git --redact=100 --no-banner --log-opts="--all" .
+    git log --all --diff-merges=remerge --format= --name-only -z |
+      bash ./scripts/check-sensitive-paths.sh --stdin0
+    "$gitleaks" git --redact=100 --no-banner --log-opts="--diff-merges=remerge --all" .
     ;;
   *)
     echo "usage: $0 {staged|pre-push <remote>|range <base> <head>|history}" >&2

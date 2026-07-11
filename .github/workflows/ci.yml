@@ -35,6 +35,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run sensitive information regression tests
+        run: bash ./scripts/test-sensitive-information-checks.sh
+
       - name: Scan pull request commits
         if: github.event_name == 'pull_request'
         env:

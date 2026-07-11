@@ -253,7 +253,12 @@ ensure_gitleaks() {
     return
   fi
 
-  sudo GITLEAKS_INSTALL_DIR=/usr/local/bin bash "${REPO_ROOT}/scripts/install-gitleaks.sh"
+  GITLEAKS_INSTALL_DIR="${LOCAL_BIN_DIR}" bash "${REPO_ROOT}/scripts/install-gitleaks.sh"
+
+  if [ "$(get_gitleaks_version)" != "${GITLEAKS_VERSION}" ]; then
+    printf '%s\n' "Gitleaks ${GITLEAKS_VERSION} was installed but is not selected from PATH." >&2
+    return 1
+  fi
 }
 
 if ! command -v rg >/dev/null 2>&1 || ! command -v bwrap >/dev/null 2>&1; then

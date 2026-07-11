@@ -103,6 +103,7 @@
 ## 検証
 
 - 機微情報検査の CI 相当確認には `bun run security:scan:history` を使う。出力時は Gitleaks の redaction を維持し、検出値をログや報告へ貼らない。
+- Git hook、Gitleaks range、禁止 path、公開 IPv4 検査を変更した場合は `bun run test:security` で一時 Git repository を使う回帰テストも実行する。
 - コードを変更した場合は、`bun run lint` の実行を必須とする。
 - コードを変更した場合は、まず `bun run lint` を実行し、その後に変更箇所に応じた高速コードレベルテストを実行し、最後に build、原則として E2E テストを実施する。
 - ドキュメントだけの変更なら、テストは必須ではない。最終報告で未実施であることを明示する。
