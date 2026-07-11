@@ -467,7 +467,7 @@ func (r *usageRecorder) SetPlannedInputs(inputs Inputs) {
 }
 
 func (r *usageRecorder) UseActualRequests(requests []ai.UsageRequest) {
-	if r == nil || len(requests) == 0 {
+	if r == nil || requests == nil {
 		return
 	}
 	r.Requests = requests

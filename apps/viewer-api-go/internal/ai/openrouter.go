@@ -125,9 +125,16 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 	}
 	client := &http.Client{Timeout: openRouterRequestTimeout()}
 	var lastErr error
+	var accumulated ChatResult
 	for attempt := 0; attempt < 3; attempt++ {
 		result, retry, err := doOpenRouterChatRequest(ctx, client, config, raw)
+		accumulated.InputTokens += result.InputTokens
+		accumulated.OutputTokens += result.OutputTokens
+		accumulated.TotalTokens += result.TotalTokens
 		if !retry || err == nil {
+			result.InputTokens = accumulated.InputTokens
+			result.OutputTokens = accumulated.OutputTokens
+			result.TotalTokens = accumulated.TotalTokens
 			return result, err
 		}
 		lastErr = err
@@ -136,11 +143,11 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		}
 		select {
 		case <-ctx.Done():
-			return ChatResult{}, ctx.Err()
+			return accumulated, ctx.Err()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
-	return ChatResult{}, lastErr
+	return accumulated, lastErr
 }
 
 func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, messages []ChatMessage, tools []ToolDefinition) (ChatResult, error) {
@@ -234,27 +241,28 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 		}
 		return ChatResult{}, false, err
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
-			return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d: %s", response.StatusCode, decoded.Error.Message)
-		}
-		return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
-	}
-	if len(decoded.Choices) == 0 || (strings.TrimSpace(decoded.Choices[0].Message.Content) == "" && len(decoded.Choices[0].Message.ToolCalls) == 0) {
-		return ChatResult{}, false, errors.New("OpenRouter returned an empty response")
-	}
-	finishReason := strings.TrimSpace(decoded.Choices[0].FinishReason)
-	if isTruncatedOpenRouterFinishReason(finishReason) {
-		return ChatResult{}, false, fmt.Errorf("OpenRouter response was truncated: finish_reason=%s", finishReason)
-	}
-	return ChatResult{
-		Answer:       strings.TrimSpace(decoded.Choices[0].Message.Content),
+	result := ChatResult{
 		InputTokens:  decoded.Usage.PromptTokens,
 		OutputTokens: decoded.Usage.CompletionTokens,
 		TotalTokens:  totalTokens(decoded.Usage.TotalTokens, decoded.Usage.PromptTokens, decoded.Usage.CompletionTokens),
-		FinishReason: finishReason,
-		ToolCalls:    decoded.Choices[0].Message.ToolCalls,
-	}, false, nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
+			return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d: %s", response.StatusCode, decoded.Error.Message)
+		}
+		return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
+	}
+	if len(decoded.Choices) == 0 || (strings.TrimSpace(decoded.Choices[0].Message.Content) == "" && len(decoded.Choices[0].Message.ToolCalls) == 0) {
+		return result, false, errors.New("OpenRouter returned an empty response")
+	}
+	finishReason := strings.TrimSpace(decoded.Choices[0].FinishReason)
+	result.Answer = strings.TrimSpace(decoded.Choices[0].Message.Content)
+	result.FinishReason = finishReason
+	result.ToolCalls = decoded.Choices[0].Message.ToolCalls
+	if isTruncatedOpenRouterFinishReason(finishReason) {
+		return result, false, fmt.Errorf("OpenRouter response was truncated: finish_reason=%s", finishReason)
+	}
+	return result, false, nil
 }
 
 func readLimitedOpenRouterResponseBody(response *http.Response) ([]byte, error) {

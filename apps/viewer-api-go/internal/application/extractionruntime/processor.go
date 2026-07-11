@@ -105,6 +105,8 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 			return
 		}
 		switch progress.Phase {
+		case "parallelStart":
+			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.CompletedBatchCount, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil, nil)
 		case "start":
 			SetExtractionJobProgress(&job, ExtractionJobBatchProgressPercent(progress.Batch.BatchIndex-1, progress.Batch.BatchCount), "batch", &progress.Batch.BatchIndex, &progress.Batch.BatchCount, nil, nil)
 		case "complete":

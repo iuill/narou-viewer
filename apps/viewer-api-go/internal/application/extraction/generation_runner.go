@@ -62,16 +62,18 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 				progressSink(BatchProgress{Phase: "start", Batch: runtimeBatch})
 			}
 			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, runtimeBatch, pendingUnresolved)
+			if result.Usage.Kind != "" {
+				usageRequests = append(usageRequests, result.Usage)
+			}
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
-			usageRequests = append(usageRequests, result.Usage)
 			var changed int
 			generated, changed = core.ApplyDelta(novelID, generated, result.Delta, allocator)
 			generatedTerms = core.FilterAndMergeTermDeltas(generatedTerms, result.Delta.Terms, generated)
 			pendingUnresolved = core.FilterResolvedGeneratedUnresolvedMentions(core.MergeGeneratedUnresolvedMentions(pendingUnresolved, result.Delta.UnresolvedMentions), generated)
 			remainingChunks = nextRemaining
-			if progressSink != nil {
+			if progressSink != nil && len(remainingChunks) == 0 {
 				progressSink(BatchProgress{
 					Phase:                   "complete",
 					Batch:                   runtimeBatch,
@@ -126,16 +128,18 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 				progressSink(BatchProgress{Phase: "start", Batch: runtimeBatch})
 			}
 			result, err := r.ports.GenerateBatch(ctx, config, novelID, upToEpisodeIndex, generated, generatedTerms, runtimeBatch, pendingUnresolved)
+			if result.Usage.Kind != "" {
+				usageRequests = append(usageRequests, result.Usage)
+			}
 			if err != nil {
 				return nil, generationStateFromAllocator(pendingUnresolved, allocator), usageRequests, err
 			}
-			usageRequests = append(usageRequests, result.Usage)
 			var changed int
 			generated, changed = core.ApplyDelta(novelID, generated, result.Delta, allocator)
 			generatedTerms = core.FilterAndMergeTermDeltas(generatedTerms, result.Delta.Terms, generated)
 			pendingUnresolved = core.FilterResolvedGeneratedUnresolvedMentions(core.MergeGeneratedUnresolvedMentions(pendingUnresolved, result.Delta.UnresolvedMentions), generated)
 			remainingChunks = nextRemaining
-			if progressSink != nil {
+			if progressSink != nil && len(remainingChunks) == 0 {
 				progressSink(BatchProgress{
 					Phase:                   "complete",
 					Batch:                   runtimeBatch,

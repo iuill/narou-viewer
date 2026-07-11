@@ -441,8 +441,8 @@ func TestReuseGeneratedCharacterIDsFromRegistryKeepsStableIDForReprocessedIdenti
 			SummaryHistory:              []characters.GeneratedHistoryVersion{{EpisodeIndex: "5", Text: "再登場した。"}},
 		},
 	}, []characters.GeneratedCharacter{{CharacterID: "char_old", CanonicalName: "アリス", FirstAppearanceEpisodeIndex: "1"}}, extractionGenerationState{}, "5")
-	if len(duplicated) != 1 || duplicated[0].CharacterID != "char_old" || len(duplicated[0].SummaryHistory) != 1 {
-		t.Fatalf("duplicate generated identities should merge into the existing target ID: generated=%+v state=%+v", duplicated, duplicateState)
+	if len(duplicated) != 2 || duplicated[0].CharacterID != "char_old" || duplicated[1].CharacterID != "char_new_duplicate" || len(duplicateState.RetiredCharacterIDs) != 0 {
+		t.Fatalf("multiple generated identities must not collapse into one registry ID: generated=%+v state=%+v", duplicated, duplicateState)
 	}
 }
 

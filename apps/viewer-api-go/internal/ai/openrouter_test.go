@@ -333,15 +333,16 @@ func TestGenerateOpenRouterChatRejectsTruncatedFinishReason(t *testing.T) {
 	for _, finishReason := range []string{"length", "max_tokens", "content_filter"} {
 		t.Run(finishReason, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"` + finishReason + `","message":{"content":"途中までの応答"}}]}`))
+				_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"` + finishReason + `","message":{"content":"途中までの応答"}}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}`))
 			}))
 			defer server.Close()
 			t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
 
-			if _, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+			result, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
 				APIKey:  "sk-test",
 				ModelID: "openrouter/auto",
-			}, []ChatMessage{{Role: "user", Content: "hello"}}); err == nil || !strings.Contains(err.Error(), "finish_reason="+finishReason) {
+			}, []ChatMessage{{Role: "user", Content: "hello"}})
+			if err == nil || !strings.Contains(err.Error(), "finish_reason="+finishReason) || result.TotalTokens != 18 {
 				t.Fatalf("expected truncated finish reason error, got %v", err)
 			}
 		})

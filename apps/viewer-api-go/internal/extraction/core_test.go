@@ -776,6 +776,13 @@ func TestReuseGeneratedCharacterIDsFromRegistryKeepsStableIDForReprocessedIdenti
 	if len(genericRegistry) != 2 || genericRegistry[0].CharacterID == "char_old_teacher" || genericRegistry[1].CharacterID == "char_old_teacher" || len(genericState.RetiredCharacterIDs) != 0 {
 		t.Fatalf("single generic registry identity should not remap generated characters: generated=%+v state=%+v", genericRegistry, genericState)
 	}
+	duplicateNames, duplicateState := ReuseGeneratedCharacterIDsFromRegistry([]characters.GeneratedCharacter{
+		{CharacterID: "char_new_merchant", CanonicalName: "アリス"},
+		{CharacterID: "char_new_knight", CanonicalName: "アリス"},
+	}, []characters.GeneratedCharacter{{CharacterID: "char_old_alice", CanonicalName: "アリス", FirstAppearanceEpisodeIndex: "1"}}, GenerationState{}, "5")
+	if len(duplicateNames) != 2 || duplicateNames[0].CharacterID == "char_old_alice" || duplicateNames[1].CharacterID == "char_old_alice" || len(duplicateState.RetiredCharacterIDs) != 0 {
+		t.Fatalf("multiple generated identities must not claim one registry id: generated=%+v state=%+v", duplicateNames, duplicateState)
+	}
 }
 
 func TestExtractionApplyDeltaMergesByStableIDOnly(t *testing.T) {

@@ -132,8 +132,8 @@ func TestGenerationRunnerKeepsCompletedCheckpointWhenLaterBatchFails(t *testing.
 	if err == nil {
 		t.Fatal("RunOpenRouterWithCheckpoint should return provider error")
 	}
-	if len(usageRequests) != 1 {
-		t.Fatalf("runner should preserve completed batch usage on failure: %+v", usageRequests)
+	if len(usageRequests) != 2 {
+		t.Fatalf("runner should preserve all attempted batch usage on failure: %+v", usageRequests)
 	}
 	if !ports.savedCheckpoint || len(ports.checkpoint.ProcessedBatchIndexes) != 1 || ports.checkpoint.ProcessedBatchIndexes[0] != 1 {
 		t.Fatalf("runner should keep checkpoint through last completed batch: %+v", ports.checkpoint)

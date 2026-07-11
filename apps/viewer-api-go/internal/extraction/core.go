@@ -1523,15 +1523,16 @@ func ReuseGeneratedCharacterIDsFromRegistry(generated []characters.GeneratedChar
 	if len(uniqueIDByKey) == 0 {
 		return generated, state
 	}
-	usedGeneratedIDs := map[string]bool{}
-	for _, item := range generated {
+	result := append([]characters.GeneratedCharacter{}, generated...)
+	targets := make([]string, len(result))
+	claimCounts := map[string]int{}
+	occupiedIDs := map[string]int{}
+	for _, item := range result {
 		if id := strings.TrimSpace(item.CharacterID); id != "" {
-			usedGeneratedIDs[id] = true
+			occupiedIDs[id]++
 		}
 	}
-	result := append([]characters.GeneratedCharacter{}, generated...)
 	for index, item := range result {
-		currentID := strings.TrimSpace(item.CharacterID)
 		targetID := ""
 		for _, key := range generatedMergeIdentityKeys(item) {
 			key = strings.ToLower(strings.TrimSpace(key))
@@ -1548,12 +1549,18 @@ func ReuseGeneratedCharacterIDsFromRegistry(generated []characters.GeneratedChar
 			}
 			targetID = id
 		}
-		if targetID == "" || targetID == currentID {
+		targets[index] = targetID
+		if targetID != "" && targetID != strings.TrimSpace(item.CharacterID) {
+			claimCounts[targetID]++
+		}
+	}
+	for index, item := range result {
+		currentID := strings.TrimSpace(item.CharacterID)
+		targetID := targets[index]
+		if targetID == "" || targetID == currentID || claimCounts[targetID] != 1 || occupiedIDs[targetID] != 0 {
 			continue
 		}
-		delete(usedGeneratedIDs, currentID)
 		result[index].CharacterID = targetID
-		usedGeneratedIDs[targetID] = true
 		if currentID != "" {
 			state.RetiredCharacterIDs = append(state.RetiredCharacterIDs, characters.GeneratedRetiredCharacterID{CharacterID: currentID, MergedInto: targetID})
 		}
