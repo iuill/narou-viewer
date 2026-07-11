@@ -167,7 +167,6 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 
 ### 5.4 競合回避ルール
 
-- `viewer-api` は `.narou/*` と `小説データ/*` を read-only 互換データとしてだけ扱う。
 - `viewer-api` は `novel-fetcher/works/**` に直接書き込まない。作品更新は必ず選択中の取得 backend API 経由で実行する。
 - 作品更新は `novel-fetcher` API を使う。
 - `state/*` は `viewer-api` のみが更新する。
@@ -213,7 +212,8 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `POST /api/fetcher/tasks/{taskId}/cancel`
   - 更新 UI からのキャンセル操作を取得 backend へ中継する
 - `GET /api/system/storage`
-  - サーバ側 `data/` 配下のファイル論理サイズを走査し、`小説データ` / `キャッシュ` / `その他` のカテゴリ別合計と、作品単位の合計・内訳を返す
+  - サーバ側 `data/` 配下の現行データのファイル論理サイズを走査し、`小説データ` / `キャッシュ` / `その他` のカテゴリ別合計と、作品単位の合計・内訳を返す
+  - 旧作品データのディレクトリは走査・集計の対象外とする
   - `novel-fetcher/works/**/episodes` と `assets` は小説データ、`raw` と `state/reader_search.sqlite*` は再生成可能キャッシュとして扱う。分類できない管理ファイルはその他に含める
 - `GET /api/system/storage/progress`
   - 直近のストレージ使用量走査について、処理状態と作品数単位の目安進捗を返す

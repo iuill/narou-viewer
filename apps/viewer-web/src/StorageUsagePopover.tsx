@@ -379,10 +379,7 @@ function NovelStorageBreakdown({ novel, totalBytes }: { novel: NovelStorageUsage
       <div className="storage-usage-novel-heading">
         <div>
           <strong>{novel.title}</strong>
-          <span>
-            {novel.siteName}
-            {novel.source === "legacy" ? " / legacy" : ""}
-          </span>
+          <span>{novel.siteName}</span>
         </div>
         <span>
           {formatStorageBytes(novel.totalBytes)} / {formatPercent(novel.totalBytes, denominator)}

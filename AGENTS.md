@@ -54,9 +54,8 @@
 ## データ境界
 
 - `viewer-api` は `data/` を読み取り、`data/state/*.yaml` を管理する主体である。
-- `viewer-api` から `.narou/*`、`小説データ/*`、`novel-fetcher/works/*` へ直接書き込まないこと。必要な更新は選択中の取得 backend API 経由で扱う。
+- `viewer-api` から `novel-fetcher/works/*` へ直接書き込まないこと。必要な更新は選択中の取得 backend API 経由で扱う。
 - `novel-fetcher` の保存データは `data/novel-fetcher/` 配下で管理する。
-- `.narou/*` と `小説データ/*` は read-only 互換用途に限定し、新しい書き込み経路を増やさない。
 - オフラインキャッシュ設定などブラウザ固有の状態は、原則としてクライアント側に留める。
 - 共有データは複数サービスから参照するが、コンテナ内パスは同一ではない。`viewer-api` 内で `novel-fetcher` コンテナ側の内部パスを決め打ちしない。
 

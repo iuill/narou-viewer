@@ -27,7 +27,7 @@
 
 - 読書AIの agent loop は `viewer-api` 内で動く。
 - LLM 接続は internal AI module の OpenRouter chat/tool calling 経路を使う。
-- 作品本文や state へのアクセスは `viewer-api` の local tool に閉じ込める。AI 実行層が `.narou/*`、`小説データ/*`、`novel-fetcher/works/*` を直接読む構成にはしない。
+- 作品本文や state へのアクセスは `viewer-api` の local tool に閉じ込める。AI 実行層が `novel-fetcher/works/*` を直接読む構成にはしない。
 - 将来 MCP endpoint を追加する場合も、ネタバレ境界の最終検証は `viewer-api` 側に残す。
 
 ## 主要 tool
