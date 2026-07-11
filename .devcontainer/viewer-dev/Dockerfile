@@ -54,9 +54,9 @@ ARG PLAYWRIGHT_CLI_VERSION=0.1.9
 ARG SERENA_AGENT_VERSION=1.3.0
 ARG SCC_VERSION=v3.7.0
 ARG SCC_LINUX_X86_64_SHA256=3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a
-ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_LINUX_X64_SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_LINUX_ARM64_SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
+ARG BETTERLEAKS_VERSION=1.6.1
+ARG BETTERLEAKS_LINUX_X64_SHA256=fbefc700a0bd4522cc952dd2a8f259cdb80526d7e60114aca19bb2d6fdc80f81
+ARG BETTERLEAKS_LINUX_ARM64_SHA256=bab9688ba968264ace67b608fc7a7d8f5e61218cde70029d32cbc894e3808fdf
 
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -74,16 +74,16 @@ RUN set -eux; \
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "${arch}" in \
-      amd64) gitleaks_arch="x64"; checksum="${GITLEAKS_LINUX_X64_SHA256}" ;; \
-      arm64) gitleaks_arch="arm64"; checksum="${GITLEAKS_LINUX_ARM64_SHA256}" ;; \
+      amd64) betterleaks_arch="x64"; checksum="${BETTERLEAKS_LINUX_X64_SHA256}" ;; \
+      arm64) betterleaks_arch="arm64"; checksum="${BETTERLEAKS_LINUX_ARM64_SHA256}" ;; \
       *) echo "unsupported architecture: ${arch}" >&2; exit 1 ;; \
     esac; \
-    archive="gitleaks_${GITLEAKS_VERSION}_linux_${gitleaks_arch}.tar.gz"; \
+    archive="betterleaks_${BETTERLEAKS_VERSION}_linux_${betterleaks_arch}.tar.gz"; \
     tmpdir="$(mktemp -d)"; \
-    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}" -o "${tmpdir}/${archive}"; \
+    curl -fsSL "https://github.com/betterleaks/betterleaks/releases/download/v${BETTERLEAKS_VERSION}/${archive}" -o "${tmpdir}/${archive}"; \
     echo "${checksum}  ${tmpdir}/${archive}" | sha256sum -c -; \
-    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}" gitleaks; \
-    install -m 0755 "${tmpdir}/gitleaks" /usr/local/bin/gitleaks; \
+    tar -xzf "${tmpdir}/${archive}" -C "${tmpdir}" betterleaks; \
+    install -m 0755 "${tmpdir}/betterleaks" /usr/local/bin/betterleaks; \
     rm -rf "${tmpdir}"
 
 RUN su node -c "umask 0002 && npm install -g '@playwright/cli@${PLAYWRIGHT_CLI_VERSION}'"

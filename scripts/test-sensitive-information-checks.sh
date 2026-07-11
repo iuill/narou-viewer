@@ -7,19 +7,32 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 fake_bin="$tmpdir/bin"
 mkdir -p "$fake_bin"
-cat >"$fake_bin/gitleaks" <<'EOF'
+cat >"$fake_bin/betterleaks" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "version" ]]; then
-  echo "8.30.1"
+  echo "1.6.1"
   exit 0
 fi
 if [[ "${1:-}" == "git" && " $* " != *" --staged " && " $* " != *"--diff-merges=remerge"* ]]; then
-  echo "gitleaks git must receive --diff-merges=remerge" >&2
+  echo "betterleaks git must receive --diff-merges=remerge" >&2
   exit 1
 fi
+if [[ "${1:-}" == "git" && " $* " != *" --staged " && " $* " != *" --git-workers=1 "* ]]; then
+  echo "remerge scans must use one Betterleaks git worker" >&2
+  exit 1
+fi
+exit 0
 EOF
-chmod +x "$fake_bin/gitleaks"
+chmod +x "$fake_bin/betterleaks"
+
+PATH="$fake_bin:$PATH" bash "$source_root/scripts/scan-pull-request-content.sh" \
+  https://github.com/example/repository/pull/123 >/dev/null
+if PATH="$fake_bin:$PATH" bash "$source_root/scripts/scan-pull-request-content.sh" \
+  https://example.invalid/repository/pull/123 >/dev/null 2>&1; then
+  echo "expected non-GitHub pull request URL to be rejected" >&2
+  exit 1
+fi
 
 new_repo() {
   local repo="$1"
@@ -30,7 +43,7 @@ new_repo() {
   cp "$source_root/scripts/check-sensitive-content.sh" "$repo/scripts/"
   cp "$source_root/scripts/check-sensitive-paths.sh" "$repo/scripts/"
   cp "$source_root/scripts/install-git-hooks.sh" "$repo/scripts/"
-  cp "$source_root/scripts/install-gitleaks.sh" "$repo/scripts/"
+  cp "$source_root/scripts/install-betterleaks.sh" "$repo/scripts/"
   cp "$source_root/scripts/scan-sensitive-changes.sh" "$repo/scripts/"
 }
 

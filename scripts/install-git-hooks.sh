@@ -12,12 +12,12 @@ if [[ -n "$current_hooks_path" && "$current_hooks_path" != ".githooks" ]]; then
   exit 1
 fi
 
-if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "Gitleaks が PATH にありません。先に scripts/install-gitleaks.sh を実行してください。" >&2
+if ! command -v betterleaks >/dev/null 2>&1; then
+  echo "Betterleaks が PATH にありません。先に scripts/install-betterleaks.sh を実行してください。" >&2
   exit 1
 fi
-if [[ "$(gitleaks version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n1)" != "8.30.1" ]]; then
-  echo "Gitleaks v8.30.1 が必要です。" >&2
+if [[ "$(betterleaks version 2>/dev/null | grep -Eo '[0-9]+(\.[0-9]+)+' | head -n1)" != "1.6.1" ]]; then
+  echo "Betterleaks v1.6.1 が必要です。" >&2
   exit 1
 fi
 git config --local core.hooksPath .githooks

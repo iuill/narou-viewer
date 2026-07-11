@@ -9,7 +9,7 @@ description: Use when changing code in narou-viewer and you need to choose or ru
 
 ## 基本ルール
 
-- 作業開始時に `git config --get core.hooksPath` を確認する。Dev Container で `.githooks` でなければ post-create の警告と既存設定を確認し、Dev Container 外なら Gitleaks 導入後に `bash scripts/install-git-hooks.sh` を実行する。
+- 作業開始時に `git config --get core.hooksPath` を確認する。Dev Container で `.githooks` でなければ post-create の警告と既存設定を確認し、Dev Container 外なら Betterleaks 導入後に `bash scripts/install-git-hooks.sh` を実行する。
 - commit / push 前の検査を `--no-verify` で回避しない。CI 相当の全履歴検査が必要なら `bun run security:scan:history` を実行し、検出値を報告へ転記しない。
 - Git hook または機微情報 scanner を変更したら `bun run test:security` も実行する。
 - コードを変更したら、`bun run lint` の実行を必須とする。

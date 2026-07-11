@@ -34,8 +34,8 @@
 
 ## 作業方針
 
-- Dev Container では post-create 時に `.githooks/` の `pre-commit` / `pre-push` が自動で有効になる。Dev Container 外では Gitleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行する。
-- `pre-commit` は staged diff、`pre-push` は push 対象 commit を Gitleaks と repository 固有の禁止 path ルールで検査する。検出を `--no-verify` で回避せず、false positive はルール側で明示的に解消する。
+- Dev Container では post-create 時に `.githooks/` の `pre-commit` / `pre-push` が自動で有効になる。Dev Container 外では Betterleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行する。
+- `pre-commit` は staged diff、`pre-push` は push 対象 commit を Betterleaks と repository 固有の禁止 path ルールで検査する。検出を `--no-verify` で回避せず、false positive はルール側で明示的に解消する。
 - 変更前に、影響を受けるファイルを確認してから手を入れる。
 - 変更範囲は絞る。依頼に直接関係しない大規模リファクタは避ける。
 - 既存の命名、構成、責務分割を尊重する。
@@ -102,8 +102,8 @@
 
 ## 検証
 
-- 機微情報検査の CI 相当確認には `bun run security:scan:history` を使う。出力時は Gitleaks の redaction を維持し、検出値をログや報告へ貼らない。
-- Git hook、Gitleaks range、禁止 path、公開 IPv4 検査を変更した場合は `bun run test:security` で一時 Git repository を使う回帰テストも実行する。
+- 機微情報検査の CI 相当確認には `bun run security:scan:history` を使う。出力時は Betterleaks の redaction を維持し、検出値をログや報告へ貼らない。外部 validation は有効にしない。
+- Git hook、Betterleaks range、禁止 path、公開 IPv4 検査を変更した場合は `bun run test:security` で一時 Git repository を使う回帰テストも実行する。
 - コードを変更した場合は、`bun run lint` の実行を必須とする。
 - コードを変更した場合は、まず `bun run lint` を実行し、その後に変更箇所に応じた高速コードレベルテストを実行し、最後に build、原則として E2E テストを実施する。
 - ドキュメントだけの変更なら、テストは必須ではない。最終報告で未実施であることを明示する。

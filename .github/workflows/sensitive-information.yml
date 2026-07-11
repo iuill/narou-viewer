@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: sensitive-information-${{ github.event.pull_request.number }}
@@ -38,3 +39,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash ./scripts/scan-sensitive-changes.sh range "$BASE_SHA" "$HEAD_SHA"
+
+      - name: Scan pull request description and comments
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: bash ./scripts/scan-pull-request-content.sh "$PR_URL"
