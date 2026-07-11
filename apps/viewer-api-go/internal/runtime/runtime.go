@@ -89,7 +89,7 @@ func NewHandler(dataDir string) HandlerResult {
 		ReaderAssistant:          readerAssistantService,
 		ReaderView:               readerViewService,
 		Extraction:               extractionRuntime,
-		CharacterJobs:            extractionJobsService,
+		ExtractionQueue:          extractionJobsService,
 		ExtractionJobCoordinator: characterJobCoordinator,
 		StateInitErr:             joinedInitErr,
 	})

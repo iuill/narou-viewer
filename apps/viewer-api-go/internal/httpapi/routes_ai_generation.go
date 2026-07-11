@@ -18,7 +18,6 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction"
-	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/library"
@@ -576,7 +575,7 @@ func (s *Server) handleAIJobs(w http.ResponseWriter, r *http.Request) {
 	if !methodOnly(w, r, http.MethodGet) {
 		return
 	}
-	records, err := extractdomain.LoadAllJobs(s.stateDir())
+	records, err := extraction.LoadAllJobs(s.stateDir())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Character jobs could not be read.")
 		return

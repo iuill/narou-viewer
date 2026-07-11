@@ -82,9 +82,9 @@ func LoadGeneratedTermsAtOrBefore(stateDir string, novelID string, committedFron
 	if err != nil || !ok {
 		return generated, processed, ok, err
 	}
-	cap := minEpisode(strings.TrimSpace(committedFrontier), valueOrEmpty(processed))
-	projected := truncateAfter(generated, cap)
-	return projected, stringPointer(cap), true, nil
+	visibilityCap := minEpisode(strings.TrimSpace(committedFrontier), valueOrEmpty(processed))
+	projected := truncateAfter(generated, visibilityCap)
+	return projected, stringPointer(visibilityCap), true, nil
 }
 
 func LoadGeneratedTermsBeforeEpisode(stateDir string, novelID string, episodeIndex string) ([]GeneratedTerm, *string, bool, error) {

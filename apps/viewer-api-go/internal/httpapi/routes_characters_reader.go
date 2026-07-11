@@ -324,11 +324,11 @@ func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, n
 	if !methodOnly(w, r, http.MethodDelete) {
 		return
 	}
-	if s.characterJobQueue == nil {
+	if s.extractionJobQueue == nil {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
-	result, err := s.characterJobQueue.Clear(r.Context(), novelID)
+	result, err := s.extractionJobQueue.Clear(r.Context(), novelID)
 	if errors.Is(err, extractionjobs.ErrNovelNotFound) {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
@@ -345,13 +345,13 @@ func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, n
 }
 
 func (s *Server) handleExtractionJobs(w http.ResponseWriter, r *http.Request, novelID string) {
-	if s.characterJobQueue == nil {
+	if s.extractionJobQueue == nil {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
 	}
 	switch r.Method {
 	case http.MethodGet:
-		result, err := s.characterJobQueue.List(r.Context(), novelID)
+		result, err := s.extractionJobQueue.List(r.Context(), novelID)
 		s.writeCharacterJobsResult(w, result, err)
 	case http.MethodPost:
 		body, ok := decodeObjectOrBadRequest(w, r)
@@ -372,7 +372,7 @@ func (s *Server) handleExtractionJobs(w http.ResponseWriter, r *http.Request, no
 			}
 			generationStrategy = &strategy
 		}
-		result, created, err := s.characterJobQueue.Enqueue(r.Context(), novelID, extractionjobs.EnqueueInput{
+		result, created, err := s.extractionJobQueue.Enqueue(r.Context(), novelID, extractionjobs.EnqueueInput{
 			UpToEpisodeIndex:   upToEpisodeIndex,
 			GenerationStrategy: generationStrategy,
 		})

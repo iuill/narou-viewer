@@ -53,25 +53,25 @@ type apiErrorResponse struct {
 }
 
 type Server struct {
-	mux               *http.ServeMux
-	ctx               context.Context
-	cancel            context.CancelFunc
-	preferredMode     string
-	dataDir           string
-	library           *library.Service
-	publications      *publications.Service
-	stateStore        *store.Store
-	fetcherClient     *fetcher.Client
-	fetcherCommands   *fetchercommands.Service
-	libraryView       *libraryview.Service
-	readerAssistant   *readerassistant.Service
-	readerView        *readerview.Service
-	extraction        *extractionruntime.Runtime
-	characterJobQueue *extractionjobs.Service
-	stateInitErr      error
-	extractionJobs    *appextraction.JobCoordinator
-	storageProgress   *storageUsageProgressStore
-	backgroundOnce    sync.Once
+	mux                *http.ServeMux
+	ctx                context.Context
+	cancel             context.CancelFunc
+	preferredMode      string
+	dataDir            string
+	library            *library.Service
+	publications       *publications.Service
+	stateStore         *store.Store
+	fetcherClient      *fetcher.Client
+	fetcherCommands    *fetchercommands.Service
+	libraryView        *libraryview.Service
+	readerAssistant    *readerassistant.Service
+	readerView         *readerview.Service
+	extraction         *extractionruntime.Runtime
+	extractionJobQueue *extractionjobs.Service
+	stateInitErr       error
+	extractionJobs     *appextraction.JobCoordinator
+	storageProgress    *storageUsageProgressStore
+	backgroundOnce     sync.Once
 }
 
 type ServerDependencies struct {
@@ -85,7 +85,7 @@ type ServerDependencies struct {
 	ReaderAssistant                 *readerassistant.Service
 	ReaderView                      *readerview.Service
 	Extraction                      *extractionruntime.Runtime
-	CharacterJobs                   *extractionjobs.Service
+	ExtractionQueue                 *extractionjobs.Service
 	ExtractionJobCoordinator        *appextraction.JobCoordinator
 	ExtractionJobCoordinatorFactory func(extractionruntime.Workflow, string, extractionruntime.Logger) *appextraction.JobCoordinator
 	StateInitErr                    error
@@ -127,28 +127,28 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 			Logger:      logExtractionTiming,
 		})
 	}
-	characterJobQueue := deps.CharacterJobs
-	if characterJobQueue == nil {
-		characterJobQueue = extractionjobs.NewService(filepath.Join(deps.DataDir, "state"), deps.Library, deps.StateStore)
+	extractionJobQueue := deps.ExtractionQueue
+	if extractionJobQueue == nil {
+		extractionJobQueue = extractionjobs.NewService(filepath.Join(deps.DataDir, "state"), deps.Library, deps.StateStore)
 	}
 	s := &Server{
-		mux:               http.NewServeMux(),
-		ctx:               serverCtx,
-		cancel:            cancel,
-		preferredMode:     "heuristic",
-		dataDir:           deps.DataDir,
-		library:           deps.Library,
-		publications:      publicationService,
-		stateStore:        deps.StateStore,
-		fetcherClient:     deps.FetcherClient,
-		fetcherCommands:   deps.FetcherCommand,
-		libraryView:       libraryViewService,
-		readerAssistant:   readerAssistantService,
-		readerView:        readerViewService,
-		extraction:        extractionRuntime,
-		characterJobQueue: characterJobQueue,
-		stateInitErr:      deps.StateInitErr,
-		storageProgress:   newStorageUsageProgressStore(),
+		mux:                http.NewServeMux(),
+		ctx:                serverCtx,
+		cancel:             cancel,
+		preferredMode:      "heuristic",
+		dataDir:            deps.DataDir,
+		library:            deps.Library,
+		publications:       publicationService,
+		stateStore:         deps.StateStore,
+		fetcherClient:      deps.FetcherClient,
+		fetcherCommands:    deps.FetcherCommand,
+		libraryView:        libraryViewService,
+		readerAssistant:    readerAssistantService,
+		readerView:         readerViewService,
+		extraction:         extractionRuntime,
+		extractionJobQueue: extractionJobQueue,
+		stateInitErr:       deps.StateInitErr,
+		storageProgress:    newStorageUsageProgressStore(),
 	}
 	s.extractionJobs = deps.ExtractionJobCoordinator
 	if s.extractionJobs == nil && deps.ExtractionJobCoordinatorFactory != nil {
