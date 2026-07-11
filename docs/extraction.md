@@ -50,7 +50,3 @@
 - 環境変数は `EXTRACTION_*` / `VIEWER_EXTRACTION_TIMING_LOG` を優先し、旧 `CHARACTER_SUMMARY_*` / `VIEWER_CHARACTER_SUMMARY_TIMING_LOG` は read fallback として残す。
 - 起動時に旧 `state/character_jobs` を `state/extraction_jobs` へ best-effort rename し、clear/reset は新旧両方を削除する。
 - 旧 usage row の feature 名は表示互換のため読み取れる。
-
-## follow-up
-
-読書 AI 用の `get_term_snapshot` tool は本変更には含めず、別タスクで追加する。

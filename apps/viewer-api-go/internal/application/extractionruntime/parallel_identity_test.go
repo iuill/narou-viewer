@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -209,18 +210,47 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 		t.Fatalf("rawTerms = %+v", rawTerms)
 	}
 	completedCounts := []int{}
+	mergedCharacterCounts := []int{}
 	mergedTermCounts := []int{}
 	for _, progress := range progressEvents {
 		if progress.Phase == "complete" {
 			completedCounts = append(completedCounts, progress.CompletedBatchCount)
+			mergedCharacterCounts = append(mergedCharacterCounts, progress.MergedCharacterCount)
 			mergedTermCounts = append(mergedTermCounts, progress.MergedTermCount)
 		}
 	}
 	if len(completedCounts) != 2 || completedCounts[0] != 1 || completedCounts[1] != 2 {
 		t.Fatalf("completedCounts = %+v events=%+v", completedCounts, progressEvents)
 	}
+	if len(mergedCharacterCounts) != 2 || mergedCharacterCounts[0] != 1 || mergedCharacterCounts[1] != 2 {
+		t.Fatalf("mergedCharacterCounts = %+v events=%+v", mergedCharacterCounts, progressEvents)
+	}
 	if len(mergedTermCounts) != 2 || mergedTermCounts[0] != 1 || mergedTermCounts[1] != 2 {
 		t.Fatalf("mergedTermCounts = %+v events=%+v", mergedTermCounts, progressEvents)
+	}
+}
+
+func TestExtractParallelIdentityCandidatesReturnsUsageFromSuccessfulAndNormalizationFailedRequests(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		`not-json`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	t.Setenv("CHARACTER_SUMMARY_LLM_CONCURRENCY", "1")
+	t.Setenv("CHARACTER_SUMMARY_LLM_START_INTERVAL_MS", "0")
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文1"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "本文2"}}},
+	}
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	_, _, usage, _, err := runtime.extractParallelIdentityCandidates(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "2", nil, batches, nil, nil)
+	if err == nil {
+		t.Fatal("normalization failure should be returned")
+	}
+	if len(usage) != 2 || usage[0].TotalTokens == 0 || usage[1].TotalTokens == 0 {
+		t.Fatalf("provider usage was lost on partial failure: %+v", usage)
 	}
 }
 
@@ -711,11 +741,37 @@ func TestResolveParallelIdentityClustersFallbackIgnoresHallucinatedLocalIDsBefor
 	if len(clusters) != 2 {
 		t.Fatalf("clusters = %+v", clusters)
 	}
-	if got := clusters[0].LocalIDs; len(got) != 1 || got[0] != "b1-c1" {
-		t.Fatalf("first cluster ids = %+v", got)
+	clusterIDs := []string{strings.Join(clusters[0].LocalIDs, ","), strings.Join(clusters[1].LocalIDs, ",")}
+	sort.Strings(clusterIDs)
+	if !reflect.DeepEqual(clusterIDs, []string{"b1-c1", "b2-c1,seed:char_alice"}) {
+		t.Fatalf("cluster ids = %+v", clusterIDs)
 	}
-	if got := clusters[1].LocalIDs; len(got) != 2 || got[0] != "b2-c1" || got[1] != "seed:char_alice" {
-		t.Fatalf("seed cluster ids = %+v", got)
+}
+
+func TestFilterAutoApplicableParallelIdentityClustersConfidenceBoundaryAndBridge(t *testing.T) {
+	filtered := filterAutoApplicableParallelIdentityClusters([]parallelIdentityCluster{
+		{LocalIDs: []string{"a", "b"}, Confidence: 0},
+		{LocalIDs: []string{"b", "c"}, Confidence: 0.74},
+		{LocalIDs: []string{"a", "d"}, Confidence: 0.75},
+		{LocalIDs: []string{"c", "e"}, Confidence: 1.2},
+		{LocalIDs: []string{"singleton"}, Confidence: 1},
+	})
+	if len(filtered) != 2 || filtered[0].Confidence != 0.75 || filtered[1].Confidence != 1 {
+		t.Fatalf("filtered = %+v", filtered)
+	}
+	merged := mergeOverlappingParallelIdentityClusters(filtered)
+	if len(merged) != 2 {
+		t.Fatalf("low-confidence bridge merged trusted clusters: %+v", merged)
+	}
+}
+
+func TestRenumberParallelIdentityRuntimeBatches(t *testing.T) {
+	batches := renumberParallelIdentityRuntimeBatches([]extractionBatch{{BatchIndex: 1, BatchCount: 1}, {BatchIndex: 1, BatchCount: 1}})
+	if batches[0].BatchIndex != 1 || batches[1].BatchIndex != 2 || batches[0].BatchCount != 2 || batches[1].BatchCount != 2 {
+		t.Fatalf("batches = %+v", batches)
+	}
+	if got := ExtractionJobBatchProgressPercent(1, batches[0].BatchCount); got >= 100 {
+		t.Fatalf("intermediate progress = %d", got)
 	}
 }
 
@@ -964,7 +1020,7 @@ func TestDiscoveryParallelCorrectionHelpers(t *testing.T) {
 	}, {
 		Name: "アリス",
 	}}, "1")
-	if len(discovered) != 1 || discovered[0].CanonicalName != "アリス" || len(discovered[0].Aliases) < 2 || len(discovered[0].SummaryHistory) != 1 {
+	if len(discovered) != 2 || discovered[0].CanonicalName != "アリス" || len(discovered[0].Aliases) < 2 || len(discovered[0].SummaryHistory) != 1 || discovered[1].CanonicalName != "アリス" {
 		t.Fatalf("discovered = %+v", discovered)
 	}
 	candidates := discoveryParallelIdentityCandidates([]characters.GeneratedCharacter{{CharacterID: "char_d", CanonicalName: "アリス"}})
@@ -975,6 +1031,16 @@ func TestDiscoveryParallelCorrectionHelpers(t *testing.T) {
 	chunks, ok := payload["chunks"].([]map[string]any)
 	if !ok || len(chunks) != 1 || len([]rune(chunks[0]["text"].(string))) != 6000 {
 		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func TestDiscoveredNamesKeepSameRoleCandidatesSeparate(t *testing.T) {
+	discovered := discoveredNamesToGeneratedCharacters([]parallelIdentityDiscoveredName{
+		{Name: "先生", EpisodeIndex: "3", Reason: "王都の教師"},
+		{Name: "先生", EpisodeIndex: "80", Reason: "辺境の教師"},
+	}, "80")
+	if len(discovered) != 2 || discovered[0].FirstAppearanceEpisodeIndex != "3" || discovered[1].FirstAppearanceEpisodeIndex != "80" {
+		t.Fatalf("same-role candidates were merged before identity resolution: %+v", discovered)
 	}
 }
 

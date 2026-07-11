@@ -102,13 +102,26 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,
 	}, prepared.Messages)
+	usage := extractionUsageRequestForBatch(batch.BatchIndex-1, batch)
+	if result.InputTokens > 0 {
+		usage.InputTokens = result.InputTokens
+	}
+	usage.OutputTokens = result.OutputTokens
+	if result.TotalTokens > 0 {
+		usage.TotalTokens = result.TotalTokens
+	} else {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
 	status = "ok"
 	if err != nil {
 		status = "error"
 	}
 	r.log("batch_openrouter", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
 	if err != nil {
-		return extractionBatchResult{}, err
+		if result.InputTokens == 0 && result.OutputTokens == 0 && result.TotalTokens == 0 {
+			return extractionBatchResult{}, err
+		}
+		return extractionBatchResult{Usage: usage}, err
 	}
 	stageStartedAt = time.Now()
 	fallbackEpisodeIndex := upToEpisodeIndex
@@ -122,17 +135,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 	}
 	r.log("batch_normalize", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "answerChars", len([]rune(result.Answer)))
 	if err != nil {
-		return extractionBatchResult{}, err
-	}
-	usage := extractionUsageRequestForBatch(batch.BatchIndex-1, batch)
-	if result.InputTokens > 0 {
-		usage.InputTokens = result.InputTokens
-	}
-	usage.OutputTokens = result.OutputTokens
-	if result.TotalTokens > 0 {
-		usage.TotalTokens = result.TotalTokens
-	} else {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		return extractionBatchResult{Usage: usage}, err
 	}
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
 }

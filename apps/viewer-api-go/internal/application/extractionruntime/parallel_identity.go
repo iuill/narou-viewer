@@ -180,7 +180,15 @@ func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *st
 			remaining = nextRemaining
 		}
 	}
-	return runtimeBatches, nil
+	return renumberParallelIdentityRuntimeBatches(runtimeBatches), nil
+}
+
+func renumberParallelIdentityRuntimeBatches(values []extractionBatch) []extractionBatch {
+	for index := range values {
+		values[index].BatchIndex = index + 1
+		values[index].BatchCount = len(values)
+	}
+	return values
 }
 
 type parallelIdentityExtractionResult struct {
@@ -323,6 +331,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	results := make([]parallelIdentityExtractionResult, len(batches))
 	var sinkMu sync.Mutex
 	completedCount := 0
+	completedCandidateCount := 0
 	completedTermNames := map[string]bool{}
 	runErr := runParallelIdentityLLMJobs(ctx, len(batches), func(requestCtx context.Context, index int) error {
 		batch := batches[index]
@@ -336,10 +345,12 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 			sinkMu.Unlock()
 		}
 		result, err := r.generateOpenRouterBatchForFocus(requestCtx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, "parallel_entities", projectedUnresolved)
-		extraction := parallelIdentityExtractionResult{RequestIndex: index, Batch: batch, Err: err}
-		if err == nil {
+		extraction := parallelIdentityExtractionResult{RequestIndex: index, Batch: batch, Usage: result.Usage, Err: err}
+		if extraction.Usage.Kind != "" {
 			result.Usage.RequestIndex = index
 			extraction.Usage = result.Usage
+		}
+		if err == nil {
 			extraction.Unresolved = result.Delta.UnresolvedMentions
 			extraction.Terms = result.Delta.Terms
 			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
@@ -348,6 +359,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		if progressSink != nil {
 			sinkMu.Lock()
 			completedCount++
+			completedCandidateCount += len(extraction.Candidates)
 			for _, term := range extraction.Terms {
 				if name := strings.TrimSpace(term.Term); name != "" {
 					completedTermNames[name] = true
@@ -359,7 +371,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 				CompletedBatchCount:     completedCount,
 				ElapsedMs:               time.Since(startedAt).Milliseconds(),
 				GeneratedCharacterCount: len(extraction.Candidates),
-				MergedCharacterCount:    len(extraction.Candidates),
+				MergedCharacterCount:    completedCandidateCount,
 				GeneratedTermCount:      len(extraction.Terms),
 				MergedTermCount:         len(completedTermNames),
 			})
@@ -372,17 +384,19 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	usageRequests := []ai.UsageRequest{}
 	rawTerms := []terms.GeneratedTerm{}
 	unresolved := append([]characters.GeneratedUnresolvedMention{}, initialUnresolved...)
-	if runErr != nil {
-		return candidates, rawTerms, usageRequests, unresolved, runErr
-	}
 	for _, result := range results {
-		if result.Err != nil {
-			return candidates, rawTerms, usageRequests, unresolved, result.Err
+		if result.Usage.Kind != "" {
+			usageRequests = append(usageRequests, result.Usage)
 		}
-		usageRequests = append(usageRequests, result.Usage)
+		if result.Err != nil {
+			continue
+		}
 		candidates = append(candidates, result.Candidates...)
 		unresolved = mergeGeneratedUnresolvedMentions(unresolved, result.Unresolved)
 		rawTerms = append(rawTerms, result.Terms...)
+	}
+	if runErr != nil {
+		return nil, nil, usageRequests, unresolved, runErr
 	}
 	return candidates, rawTerms, usageRequests, unresolved, nil
 }
@@ -614,7 +628,24 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 	if usage.TotalTokens <= 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
-	return completeParallelIdentitySingletons(decoded.Clusters, candidates), usage, nil
+	return completeParallelIdentitySingletons(filterAutoApplicableParallelIdentityClusters(decoded.Clusters), candidates), usage, nil
+}
+
+func filterAutoApplicableParallelIdentityClusters(values []parallelIdentityCluster) []parallelIdentityCluster {
+	result := make([]parallelIdentityCluster, 0, len(values))
+	for _, value := range values {
+		if value.Confidence < 0 {
+			value.Confidence = 0
+		} else if value.Confidence > 1 {
+			value.Confidence = 1
+		}
+		value.LocalIDs = normalizeParallelIdentityLocalIDs(value.LocalIDs)
+		if value.Confidence < core.MergeAutoApplyConfidence || len(value.LocalIDs) < 2 {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (r *Runtime) resolveParallelIdentityClustersByNameGroups(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, candidates []parallelIdentityCandidate) ([]parallelIdentityCluster, ai.UsageRequest, error) {
@@ -661,17 +692,9 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 		results[index] = discoveryResult{RequestIndex: index, Names: names, Usage: usage, Err: err}
 		return err
 	})
-	if runErr != nil {
-		return nil, nil, runErr
-	}
-
 	merged := []parallelIdentityDiscoveredName{}
 	usageRequests := []ai.UsageRequest{}
-	seen := map[string]bool{}
 	for _, result := range results {
-		if result.Err != nil {
-			return nil, usageRequests, result.Err
-		}
 		if result.Usage.Kind != "" {
 			result.Usage.RequestIndex = len(usageRequests)
 			usageRequests = append(usageRequests, result.Usage)
@@ -681,14 +704,12 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 			if name == "" {
 				continue
 			}
-			key := strings.ToLower(name)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
 			item.Name = name
 			merged = append(merged, item)
 		}
+	}
+	if runErr != nil {
+		return nil, usageRequests, runErr
 	}
 	return discoveredNamesToGeneratedCharacters(merged, upToEpisodeIndex), usageRequests, nil
 }
@@ -737,30 +758,33 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		status = "error"
 	}
 	r.log("parallel_identity_name_discovery_openrouter", startedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "requestIndex", requestIndex, "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
+	usage := ai.UsageRequest{}
+	if result.InputTokens > 0 || result.OutputTokens > 0 || result.TotalTokens > 0 {
+		usage = ai.UsageRequest{
+			Kind:         "extraction_name_discovery",
+			InputTokens:  result.InputTokens,
+			OutputTokens: result.OutputTokens,
+			TotalTokens:  result.TotalTokens,
+		}
+		if usage.InputTokens <= 0 {
+			usage.InputTokens = promptTokens
+		}
+		if usage.TotalTokens <= 0 {
+			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		}
+	}
 	if err != nil {
-		return nil, ai.UsageRequest{}, err
+		return nil, usage, err
 	}
 	var decoded struct {
 		Characters []parallelIdentityDiscoveredName `json:"characters"`
 	}
 	if err := json.Unmarshal([]byte(result.Answer), &decoded); err != nil {
-		return nil, ai.UsageRequest{}, err
+		return nil, usage, err
 	}
 	normalized, err := normalizeDiscoveredNamesForBatch(decoded.Characters, batch, upToEpisodeIndex)
 	if err != nil {
-		return nil, ai.UsageRequest{}, err
-	}
-	usage := ai.UsageRequest{
-		Kind:         "extraction_name_discovery",
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
-		TotalTokens:  result.TotalTokens,
-	}
-	if usage.InputTokens <= 0 {
-		usage.InputTokens = promptTokens
-	}
-	if usage.TotalTokens <= 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		return nil, usage, err
 	}
 	return normalized, usage, nil
 }
@@ -847,7 +871,7 @@ func discoveredNamesToGeneratedCharacters(values []parallelIdentityDiscoveredNam
 		}
 		generated = append(generated, character)
 	}
-	return mergeGeneratedCharacters(nil, generated)
+	return generated
 }
 
 type parallelIdentityCorrection struct {
