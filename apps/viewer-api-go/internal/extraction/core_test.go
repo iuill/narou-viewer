@@ -750,12 +750,25 @@ func TestReuseGeneratedCharacterIDsFromRegistryKeepsStableIDForReprocessedIdenti
 	}}, []characters.GeneratedCharacter{
 		{CharacterID: "char_old", CanonicalName: "アリス", CanonicalEpisodeIndex: "5", FirstAppearanceEpisodeIndex: "5"},
 		{CharacterID: "char_future", CanonicalName: "未来の人物", CanonicalEpisodeIndex: "10", FirstAppearanceEpisodeIndex: "10"},
-	}, GenerationState{IssuedCharacterIDs: []string{"char_new"}}, "5")
+	}, GenerationState{
+		IssuedCharacterIDs: []string{"char_new"},
+		PersistenceCharacters: []characters.GeneratedCharacter{{
+			CharacterID:                 "char_new",
+			CanonicalName:               "アリス",
+			CanonicalEpisodeIndex:       "5",
+			FirstAppearanceEpisodeIndex: "5",
+		}},
+		IdentityMergeEvents: []characters.GeneratedIdentityMergeEvent{{SourceCharacterID: "char_source", TargetCharacterID: "char_new", EffectiveEpisodeIndex: "5"}},
+		UnresolvedMentions:  []characters.GeneratedUnresolvedMention{{Mention: "彼女", EpisodeIndex: "5", CandidateIDs: []string{"char_new"}}},
+	}, "5")
 	if len(generated) != 1 || generated[0].CharacterID != "char_old" {
 		t.Fatalf("reprocessed matching identity should reuse the previous stable id: %+v", generated)
 	}
 	if len(state.RetiredCharacterIDs) != 1 || state.RetiredCharacterIDs[0].CharacterID != "char_new" || state.RetiredCharacterIDs[0].MergedInto != "char_old" {
 		t.Fatalf("newly issued id should be retired into the previous id: %+v", state.RetiredCharacterIDs)
+	}
+	if len(state.PersistenceCharacters) != 1 || state.PersistenceCharacters[0].CharacterID != "char_old" || len(state.IdentityMergeEvents) != 1 || state.IdentityMergeEvents[0].TargetCharacterID != "char_old" || len(state.UnresolvedMentions) != 1 || len(state.UnresolvedMentions[0].CandidateIDs) != 1 || state.UnresolvedMentions[0].CandidateIDs[0] != "char_old" {
+		t.Fatalf("registry remap must update persisted state references: %+v", state)
 	}
 	ambiguous, ambiguousState := ReuseGeneratedCharacterIDsFromRegistry([]characters.GeneratedCharacter{{
 		CharacterID:   "char_teacher_new",
@@ -924,6 +937,53 @@ func TestExtractionApplyDeltaMergeProposalsAreOrderIndependent(t *testing.T) {
 	}, nil)
 	if changed != 0 || len(unchanged) != 3 {
 		t.Fatalf("low-confidence merge proposals should not be applied automatically: changed=%d merged=%+v", changed, unchanged)
+	}
+}
+
+func TestTimedIdentityMergeEventsNormalizeAndApplyByBoundary(t *testing.T) {
+	charactersAtStart := []characters.GeneratedCharacter{
+		{CharacterID: "char_a", CanonicalName: "A", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+		{CharacterID: "char_b", CanonicalName: "B", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"},
+		{CharacterID: "char_c", CanonicalName: "C", CanonicalEpisodeIndex: "3", FirstAppearanceEpisodeIndex: "3"},
+	}
+	events := NormalizeGeneratedIdentityMergeEvents([]characters.GeneratedIdentityMergeEvent{
+		{SourceCharacterID: " char_a ", TargetCharacterID: "char_b", EffectiveEpisodeIndex: "20"},
+		{SourceCharacterID: "char_a", TargetCharacterID: "char_b", EffectiveEpisodeIndex: "20"},
+		{SourceCharacterID: "char_b", TargetCharacterID: "char_c", EffectiveEpisodeIndex: "30"},
+		{SourceCharacterID: "char_c", TargetCharacterID: "char_c", EffectiveEpisodeIndex: "40"},
+	})
+	if len(events) != 2 || events[0].SourceCharacterID != "char_a" || events[1].SourceCharacterID != "char_b" {
+		t.Fatalf("normalized events = %+v", events)
+	}
+	if before := ApplyIdentityMergeEvents(charactersAtStart, events, "19"); len(before) != 3 {
+		t.Fatalf("identity merged before first event: %+v", before)
+	}
+	if middle := ApplyIdentityMergeEvents(charactersAtStart, events, "20"); len(middle) != 2 {
+		t.Fatalf("first identity event was not applied: %+v", middle)
+	}
+	after := ApplyIdentityMergeEvents(charactersAtStart, events, "30")
+	if len(after) != 1 || after[0].CharacterID != "char_c" {
+		t.Fatalf("chained identity events = %+v, want char_c", after)
+	}
+	unresolved := ApplyIdentityMergeEventsToUnresolvedMentions([]characters.GeneratedUnresolvedMention{{Mention: "彼", EpisodeIndex: "30", CandidateIDs: []string{"char_a", "char_b"}}}, events, "30")
+	if len(unresolved) != 1 || len(unresolved[0].CandidateIDs) != 1 || unresolved[0].CandidateIDs[0] != "char_c" {
+		t.Fatalf("identity events did not remap unresolved candidate IDs: %+v", unresolved)
+	}
+	rawUnresolved := []characters.GeneratedUnresolvedMention{{Mention: "謎の人物", EpisodeIndex: "1", CandidateIDs: []string{"char_a", "char_c"}}}
+	preserved := FilterResolvedGeneratedUnresolvedMentionsWithIdentityEvents(rawUnresolved, events, "30", after)
+	if len(preserved) != 1 || len(preserved[0].CandidateIDs) != 2 || preserved[0].CandidateIDs[0] != "char_a" {
+		t.Fatalf("filtering should preserve raw pre-event candidate IDs for reprocessing: %+v", preserved)
+	}
+}
+
+func TestIdentityMergeEventsFromProposalsUsesServerBoundary(t *testing.T) {
+	generated := []characters.GeneratedCharacter{{CharacterID: "char_a"}, {CharacterID: "char_b"}}
+	events := IdentityMergeEventsFromProposals([]MergeProposal{{SourceCharacterID: "char_a", TargetCharacterID: "char_b", Confidence: 1}}, "20", generated)
+	if len(events) != 1 || events[0].EffectiveEpisodeIndex != "20" {
+		t.Fatalf("proposal events = %+v", events)
+	}
+	if ignored := IdentityMergeEventsFromProposals([]MergeProposal{{SourceCharacterID: "char_a", TargetCharacterID: "missing", Confidence: 1}}, "20", generated); len(ignored) != 0 {
+		t.Fatalf("unknown proposal target should be ignored: %+v", ignored)
 	}
 }
 

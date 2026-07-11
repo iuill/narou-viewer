@@ -342,7 +342,7 @@ func TestGenerateOpenRouterChatRejectsTruncatedFinishReason(t *testing.T) {
 				APIKey:  "sk-test",
 				ModelID: "openrouter/auto",
 			}, []ChatMessage{{Role: "user", Content: "hello"}})
-			if err == nil || !strings.Contains(err.Error(), "finish_reason="+finishReason) || result.TotalTokens != 18 {
+			if err == nil || !errors.Is(err, ErrOpenRouterTruncatedResponse) || !IsOpenRouterOutputError(err) || !strings.Contains(err.Error(), "finish_reason="+finishReason) || result.TotalTokens != 18 {
 				t.Fatalf("expected truncated finish reason error, got %v", err)
 			}
 		})

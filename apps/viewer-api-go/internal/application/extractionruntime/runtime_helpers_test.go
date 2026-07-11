@@ -101,9 +101,12 @@ func TestRuntimeGeneratedStateHelpers(t *testing.T) {
 	}}, []characters.HeuristicEpisode{{EpisodeIndex: "1", Text: "アリスがいた。"}}); err != nil {
 		t.Fatalf("SaveGeneratedSummaryWithEpisodes returned error: %v", err)
 	}
-	seed, processed, ok, err := runtime.LoadGeneratedCharactersBeforeEpisode("novel-1", "2")
+	seed, identityMergeEvents, processed, ok, err := runtime.LoadGeneratedCharactersBeforeEpisode("novel-1", "2")
 	if err != nil || !ok || processed == nil || len(seed) != 1 {
 		t.Fatalf("LoadGeneratedCharactersBeforeEpisode seed=%+v processed=%v ok=%v err=%v", seed, processed, ok, err)
+	}
+	if len(identityMergeEvents) != 0 {
+		t.Fatalf("unexpected identity merge events: %+v", identityMergeEvents)
 	}
 	if err := terms.SaveGeneratedTerms(stateDir, "novel-1", "3", []terms.GeneratedTerm{{
 		Term:               "聖剣",

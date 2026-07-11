@@ -18,11 +18,15 @@
 - parallel identity と discovery + parallel correction の detail extraction は、各本文バッチを人物用・用語用に二重送信せず、1回の並列リクエストで人物差分と用語の事実差分を同時抽出する。
 - `characterUpdates` は現在バッチの差分だけを受け取り、既存人物の初登場話は更新 response で変更しない。
 - discovery の人物名候補は response の話数を当該バッチで検証し、最終補正では既存の名前・別名の話数を維持する。補正理由は物語上の人物履歴へ保存しない。
+- 人物の同一性判明は `identity_merge_events` に source / target ID と有効話数を保存する。明示的な `mergeProposals` は返却した runtime batch の境界、identity resolver の判定は生成上限を有効話数とし、それより前の表示境界では別人物のまま投影する。
 - 並列バッチの用語説明は、そのバッチで新しく判明した事実差分として受け取り、`description_facts` に話単位で保存する。表示時だけ境界以下の事実を合成し、中間話ごとの累積 snapshot を重複保存しない。後続プロンプトへ渡す説明は長さを制限する。
 - term profile は `description_facts` 追加後も `schema_version: 1` を維持する。新ビルドが保存した profile を旧ビルドへロールバックして読み込むと、旧ビルドは未知fieldを無視して事実差分を表示できないため、ロールバック前にstateを退避し、再度新ビルドへ戻した後に再生成する。
+- character event / profile の `identity_merge_events` も旧ビルドでは無視される。旧ビルドで保存し直すと時系列identity情報を失うため、同じくロールバック前にstateを退避する。
 - snapshotを持たない用語は、表示境界以下の事実をすべて連結して説明を構築する。長編で説明が長くなる場合の表示要約・折りたたみはfollow-upとする。
 - serial は従来どおり直前までの用語 snapshot を次バッチへ渡し、LLM response 自体に自己完結型 snapshot を返させる。
 - response の `terms` は必須で、欠落または `null` は job failure とする。
+- 人物・用語の履歴や名前事前発見の話数が不正、または現在の runtime batch 外の場合は、項目を黙って捨てず job failure とする。structured output を保証しない provider でも、誤った話数を保存してネタバレ境界を壊さないことを優先する。
+- provider が応答した JSON のdecode、正規化、話数境界検証に失敗した場合や、空応答・`finish_reason` による切断の場合は、同じpromptで1回だけ再生成する。再生成後も契約不正ならjobを失敗させ、両attemptのtoken usageを記録する。通信・rate limit等のretryはprovider共通層で別に扱う。
 - 保存順は term profile、character events/profile の順。character frontier を commit marker とし、両方の保存後だけ checkpoint を削除する。
 - retry / reprocess は置換境界以降の人物・用語履歴を削除してから再適用する。term だけ先行した partial write も character frontier で隠し、retry で収束させる。
 - 旧 character-only state は増分生成しない。`DELETE .../extraction` でクリアして再生成する必要がある。

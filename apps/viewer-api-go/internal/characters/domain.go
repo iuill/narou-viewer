@@ -1,9 +1,10 @@
 package characters
 
 type profilesDocument struct {
-	NovelID                   string             `yaml:"novel_id"`
-	ProcessedUpToEpisodeIndex *string            `yaml:"processed_up_to_episode_index"`
-	Characters                []characterProfile `yaml:"characters"`
+	NovelID                   string               `yaml:"novel_id"`
+	ProcessedUpToEpisodeIndex *string              `yaml:"processed_up_to_episode_index"`
+	IdentityMergeEvents       []identityMergeEvent `yaml:"identity_merge_events,omitempty"`
+	Characters                []characterProfile   `yaml:"characters"`
 }
 
 type characterEventsDocument struct {
@@ -12,6 +13,7 @@ type characterEventsDocument struct {
 	ProcessedUpToEpisodeIndex *string                `yaml:"processed_up_to_episode_index"`
 	NextCharacterOrdinal      int                    `yaml:"next_character_ordinal"`
 	RetiredCharacterIDs       []retiredCharacterID   `yaml:"retired_character_ids,omitempty"`
+	IdentityMergeEvents       []identityMergeEvent   `yaml:"identity_merge_events,omitempty"`
 	UnresolvedMentions        []unresolvedMention    `yaml:"unresolved_mentions,omitempty"`
 	EpisodeEtags              []episodeEtag          `yaml:"episode_etags,omitempty"`
 	Characters                []characterEventRecord `yaml:"characters"`
@@ -20,6 +22,12 @@ type characterEventsDocument struct {
 type retiredCharacterID struct {
 	CharacterID string `yaml:"character_id"`
 	MergedInto  string `yaml:"merged_into,omitempty"`
+}
+
+type identityMergeEvent struct {
+	SourceCharacterID     string `yaml:"source_character_id"`
+	TargetCharacterID     string `yaml:"target_character_id"`
+	EffectiveEpisodeIndex string `yaml:"effective_episode_index"`
 }
 
 type unresolvedMention struct {
@@ -134,6 +142,12 @@ type GeneratedRetiredCharacterID struct {
 	MergedInto  string
 }
 
+type GeneratedIdentityMergeEvent struct {
+	SourceCharacterID     string
+	TargetCharacterID     string
+	EffectiveEpisodeIndex string
+}
+
 type GeneratedEpisodeDigest struct {
 	EpisodeIndex string
 	ContentEtag  string
@@ -145,6 +159,7 @@ type SaveGeneratedSummaryOptions struct {
 	SetUnresolvedMentions   bool
 	IssuedCharacterIDs      []string
 	RetiredCharacterIDs     []GeneratedRetiredCharacterID
+	IdentityMergeEvents     []GeneratedIdentityMergeEvent
 	NextCharacterOrdinal    int
 }
 

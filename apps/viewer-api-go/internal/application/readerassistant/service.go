@@ -1450,6 +1450,11 @@ func (s *Service) termSnapshotResult(novelID string, currentEpisodeIndex string,
 		"termCount":                 len(response.Terms),
 		"terms":                     items,
 	}
+	if len(response.Terms) > len(items) {
+		result["truncated"] = true
+		result["fallbackTool"] = "search_full_text"
+		result["fallbackHint"] = "用語一覧は件数が多いため先頭30件のみ返しています。含まれない用語は search_full_text で既読範囲から検索できます。"
+	}
 	if response.Status != "ready" {
 		result["fallbackTool"] = "search_full_text"
 		if response.Status == "partial" {

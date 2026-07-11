@@ -5,10 +5,12 @@ import (
 	"errors"
 	"testing"
 
+	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 func runnerBatches(indexes ...string) []core.Batch {
@@ -34,7 +36,7 @@ func TestGenerationRunnerResumesOnlyUnprocessedBatchesFromCheckpoint(t *testing.
 	batches := runnerBatches("1", "2")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           3,
+			SchemaVersion:           CheckpointSchemaVersion,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "2",
 			GenerationFingerprint:   runnerCheckpointFingerprint(config, "novel-a", nil, batches),
@@ -73,7 +75,7 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 	batches := runnerBatches("1")
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           3,
+			SchemaVersion:           CheckpointSchemaVersion,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "1",
 			GenerationFingerprint:   "stale",
@@ -102,7 +104,7 @@ func TestGenerationRunnerIgnoresCheckpointWhenPersistentSeedChanges(t *testing.T
 	newSeed := []characters.GeneratedCharacter{{CharacterID: "char_new", CanonicalName: "更新後の人物", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}}
 	ports := &workflowFakePorts{
 		checkpoint: checkpointstore.Checkpoint{
-			SchemaVersion:           3,
+			SchemaVersion:           CheckpointSchemaVersion,
 			NovelID:                 "novel-a",
 			UpToEpisodeIndex:        "2",
 			GenerationFingerprint:   runnerCheckpointFingerprint(config, "novel-a", oldSeed, batches),
@@ -162,6 +164,86 @@ func TestGenerationRunnerPreviewDoesNotSaveCheckpointAndEmitsProgress(t *testing
 	}
 }
 
+func TestGenerationRunnerAggregatesLogicalBatchTimingAcrossRuntimeFragments(t *testing.T) {
+	batch := core.Batch{
+		BatchIndex:     1,
+		BatchCount:     1,
+		EpisodeIndexes: []string{"1", "2"},
+		Chunks: []core.Chunk{
+			{EpisodeIndex: "1", Text: "本文1"},
+			{EpisodeIndex: "2", Text: "本文2"},
+		},
+	}
+	results := []BatchResult{
+		{
+			Delta: core.Delta{
+				NewCharacters: []characters.GeneratedCharacter{{CanonicalName: "アリス", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},
+				Terms:         []terms.GeneratedTerm{{Term: "魔導院", DescriptionHistory: []terms.HistoryVersion{{EpisodeIndex: "1", Text: "王都にある。"}}}},
+			},
+			Usage: ai.UsageRequest{Kind: "extraction_batch", TotalTokens: 10},
+		},
+		{
+			Delta: core.Delta{
+				NewCharacters: []characters.GeneratedCharacter{{CanonicalName: "ボブ", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"}},
+				Terms:         []terms.GeneratedTerm{{Term: "白銀騎士団", DescriptionHistory: []terms.HistoryVersion{{EpisodeIndex: "2", Text: "騎士団。"}}}},
+			},
+			Usage: ai.UsageRequest{Kind: "extraction_batch", TotalTokens: 12},
+		},
+	}
+	for _, preview := range []bool{false, true} {
+		name := "checkpoint"
+		if preview {
+			name = "preview"
+		}
+		t.Run(name, func(t *testing.T) {
+			ports := &workflowFakePorts{runtimeBatchChunkLimit: 1, generateBatchResults: results}
+			progress := []BatchProgress{}
+			var err error
+			if preview {
+				_, _, _, err = NewWorkflow(ports).RunOpenRouterPreview(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-a", "2", nil, nil, []core.Batch{batch}, func(value BatchProgress) {
+					progress = append(progress, value)
+				}, nil)
+			} else {
+				_, _, _, err = NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-a", "2", nil, nil, []core.Batch{batch}, func(value BatchProgress) {
+					progress = append(progress, value)
+				}, nil)
+			}
+			if err != nil {
+				t.Fatalf("runner returned error: %v", err)
+			}
+			if len(progress) != 3 || progress[0].Phase != "start" || progress[1].Phase != "start" || progress[2].Phase != "complete" {
+				t.Fatalf("progress phases = %+v, want start,start,complete", progress)
+			}
+			complete := progress[2]
+			if len(complete.Batch.Chunks) != 2 || len(complete.Batch.EpisodeIndexes) != 2 || complete.GeneratedCharacterCount != 2 || complete.GeneratedTermCount != 2 || complete.MergedCharacterCount != 2 || complete.MergedTermCount != 2 {
+				t.Fatalf("logical batch timing was not aggregated: %+v", complete)
+			}
+		})
+	}
+}
+
+func TestGenerationRunnerStoresMergeProposalAsTimedIdentityEvent(t *testing.T) {
+	seed := []characters.GeneratedCharacter{
+		{CharacterID: "char_black", CanonicalName: "黒騎士", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"},
+		{CharacterID: "char_alice", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"},
+	}
+	ports := &workflowFakePorts{generateBatchResults: []BatchResult{{
+		Delta: core.Delta{MergeProposals: []core.MergeProposal{{SourceCharacterID: "char_black", TargetCharacterID: "char_alice", Confidence: 1}}},
+		Usage: ai.UsageRequest{Kind: "extraction_batch", TotalTokens: 10},
+	}}}
+	batch := core.Batch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []core.Chunk{{EpisodeIndex: "20", Text: "黒騎士の正体はアリス。"}}}
+	generated, state, _, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-a", "20", seed, nil, []core.Batch{batch}, nil, nil)
+	if err != nil {
+		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
+	}
+	if len(generated) != 1 || len(state.PersistenceCharacters) != 2 || len(state.IdentityMergeEvents) != 1 || state.IdentityMergeEvents[0].EffectiveEpisodeIndex != "20" {
+		t.Fatalf("timed identity state = generated:%+v state:%+v", generated, state)
+	}
+	if len(ports.checkpoint.Characters) != 2 || len(ports.checkpoint.IdentityMergeEvents) != 1 {
+		t.Fatalf("checkpoint did not preserve raw identities and merge event: %+v", ports.checkpoint)
+	}
+}
+
 func TestGenerationRunnerReturnsAllocatorAndPlanningErrors(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
 	if _, _, _, err := NewWorkflow(&workflowFakePorts{allocatorErr: errors.New("allocator failed")}).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, nil, runnerBatches("1"), nil, nil); err == nil {
@@ -192,7 +274,7 @@ func TestGenerationRunnerSmallHelpers(t *testing.T) {
 		t.Fatalf("mergeStringSets should skip blanks and duplicates: %+v", values)
 	}
 	checkpoint := NormalizeCheckpoint(checkpointstore.Checkpoint{})
-	if checkpoint.Characters == nil || checkpoint.PendingUnresolvedMentions == nil || checkpoint.IssuedCharacterIDs == nil || checkpoint.RetiredCharacterIDs == nil {
+	if checkpoint.Characters == nil || checkpoint.PendingUnresolvedMentions == nil || checkpoint.IssuedCharacterIDs == nil || checkpoint.RetiredCharacterIDs == nil || checkpoint.IdentityMergeEvents == nil {
 		t.Fatalf("NormalizeCheckpoint should initialize slices: %+v", checkpoint)
 	}
 	if fingerprint := CheckpointFingerprint(&store.ResolvedAIGenerationConfig{SystemPrompt: testString("prompt")}, func() {}); fingerprint == "" {

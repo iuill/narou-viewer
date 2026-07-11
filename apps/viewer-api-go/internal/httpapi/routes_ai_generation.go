@@ -754,17 +754,17 @@ func (s *Server) resolveExtractionRequestOptions(options *extractionRequestOptio
 		return "", http.StatusOK
 	}
 	if s.stateStore == nil {
-		return "AI generation profile was not found.", http.StatusBadRequest
+		return "AI生成プロファイルが見つかりません。", http.StatusBadRequest
 	}
 	config, err := s.stateStore.ResolveAIGenerationConfigOverride(options.ProfileID, options.Transient)
 	if err != nil {
 		if store.IsAIGenerationSettingsCryptoError(err) {
-			return "AI generation settings could not be decrypted.", http.StatusServiceUnavailable
+			return "AI生成設定を復号できませんでした。", http.StatusServiceUnavailable
 		}
-		return "AI generation profile was not found.", http.StatusBadRequest
+		return "AI生成プロファイルが見つかりません。", http.StatusBadRequest
 	}
 	if config == nil {
-		return "AI generation profile was not found.", http.StatusBadRequest
+		return "AI生成プロファイルが見つかりません。", http.StatusBadRequest
 	}
 	options.ResolvedConfig = config
 	options.GenerationMode = "openrouter"
@@ -1149,7 +1149,7 @@ func (s *Server) loadExtractionCheckpoint(novelID string, upToEpisodeIndex strin
 func (s *Server) loadExtractionCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) extractionCheckpoint {
 	checkpoint, err := s.extractionRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
 	if err != nil ||
-		checkpoint.SchemaVersion != 3 ||
+		checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion ||
 		checkpoint.NovelID != novelID ||
 		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
 		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
@@ -1212,7 +1212,11 @@ func (s *Server) loadExtractionInputs(ctx context.Context, novelID string, upToE
 }
 
 func (s *Server) loadExtractionGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	return s.extractionRuntime().LoadGenerationSeed(novelID, upToEpisodeIndex)
+	seed, events, processed, ok, err := s.extractionRuntime().LoadGenerationSeed(novelID, upToEpisodeIndex)
+	if err != nil {
+		return nil, processed, ok, err
+	}
+	return extraction.ApplyIdentityMergeEvents(seed, events, upToEpisodeIndex), processed, ok, nil
 }
 
 func extractionProcessedCovers(processedEpisodeIndex string, requestedEpisodeIndex string) bool {
@@ -1352,7 +1356,7 @@ func (s *Server) nextExtractionRuntimeBatch(ctx context.Context, config *store.R
 	if len(unresolvedMentions) > 0 {
 		pending = unresolvedMentions[0]
 	}
-	return s.extractionRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, nil, template, chunks, pending)
+	return s.extractionRuntime().PlanRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, nil, template, chunks, pending, nil)
 }
 
 func (s *Server) extractionRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, batch extractionBatch) ([]extractionBatch, error) {
@@ -1450,7 +1454,7 @@ func extractionPlaygroundProgressEvent(progress extractionBatchProgress) map[str
 }
 
 func playgroundBatchStatusEvent(batch extractionBatch) map[string]any {
-	event := playgroundStatusEvent("batch", "batch "+strconv.Itoa(batch.BatchIndex)+"/"+strconv.Itoa(batch.BatchCount)+" を生成しています。", 70, 3)
+	event := playgroundStatusEvent("generating", "batch "+strconv.Itoa(batch.BatchIndex)+"/"+strconv.Itoa(batch.BatchCount)+" を生成しています。", 70, 3)
 	event["batchIndex"] = batch.BatchIndex
 	event["batchCount"] = batch.BatchCount
 	return event

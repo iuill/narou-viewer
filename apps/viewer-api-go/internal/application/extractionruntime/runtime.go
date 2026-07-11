@@ -268,16 +268,16 @@ func (r *Runtime) LoadInputs(ctx context.Context, novelID string, upToEpisodeInd
 	}, nil
 }
 
-func (r *Runtime) LoadGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	existing, processed, ok, err := characters.LoadGeneratedCharacters(r.stateDir, novelID)
+func (r *Runtime) LoadGenerationSeed(novelID string, upToEpisodeIndex string) ([]characters.GeneratedCharacter, []characters.GeneratedIdentityMergeEvent, *string, bool, error) {
+	existing, events, processed, ok, err := characters.LoadGeneratedCharacterState(r.stateDir, novelID)
 	if err != nil || !ok || processed == nil {
-		return nil, processed, ok, err
+		return nil, events, processed, ok, err
 	}
-	return existing, processed, true, nil
+	return existing, events, processed, true, nil
 }
 
-func (r *Runtime) LoadGeneratedCharactersBeforeEpisode(novelID string, episodeIndex string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	return characters.LoadGeneratedCharactersBeforeEpisode(r.stateDir, novelID, episodeIndex)
+func (r *Runtime) LoadGeneratedCharactersBeforeEpisode(novelID string, episodeIndex string) ([]characters.GeneratedCharacter, []characters.GeneratedIdentityMergeEvent, *string, bool, error) {
+	return characters.LoadGeneratedCharacterStateBeforeEpisode(r.stateDir, novelID, episodeIndex)
 }
 
 func (r *Runtime) LoadGeneratedTermsAtOrBefore(novelID string, committedFrontier string) ([]terms.GeneratedTerm, *string, bool, error) {
@@ -377,9 +377,9 @@ func (r *Runtime) LoadIDAllocator(novelID string, seed []characters.GeneratedCha
 	return characters.LoadGeneratedCharacterIDAllocator(r.stateDir, novelID, seed)
 }
 
-func (r *Runtime) PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions []characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
+func (r *Runtime) PlanRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions []characters.GeneratedUnresolvedMention, identityMergeEvents []characters.GeneratedIdentityMergeEvent) (extractionBatch, []extractionChunk, error) {
 	startedAt := time.Now()
-	runtimeBatch, remaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, unresolvedMentions)
+	runtimeBatch, remaining, err := r.nextRuntimeBatch(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, unresolvedMentions, identityMergeEvents)
 	status := "ok"
 	if err != nil {
 		status = "error"

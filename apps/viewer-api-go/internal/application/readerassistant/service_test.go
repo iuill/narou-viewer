@@ -153,6 +153,33 @@ func TestReaderAssistantExposesTermSnapshotTool(t *testing.T) {
 	}
 }
 
+func TestTermSnapshotReportsReadyResultTruncation(t *testing.T) {
+	stateDir := t.TempDir()
+	const novelID = "novel-many-terms"
+	if err := characters.SaveGeneratedSummary(stateDir, novelID, "1", nil); err != nil {
+		t.Fatalf("save character commit frontier: %v", err)
+	}
+	generated := make([]terms.GeneratedTerm, 0, 31)
+	for index := 0; index < 31; index++ {
+		generated = append(generated, terms.GeneratedTerm{
+			Term:               fmt.Sprintf("用語%02d", index+1),
+			DescriptionHistory: []terms.HistoryVersion{{Text: "説明。", EpisodeIndex: "1"}},
+		})
+	}
+	if err := terms.SaveGeneratedTerms(stateDir, novelID, "1", generated, nil); err != nil {
+		t.Fatalf("save generated terms: %v", err)
+	}
+
+	result := NewService(Dependencies{StateDir: stateDir}).termSnapshotResult(novelID, "1", []library.TocEpisodeSummary{{EpisodeIndex: "1", Title: "第一話"}})
+	items := result["terms"].([]map[string]any)
+	if result["status"] != "ready" || result["termCount"] != 31 || len(items) != 30 || result["truncated"] != true {
+		t.Fatalf("ready term snapshot should report truncation: %+v", result)
+	}
+	if result["fallbackTool"] != "search_full_text" || result["fallbackHint"] == "" {
+		t.Fatalf("truncated term snapshot should explain how to search omitted terms: %+v", result)
+	}
+}
+
 func TestSearchFullTextResultUsesPersistentTextCache(t *testing.T) {
 	fakeLibrary := newReaderAssistantCountingLibrary(3, 0)
 	service := NewService(Dependencies{Library: fakeLibrary, StateDir: t.TempDir()})

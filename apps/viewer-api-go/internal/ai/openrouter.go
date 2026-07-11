@@ -95,6 +95,15 @@ func (e openRouterModelsHTTPError) Error() string {
 
 var openRouterModelInfoCache sync.Map
 
+var (
+	ErrOpenRouterEmptyResponse     = errors.New("OpenRouter returned an empty response")
+	ErrOpenRouterTruncatedResponse = errors.New("OpenRouter response was truncated")
+)
+
+func IsOpenRouterOutputError(err error) bool {
+	return errors.Is(err, ErrOpenRouterEmptyResponse) || errors.Is(err, ErrOpenRouterTruncatedResponse)
+}
+
 func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messages []ChatMessage) (ChatResult, error) {
 	if strings.TrimSpace(config.APIKey) == "" || strings.TrimSpace(config.ModelID) == "" {
 		return ChatResult{}, errors.New("OpenRouter API key and modelId are required")
@@ -253,14 +262,14 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 		return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
 	}
 	if len(decoded.Choices) == 0 || (strings.TrimSpace(decoded.Choices[0].Message.Content) == "" && len(decoded.Choices[0].Message.ToolCalls) == 0) {
-		return result, false, errors.New("OpenRouter returned an empty response")
+		return result, false, ErrOpenRouterEmptyResponse
 	}
 	finishReason := strings.TrimSpace(decoded.Choices[0].FinishReason)
 	result.Answer = strings.TrimSpace(decoded.Choices[0].Message.Content)
 	result.FinishReason = finishReason
 	result.ToolCalls = decoded.Choices[0].Message.ToolCalls
 	if isTruncatedOpenRouterFinishReason(finishReason) {
-		return result, false, fmt.Errorf("OpenRouter response was truncated: finish_reason=%s", finishReason)
+		return result, false, fmt.Errorf("%w: finish_reason=%s", ErrOpenRouterTruncatedResponse, finishReason)
 	}
 	return result, false, nil
 }

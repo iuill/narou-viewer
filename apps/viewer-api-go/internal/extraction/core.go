@@ -64,10 +64,11 @@ type Delta struct {
 }
 
 type MergeProposal struct {
-	SourceCharacterID string  `json:"sourceCharacterId"`
-	TargetCharacterID string  `json:"targetCharacterId"`
-	Confidence        float64 `json:"confidence"`
-	Reason            string  `json:"reason"`
+	SourceCharacterID     string  `json:"sourceCharacterId"`
+	TargetCharacterID     string  `json:"targetCharacterId"`
+	Confidence            float64 `json:"confidence"`
+	Reason                string  `json:"reason"`
+	EffectiveEpisodeIndex string  `json:"-"`
 }
 
 type UnresolvedMention struct {
@@ -77,11 +78,13 @@ type UnresolvedMention struct {
 }
 
 type GenerationState struct {
-	UnresolvedMentions  []characters.GeneratedUnresolvedMention
-	IssuedCharacterIDs  []string
-	RetiredCharacterIDs []characters.GeneratedRetiredCharacterID
-	NextOrdinal         int
-	Terms               []terms.GeneratedTerm
+	UnresolvedMentions    []characters.GeneratedUnresolvedMention
+	IssuedCharacterIDs    []string
+	RetiredCharacterIDs   []characters.GeneratedRetiredCharacterID
+	IdentityMergeEvents   []characters.GeneratedIdentityMergeEvent
+	PersistenceCharacters []characters.GeneratedCharacter
+	NextOrdinal           int
+	Terms                 []terms.GeneratedTerm
 }
 
 const MergeAutoApplyConfidence = 0.75
@@ -986,7 +989,7 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	for _, rawItem := range payload.Characters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
 		if !ok {
-			continue
+			return Delta{}, errors.New("OpenRouter response did not match the expected extraction character schema.")
 		}
 		id := strings.TrimSpace(character.CharacterID)
 		if id == "" {
@@ -1000,18 +1003,20 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	}
 	for _, rawItem := range payload.NewCharacters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
-		if ok {
-			delta.NewCharacters = append(delta.NewCharacters, character)
+		if !ok {
+			return Delta{}, errors.New("OpenRouter response did not match the expected extraction character schema.")
 		}
+		delta.NewCharacters = append(delta.NewCharacters, character)
 	}
 	for _, rawItem := range payload.CharacterUpdates {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
-		if ok && strings.TrimSpace(character.CharacterID) != "" {
-			// Existing persisted data is the authority for first appearance. An
-			// update response must never move a character into an earlier boundary.
-			character.FirstAppearanceEpisodeIndex = ""
-			delta.CharacterUpdates = append(delta.CharacterUpdates, character)
+		if !ok || strings.TrimSpace(character.CharacterID) == "" {
+			return Delta{}, errors.New("OpenRouter response did not match the expected extraction character update schema.")
 		}
+		// Existing persisted data is the authority for first appearance. An
+		// update response must never move a character into an earlier boundary.
+		character.FirstAppearanceEpisodeIndex = ""
+		delta.CharacterUpdates = append(delta.CharacterUpdates, character)
 	}
 	SortGeneratedCharacters(delta.LegacyCharacters)
 	SortGeneratedCharacters(delta.NewCharacters)
@@ -1225,10 +1230,11 @@ func normalizeMergeProposals(values []MergeProposal) []MergeProposal {
 			confidence = 1
 		}
 		result = append(result, MergeProposal{
-			SourceCharacterID: source,
-			TargetCharacterID: target,
-			Confidence:        confidence,
-			Reason:            strings.TrimSpace(value.Reason),
+			SourceCharacterID:     source,
+			TargetCharacterID:     target,
+			Confidence:            confidence,
+			Reason:                strings.TrimSpace(value.Reason),
+			EffectiveEpisodeIndex: strings.TrimSpace(value.EffectiveEpisodeIndex),
 		})
 	}
 	return result
@@ -1518,6 +1524,7 @@ func ReuseGeneratedCharacterIDsFromRegistry(generated []characters.GeneratedChar
 	}
 	result := append([]characters.GeneratedCharacter{}, generated...)
 	targets := make([]string, len(result))
+	idRemap := map[string]string{}
 	claimCounts := map[string]int{}
 	occupiedIDs := map[string]int{}
 	for _, item := range result {
@@ -1555,7 +1562,33 @@ func ReuseGeneratedCharacterIDsFromRegistry(generated []characters.GeneratedChar
 		}
 		result[index].CharacterID = targetID
 		if currentID != "" {
+			idRemap[currentID] = targetID
 			state.RetiredCharacterIDs = append(state.RetiredCharacterIDs, characters.GeneratedRetiredCharacterID{CharacterID: currentID, MergedInto: targetID})
+		}
+	}
+	if len(idRemap) > 0 {
+		for index := range state.PersistenceCharacters {
+			if targetID := idRemap[strings.TrimSpace(state.PersistenceCharacters[index].CharacterID)]; targetID != "" {
+				state.PersistenceCharacters[index].CharacterID = targetID
+			}
+		}
+		state.PersistenceCharacters = MergeGeneratedCharactersByID(state.PersistenceCharacters)
+		for index := range state.IdentityMergeEvents {
+			if targetID := idRemap[strings.TrimSpace(state.IdentityMergeEvents[index].SourceCharacterID)]; targetID != "" {
+				state.IdentityMergeEvents[index].SourceCharacterID = targetID
+			}
+			if targetID := idRemap[strings.TrimSpace(state.IdentityMergeEvents[index].TargetCharacterID)]; targetID != "" {
+				state.IdentityMergeEvents[index].TargetCharacterID = targetID
+			}
+		}
+		state.IdentityMergeEvents = NormalizeGeneratedIdentityMergeEvents(state.IdentityMergeEvents)
+		for index := range state.UnresolvedMentions {
+			for candidateIndex, candidateID := range state.UnresolvedMentions[index].CandidateIDs {
+				if targetID := idRemap[strings.TrimSpace(candidateID)]; targetID != "" {
+					state.UnresolvedMentions[index].CandidateIDs[candidateIndex] = targetID
+				}
+			}
+			state.UnresolvedMentions[index].CandidateIDs = NormalizeSummaryStringList(state.UnresolvedMentions[index].CandidateIDs)
 		}
 	}
 	result = MergeGeneratedCharactersByID(result)
@@ -1645,6 +1678,146 @@ func ApplyDelta(novelID string, existing []characters.GeneratedCharacter, delta 
 	generated, changed = ApplyMergeProposals(generated, delta.MergeProposals, changed, allocator)
 	SortGeneratedCharacters(generated)
 	return generated, changed
+}
+
+func ApplyDeltaWithoutMergeProposals(novelID string, existing []characters.GeneratedCharacter, delta Delta, allocator *characters.GeneratedCharacterIDAllocator) ([]characters.GeneratedCharacter, int) {
+	delta.MergeProposals = nil
+	return ApplyDelta(novelID, existing, delta, allocator)
+}
+
+func IdentityMergeEventsFromProposals(proposals []MergeProposal, effectiveEpisodeIndex string, generated []characters.GeneratedCharacter) []characters.GeneratedIdentityMergeEvent {
+	knownIDs := map[string]bool{}
+	for _, character := range generated {
+		if id := strings.TrimSpace(character.CharacterID); id != "" {
+			knownIDs[id] = true
+		}
+	}
+	result := []characters.GeneratedIdentityMergeEvent{}
+	for _, proposal := range proposals {
+		sourceID := strings.TrimSpace(proposal.SourceCharacterID)
+		targetID := strings.TrimSpace(proposal.TargetCharacterID)
+		episodeIndex := FirstNonEmptyString(proposal.EffectiveEpisodeIndex, effectiveEpisodeIndex)
+		if proposal.Confidence < MergeAutoApplyConfidence || sourceID == "" || targetID == "" || sourceID == targetID || episodeIndex == "" || !knownIDs[sourceID] || !knownIDs[targetID] {
+			continue
+		}
+		result = append(result, characters.GeneratedIdentityMergeEvent{SourceCharacterID: sourceID, TargetCharacterID: targetID, EffectiveEpisodeIndex: episodeIndex})
+	}
+	return NormalizeGeneratedIdentityMergeEvents(result)
+}
+
+func NormalizeGeneratedIdentityMergeEvents(values []characters.GeneratedIdentityMergeEvent) []characters.GeneratedIdentityMergeEvent {
+	return characters.NormalizeGeneratedIdentityMergeEvents(values)
+}
+
+func ApplyIdentityMergeEvents(generated []characters.GeneratedCharacter, events []characters.GeneratedIdentityMergeEvent, boundary string) []characters.GeneratedCharacter {
+	mergedInto := map[string]string{}
+	for _, event := range NormalizeGeneratedIdentityMergeEvents(events) {
+		if CompareEpisodeString(event.EffectiveEpisodeIndex, boundary) > 0 {
+			continue
+		}
+		mergedInto[event.SourceCharacterID] = event.TargetCharacterID
+	}
+	resolveTarget := func(sourceID string) string {
+		seen := map[string]bool{sourceID: true}
+		targetID := mergedInto[sourceID]
+		for targetID != "" {
+			if seen[targetID] {
+				return ""
+			}
+			seen[targetID] = true
+			next := mergedInto[targetID]
+			if next == "" {
+				return targetID
+			}
+			targetID = next
+		}
+		return ""
+	}
+	byID := generatedCharacterMapByID(generated)
+	order := make([]string, 0, len(generated))
+	for _, character := range generated {
+		if id := strings.TrimSpace(character.CharacterID); id != "" {
+			order = append(order, id)
+		}
+	}
+	sources := sortedStringKeysFromMap(mergedInto)
+	for _, sourceID := range sources {
+		targetID := resolveTarget(sourceID)
+		source, sourceOK := byID[sourceID]
+		target, targetOK := byID[targetID]
+		if !sourceOK || !targetOK || sourceID == targetID {
+			continue
+		}
+		merged := MergeGeneratedCharacter(target, source)
+		merged.CharacterID = targetID
+		byID[targetID] = merged
+		delete(byID, sourceID)
+	}
+	result := make([]characters.GeneratedCharacter, 0, len(byID))
+	for _, id := range order {
+		if character, ok := byID[id]; ok {
+			result = append(result, character)
+		}
+	}
+	SortGeneratedCharacters(result)
+	return result
+}
+
+func ApplyIdentityMergeEventsToUnresolvedMentions(values []characters.GeneratedUnresolvedMention, events []characters.GeneratedIdentityMergeEvent, boundary string) []characters.GeneratedUnresolvedMention {
+	mergedInto := map[string]string{}
+	for _, event := range NormalizeGeneratedIdentityMergeEvents(events) {
+		if CompareEpisodeString(event.EffectiveEpisodeIndex, boundary) <= 0 {
+			mergedInto[event.SourceCharacterID] = event.TargetCharacterID
+		}
+	}
+	resolveTarget := func(characterID string) string {
+		seen := map[string]bool{}
+		for mergedInto[characterID] != "" && !seen[characterID] {
+			seen[characterID] = true
+			characterID = mergedInto[characterID]
+		}
+		return characterID
+	}
+	result := make([]characters.GeneratedUnresolvedMention, len(values))
+	for index, value := range values {
+		result[index] = value
+		result[index].CandidateIDs = append([]string{}, value.CandidateIDs...)
+		for candidateIndex, candidateID := range result[index].CandidateIDs {
+			result[index].CandidateIDs[candidateIndex] = resolveTarget(strings.TrimSpace(candidateID))
+		}
+		result[index].CandidateIDs = NormalizeSummaryStringList(result[index].CandidateIDs)
+	}
+	return result
+}
+
+func FilterResolvedGeneratedUnresolvedMentionsWithIdentityEvents(values []characters.GeneratedUnresolvedMention, events []characters.GeneratedIdentityMergeEvent, boundary string, generated []characters.GeneratedCharacter) []characters.GeneratedUnresolvedMention {
+	result := make([]characters.GeneratedUnresolvedMention, 0, len(values))
+	for _, value := range values {
+		projected := ApplyIdentityMergeEventsToUnresolvedMentions([]characters.GeneratedUnresolvedMention{value}, events, boundary)
+		if len(FilterResolvedGeneratedUnresolvedMentions(projected, generated)) > 0 {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func generatedCharacterMapByID(values []characters.GeneratedCharacter) map[string]characters.GeneratedCharacter {
+	result := map[string]characters.GeneratedCharacter{}
+	for _, value := range values {
+		if id := strings.TrimSpace(value.CharacterID); id != "" {
+			result[id] = value
+		}
+	}
+	return result
+}
+
+func sortedStringKeysFromMap(values map[string]string) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func CharacterNameSet(generated []characters.GeneratedCharacter) map[string]bool {

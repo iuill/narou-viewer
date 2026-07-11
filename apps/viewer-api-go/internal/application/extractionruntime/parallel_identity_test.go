@@ -19,6 +19,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
@@ -47,7 +48,7 @@ func newExtractionOpenRouterTestServer(t *testing.T, responses ...string) *httpt
 func TestGenerateOpenRouterExtractionParallelIdentityRejectsMissingConfig(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	generated, state, usage, err := runtime.generateOpenRouterExtractionParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
+	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
@@ -91,8 +92,8 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 
 func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
+	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
@@ -102,8 +103,8 @@ func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T
 
 func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "AI generation profile") {
+	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
@@ -237,6 +238,7 @@ func TestExtractParallelIdentityCandidatesReturnsUsageFromSuccessfulAndNormaliza
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
 		`{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		`not-json`,
 		`not-json`,
 	)
 	defer openrouter.Close()
@@ -375,10 +377,17 @@ func TestParallelIdentityAppliesTrustedMergeProposalsAfterResolver(t *testing.T)
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			call := 0
+			detailPrompt := ""
 			openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				call++
+				var request map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatalf("decode OpenRouter request: %v", err)
+				}
 				content := `{"clusters":[]}`
 				if call == 1 {
+					rawMessages, _ := json.Marshal(request["messages"])
+					detailPrompt = string(rawMessages)
 					content = `{"processedUpToEpisodeIndex":"2","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char_black_knight","targetCharacterId":"char_alice","confidence":1,"reason":"本文で同一人物と明示された"}],"unresolvedMentions":[],"terms":[]}`
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{
@@ -415,10 +424,31 @@ func TestParallelIdentityAppliesTrustedMergeProposalsAfterResolver(t *testing.T)
 			if call != testCase.wantCalls {
 				t.Fatalf("OpenRouter calls = %d, want %d", call, testCase.wantCalls)
 			}
-			if len(generated) != 1 || len(state.RetiredCharacterIDs) != 1 {
+			if !strings.Contains(detailPrompt, "char_black_knight") || !strings.Contains(detailPrompt, "char_alice") {
+				t.Fatalf("detail prompt did not include stable candidate IDs: %s", detailPrompt)
+			}
+			if len(generated) != 1 || len(state.PersistenceCharacters) != 2 || len(state.IdentityMergeEvents) != 1 || state.IdentityMergeEvents[0].EffectiveEpisodeIndex != "2" || len(state.RetiredCharacterIDs) != 0 {
 				t.Fatalf("trusted proposal should merge unrelated names: generated=%+v state=%+v", generated, state)
 			}
 		})
+	}
+}
+
+func TestParallelIdentityResolverMergeIsEffectiveAtGenerationBoundary(t *testing.T) {
+	candidates := []parallelIdentityCandidate{
+		{LocalID: "seed:black", Character: characters.GeneratedCharacter{CharacterID: "char_black", CanonicalName: "黒騎士", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},
+		{LocalID: "seed:alice", Character: characters.GeneratedCharacter{CharacterID: "char_alice", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"}},
+	}
+	clusters := []parallelIdentityCluster{{LocalIDs: []string{"seed:black", "seed:alice"}, Confidence: 1}}
+	generated, persistence, events := buildParallelIdentityGeneratedState(candidates, clusters, nil, characters.NewGeneratedCharacterIDAllocator("novel-1", nil), "20")
+	if len(generated) != 1 || len(persistence) != 2 || len(events) != 1 || events[0].EffectiveEpisodeIndex != "20" {
+		t.Fatalf("resolver identity state = generated:%+v persistence:%+v events:%+v", generated, persistence, events)
+	}
+	if before := core.ApplyIdentityMergeEvents(persistence, events, "2"); len(before) != 2 {
+		t.Fatalf("resolver identity merged before effective episode: %+v", before)
+	}
+	if after := core.ApplyIdentityMergeEvents(persistence, events, "20"); len(after) != 1 {
+		t.Fatalf("resolver identity did not merge at effective episode: %+v", after)
 	}
 }
 
@@ -553,7 +583,7 @@ func TestParallelIdentityCandidateHelpers(t *testing.T) {
 	fullName := "山田太郎"
 	gender := "male"
 	batch := extractionBatch{BatchIndex: 2, Chunks: []extractionChunk{{EpisodeIndex: "3", Text: "太郎が来た。"}}}
-	candidates := parallelIdentityCandidatesFromDelta("novel-1", 1, batch, extractionDelta{
+	candidates := parallelIdentityCandidatesFromDeltaWithKnown("novel-1", 1, batch, extractionDelta{
 		NewCharacters: []characters.GeneratedCharacter{{
 			CanonicalName:               "太郎",
 			CanonicalEpisodeIndex:       "3",
@@ -567,7 +597,7 @@ func TestParallelIdentityCandidateHelpers(t *testing.T) {
 			AppearanceHistory:           []characters.GeneratedHistoryVersion{{EpisodeIndex: "3", Text: "背が高い。"}},
 			PersonalityHistory:          []characters.GeneratedHistoryVersion{{EpisodeIndex: "3", Text: "穏やか。"}},
 		}},
-	})
+	}, nil)
 	if len(candidates) != 1 || candidates[0].LocalID != "b2-c1" || candidates[0].Character.CharacterID != "" {
 		t.Fatalf("candidates = %+v", candidates)
 	}
@@ -606,7 +636,7 @@ func TestParallelIdentityCompletesSingletonsAndNormalizesIDs(t *testing.T) {
 	}
 }
 
-func TestParallelIdentityBuildGeneratedCharactersMergesSeedAndRetiresIDs(t *testing.T) {
+func TestParallelIdentityBuildGeneratedStatePreservesTimedSources(t *testing.T) {
 	seed := []characters.GeneratedCharacter{{
 		CharacterID:                 "char_old",
 		CanonicalName:               "アリス",
@@ -631,20 +661,72 @@ func TestParallelIdentityBuildGeneratedCharactersMergesSeedAndRetiresIDs(t *test
 			Aliases:                     []characters.GeneratedTextVersion{{Text: "姫様", EpisodeIndex: "3"}},
 		},
 	})
-	generated := buildParallelIdentityGeneratedCharacters(candidates, []parallelIdentityCluster{{
+	generated, persistence, events := buildParallelIdentityGeneratedState(candidates, []parallelIdentityCluster{{
 		LocalIDs:      []string{"seed:char_old", "seed:char_newer", "b1-c1"},
 		CanonicalName: "アリス",
 		Confidence:    0.96,
-	}}, allocator)
+	}}, nil, allocator, "3")
 	if len(generated) != 1 || generated[0].CharacterID != "char_old" {
 		t.Fatalf("generated = %+v", generated)
 	}
 	if len(generated[0].SummaryHistory) != 2 {
 		t.Fatalf("summary histories should merge: %+v", generated[0].SummaryHistory)
 	}
-	retired := allocator.RetiredCharacterIDs()
-	if len(retired) != 1 || retired[0].CharacterID != "char_newer" || retired[0].MergedInto != "char_old" {
-		t.Fatalf("retired = %+v", retired)
+	if len(persistence) != 3 || len(events) != 2 || len(allocator.RetiredCharacterIDs()) != 0 {
+		t.Fatalf("timed identity state = persistence:%+v events:%+v retired:%+v", persistence, events, allocator.RetiredCharacterIDs())
+	}
+}
+
+func TestParallelIdentityBuildGeneratedStateKeepsRawSeedBehindExistingMergeEvent(t *testing.T) {
+	rawSeed := []characters.GeneratedCharacter{
+		{CharacterID: "char_black_knight", CanonicalName: "黒騎士", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", Aliases: []characters.GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "1"}}},
+		{CharacterID: "char_alice", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2", Aliases: []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "2"}}},
+	}
+	events := []characters.GeneratedIdentityMergeEvent{{SourceCharacterID: "char_black_knight", TargetCharacterID: "char_alice", EffectiveEpisodeIndex: "20"}}
+	visibleSeed := core.ApplyIdentityMergeEvents(rawSeed, events, "21")
+	generated, persistence, persistedEvents := buildParallelIdentityGeneratedState(
+		seedParallelIdentityCandidates(visibleSeed),
+		nil,
+		nil,
+		characters.NewGeneratedCharacterIDAllocator("novel-1", rawSeed),
+		"21",
+		parallelIdentityInitialState{PersistenceCharacters: rawSeed, IdentityMergeEvents: events},
+	)
+	if len(generated) != 1 || len(persistence) != 2 || len(persistedEvents) != 1 {
+		t.Fatalf("generated=%+v persistence=%+v events=%+v", generated, persistence, persistedEvents)
+	}
+	for _, character := range persistence {
+		if len(character.Aliases) != 1 {
+			t.Fatalf("visible merged seed leaked into raw persistence: %+v", persistence)
+		}
+	}
+}
+
+func TestParallelIdentityUpdateDoesNotWriteVisibleMergedHistoryIntoRawSeed(t *testing.T) {
+	rawSeed := []characters.GeneratedCharacter{
+		{CharacterID: "char_black_knight", CanonicalName: "黒騎士", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", Aliases: []characters.GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "1"}}, SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "1", Text: "正体不明。"}}},
+		{CharacterID: "char_alice", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2", Aliases: []characters.GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "2"}}},
+	}
+	events := []characters.GeneratedIdentityMergeEvent{{SourceCharacterID: "char_black_knight", TargetCharacterID: "char_alice", EffectiveEpisodeIndex: "20"}}
+	visibleSeed := core.ApplyIdentityMergeEvents(rawSeed, events, "21")
+	updateCandidates := parallelIdentityCandidatesFromDeltaWithKnown("novel-1", 0, extractionBatch{BatchIndex: 1}, extractionDelta{
+		CharacterUpdates: []characters.GeneratedCharacter{{CharacterID: "char_alice", SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "21", Text: "王都へ戻った。"}}}},
+	}, visibleSeed)
+	generated, persistence, persistedEvents := buildParallelIdentityGeneratedState(
+		append(seedParallelIdentityCandidates(visibleSeed), updateCandidates...),
+		nil,
+		nil,
+		characters.NewGeneratedCharacterIDAllocator("novel-1", rawSeed),
+		"21",
+		parallelIdentityInitialState{PersistenceCharacters: rawSeed, IdentityMergeEvents: events},
+	)
+	if len(generated) != 1 || len(persistence) != 2 || len(persistedEvents) != 1 {
+		t.Fatalf("generated=%+v persistence=%+v events=%+v", generated, persistence, persistedEvents)
+	}
+	persistenceByID := generatedCharacterMapByID(persistence)
+	alice := persistenceByID["char_alice"]
+	if len(alice.Aliases) != 1 || alice.Aliases[0].Text != "アリス" || len(alice.SummaryHistory) != 1 || alice.SummaryHistory[0].EpisodeIndex != "21" {
+		t.Fatalf("visible merged source history leaked into raw update: %+v", alice)
 	}
 }
 
@@ -742,6 +824,24 @@ func TestResolveParallelIdentityClustersFallsBackToNameGroups(t *testing.T) {
 	}
 }
 
+func TestResolveParallelIdentityClustersRetriesInvalidJSON(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t, `{"clusters":[{"localIds":["b1-c1","b2-c1"],"canonicalName":"アリス","reason":"同一人物"}]}`, `{"clusters":[]}`)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	candidates := []parallelIdentityCandidate{
+		{LocalID: "b1-c1", Character: characters.GeneratedCharacter{CanonicalName: "アリス"}},
+		{LocalID: "b2-c1", Character: characters.GeneratedCharacter{CanonicalName: "ボブ"}},
+	}
+	clusters, usage, err := runtime.resolveParallelIdentityClustersOneShot(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "1", candidates)
+	if err != nil || len(clusters) != 2 {
+		t.Fatalf("identity resolution should recover from invalid JSON: clusters=%+v err=%v", clusters, err)
+	}
+	if usage.InputTokens != 22 || usage.OutputTokens != 14 || usage.TotalTokens != 36 {
+		t.Fatalf("identity retry usage should include both responses: %+v", usage)
+	}
+}
+
 func TestResolveParallelIdentityClustersFallbackKeepsSeedIdentityAcrossSplitNameGroup(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
@@ -773,9 +873,12 @@ func TestResolveParallelIdentityClustersFallbackKeepsSeedIdentityAcrossSplitName
 	}
 
 	allocator := characters.NewGeneratedCharacterIDAllocator("novel-1", []characters.GeneratedCharacter{candidates[0].Character})
-	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, allocator)
+	generated, _, events := buildParallelIdentityGeneratedState(candidates, clusters, nil, allocator, "3")
 	if len(generated) != 1 || generated[0].CharacterID != "char_alice" || generated[0].CanonicalName != "アリス" {
 		t.Fatalf("generated = %+v", generated)
+	}
+	if len(events) != 2 {
+		t.Fatalf("identity events = %+v, want two timed sources", events)
 	}
 }
 
@@ -832,10 +935,12 @@ func TestLowConfidenceSameNameCandidatesRemainSeparateCharacters(t *testing.T) {
 		{LocalID: "b2-c1", Character: characters.GeneratedCharacter{CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2", SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "2", Text: "辺境の騎士"}}}},
 	}
 	clusters := completeParallelIdentitySingletons(filterAutoApplicableParallelIdentityClusters([]parallelIdentityCluster{{LocalIDs: []string{"b1-c1", "b2-c1"}, Confidence: 0.5}}), candidates)
-	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, characters.NewGeneratedCharacterIDAllocator("novel-1", nil))
-	generated = characters.NewGeneratedCharacterIDAllocator("novel-1", nil).Assign(generated)
+	generated, _, events := buildParallelIdentityGeneratedState(candidates, clusters, nil, characters.NewGeneratedCharacterIDAllocator("novel-1", nil), "2")
 	if len(generated) != 2 || generated[0].CharacterID == generated[1].CharacterID {
 		t.Fatalf("same-name singletons were implicitly merged: %+v", generated)
+	}
+	if len(events) != 0 {
+		t.Fatalf("low-confidence candidates created identity events: %+v", events)
 	}
 }
 
@@ -974,7 +1079,7 @@ func TestCorrectParallelIdentityCharactersFallsBackToChunks(t *testing.T) {
 }
 
 func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"name":"アリス","aliases":["姫"],"episodeIndex":"1","reason":"会話に登場"}]}`)
+	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"name":"アリス","aliases":[],"reason":"登場"}]}`, `{"terms":[],"characters":[{"name":"アリス","aliases":["姫"],"episodeIndex":"1","reason":"会話に登場"}]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -988,13 +1093,14 @@ func TestDiscoverParallelIdentityNamesUsesOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverParallelIdentityNames returned error: %v", err)
 	}
-	if len(generated) != 1 || generated[0].CanonicalName != "アリス" || len(usage) != 1 || usage[0].Kind != "extraction_name_discovery" {
+	if len(generated) != 1 || generated[0].CanonicalName != "アリス" || len(usage) != 1 || usage[0].Kind != "extraction_name_discovery" || usage[0].TotalTokens != 36 {
 		t.Fatalf("generated=%+v usage=%+v", generated, usage)
 	}
 }
 
 func TestDiscoverParallelIdentityNamesRejectsEpisodeOutsideBatch(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"1","reason":"第20話で正体を明かした王女"}]}`)
+	invalid := `{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"1","reason":"第20話で正体を明かした王女"}]}`
+	openrouter := newExtractionOpenRouterTestServer(t, invalid, invalid)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -1023,6 +1129,7 @@ func TestDiscoverParallelIdentityNamesReturnsPartialUsageOnFailure(t *testing.T)
 	openrouter := newExtractionOpenRouterTestServer(t,
 		`{"characters":[{"name":"アリス","aliases":[],"episodeIndex":"1","reason":"登場"}]}`,
 		`{"characters":[{"name":"セリア","aliases":[],"episodeIndex":"1","reason":"誤った話数"}]}`,
+		`{"characters":[{"name":"セリア","aliases":[],"episodeIndex":"1","reason":"誤った話数"}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
@@ -1047,7 +1154,7 @@ func TestNormalizeDiscoveredNamesRejectsNonNumericEpisode(t *testing.T) {
 }
 
 func TestCorrectParallelIdentityCharactersUsesOpenRouter(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t, `{"terms":[],"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
+	openrouter := newExtractionOpenRouterTestServer(t, `{"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":[],"keep":true}]}`, `{"terms":[],"characters":[{"characterId":"char_a","canonicalName":"アリス姫","aliases":["姫様"],"keep":true,"reason":"代表名を補正"}]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -1061,14 +1168,14 @@ func TestCorrectParallelIdentityCharactersUsesOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("correctParallelIdentityCharacters returned error: %v", err)
 	}
-	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || usage.Kind != "extraction_correction" {
+	if len(corrected) != 1 || corrected[0].CanonicalName != "アリス姫" || usage.Kind != "extraction_correction" || usage.TotalTokens != 36 {
 		t.Fatalf("corrected=%+v usage=%+v", corrected, usage)
 	}
 }
 
 func TestIdentityAndCorrectionReturnUsageOnInvalidJSON(t *testing.T) {
 	t.Run("identity", func(t *testing.T) {
-		openrouter := newExtractionOpenRouterTestServer(t, `not-json`)
+		openrouter := newExtractionOpenRouterTestServer(t, `not-json`, `not-json`)
 		defer openrouter.Close()
 		t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 		runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -1079,7 +1186,7 @@ func TestIdentityAndCorrectionReturnUsageOnInvalidJSON(t *testing.T) {
 		}
 	})
 	t.Run("correction", func(t *testing.T) {
-		openrouter := newExtractionOpenRouterTestServer(t, `not-json`)
+		openrouter := newExtractionOpenRouterTestServer(t, `not-json`, `not-json`)
 		defer openrouter.Close()
 		t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 		runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
@@ -1090,39 +1197,23 @@ func TestIdentityAndCorrectionReturnUsageOnInvalidJSON(t *testing.T) {
 	})
 }
 
-func TestBuildParallelIdentityGeneratedCharactersSkipsUnknownIDsAndUsesClusterName(t *testing.T) {
-	allocator := characters.NewGeneratedCharacterIDAllocator("novel-1", nil)
-	candidates := []parallelIdentityCandidate{{
-		LocalID: "b1-c1",
-		Character: characters.GeneratedCharacter{
-			FirstAppearanceEpisodeIndex: "5",
-		},
-	}}
-	generated := buildParallelIdentityGeneratedCharacters(candidates, []parallelIdentityCluster{{
-		LocalIDs:      []string{"missing"},
-		CanonicalName: "無視される",
-	}, {
-		LocalIDs:      []string{"b1-c1", "missing-too"},
-		CanonicalName: "名無しの少女",
-	}}, allocator)
-	if len(generated) != 1 {
-		t.Fatalf("generated = %+v", generated)
-	}
-	if generated[0].CanonicalName != "名無しの少女" || generated[0].CanonicalEpisodeIndex != "5" {
-		t.Fatalf("generated[0] = %+v", generated[0])
+func TestParallelIdentityUsageFallsBackPerOutputAttempt(t *testing.T) {
+	usage := parallelIdentityUsageFromChatResult("extraction_identity_resolution", 120, 2, ai.ChatResult{})
+	if usage.Kind != "extraction_identity_resolution" || usage.InputTokens != 240 || usage.TotalTokens != 240 {
+		t.Fatalf("usage fallback must include every provider attempt: %+v", usage)
 	}
 }
 
 func TestParallelIdentityRepresentativeIDPrefersEarliestAppearanceThenID(t *testing.T) {
-	candidates := []parallelIdentityCandidate{
-		{Character: characters.GeneratedCharacter{CharacterID: "char_b", FirstAppearanceEpisodeIndex: "2"}},
-		{Character: characters.GeneratedCharacter{CharacterID: "char_c", CanonicalEpisodeIndex: "1"}},
-		{Character: characters.GeneratedCharacter{CharacterID: "char_a", FirstAppearanceEpisodeIndex: "1"}},
+	values := []characters.GeneratedCharacter{
+		{CharacterID: "char_b", FirstAppearanceEpisodeIndex: "2"},
+		{CharacterID: "char_c", CanonicalEpisodeIndex: "1"},
+		{CharacterID: "char_a", FirstAppearanceEpisodeIndex: "1"},
 	}
-	if got := parallelIdentityRepresentativeID(candidates); got != "char_a" {
+	if got := parallelIdentityGeneratedRepresentativeID(values, []string{"char_b", "char_c", "char_a"}); got != "char_a" {
 		t.Fatalf("representative = %q", got)
 	}
-	if got := parallelIdentityRepresentativeID([]parallelIdentityCandidate{{Character: characters.GeneratedCharacter{CanonicalName: "IDなし"}}}); got != "" {
+	if got := parallelIdentityGeneratedRepresentativeID(nil, nil); got != "" {
 		t.Fatalf("representative without IDs = %q", got)
 	}
 }

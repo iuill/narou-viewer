@@ -21,33 +21,40 @@ type workflowFakePorts struct {
 	rebatchOutput  *Inputs
 	loadErr        error
 	seed           []characters.GeneratedCharacter
+	seedBefore     []characters.GeneratedCharacter
+	seedBeforeSet  bool
+	seedEvents     []characters.GeneratedIdentityMergeEvent
 	seedTerms      []terms.GeneratedTerm
 	processedIndex *string
 	hasExisting    bool
 	reprocessFrom  string
 
-	locked            bool
-	materialized      bool
-	saveHeuristic     bool
-	saveGenerated     bool
-	saveTerms         bool
-	removedCheckpoint bool
-	builtGenerated    bool
-	loadedPreview     bool
-	recordedUsage     []ai.UsageRun
-	generateErr       error
-	saveGeneratedErr  error
-	saveTermsErr      error
-	generateErrAfter  int
-	parallelCalls     int
-	planErr           error
-	allocatorErr      error
-	generateCalls     int
-	rebatchCalls      int
-	heuristicEpisodes []characters.HeuristicEpisode
-	generatedEpisodes []characters.HeuristicEpisode
-	checkpoint        checkpointstore.Checkpoint
-	savedCheckpoint   bool
+	locked                 bool
+	materialized           bool
+	saveHeuristic          bool
+	saveGenerated          bool
+	saveTerms              bool
+	removedCheckpoint      bool
+	builtGenerated         bool
+	loadedPreview          bool
+	recordedUsage          []ai.UsageRun
+	generateErr            error
+	saveGeneratedErr       error
+	saveTermsErr           error
+	generateErrAfter       int
+	parallelCalls          int
+	planErr                error
+	allocatorErr           error
+	generateCalls          int
+	runtimeBatchChunkLimit int
+	generateBatchResults   []BatchResult
+	rebatchCalls           int
+	heuristicEpisodes      []characters.HeuristicEpisode
+	generatedEpisodes      []characters.HeuristicEpisode
+	checkpoint             checkpointstore.Checkpoint
+	savedCheckpoint        bool
+	savedCharacters        []characters.GeneratedCharacter
+	savedSummaryOptions    characters.SaveGeneratedSummaryOptions
 }
 
 func (p *workflowFakePorts) LockTarget(string, string) func() {
@@ -84,12 +91,15 @@ func (p *workflowFakePorts) LoadInputs(context.Context, string, string, int, int
 	return p.inputs, nil
 }
 
-func (p *workflowFakePorts) LoadGenerationSeed(string, string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	return p.seed, p.processedIndex, p.hasExisting, nil
+func (p *workflowFakePorts) LoadGenerationSeed(string, string) ([]characters.GeneratedCharacter, []characters.GeneratedIdentityMergeEvent, *string, bool, error) {
+	return p.seed, p.seedEvents, p.processedIndex, p.hasExisting, nil
 }
 
-func (p *workflowFakePorts) LoadGeneratedCharactersBeforeEpisode(string, string) ([]characters.GeneratedCharacter, *string, bool, error) {
-	return p.seed, p.processedIndex, p.hasExisting, nil
+func (p *workflowFakePorts) LoadGeneratedCharactersBeforeEpisode(string, string) ([]characters.GeneratedCharacter, []characters.GeneratedIdentityMergeEvent, *string, bool, error) {
+	if p.seedBeforeSet {
+		return p.seedBefore, nil, nil, true, nil
+	}
+	return p.seed, p.seedEvents, p.processedIndex, p.hasExisting, nil
 }
 
 func (p *workflowFakePorts) LoadGeneratedTermsAtOrBefore(string, string) ([]terms.GeneratedTerm, *string, bool, error) {
@@ -128,9 +138,12 @@ func (p *workflowFakePorts) LoadIDAllocator(novelID string, seed []characters.Ge
 	return characters.NewGeneratedCharacterIDAllocator(novelID, seed), nil
 }
 
-func (p *workflowFakePorts) PlanRuntimeBatch(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, _ []characters.GeneratedCharacter, _ []terms.GeneratedTerm, template core.Batch, chunks []core.Chunk, _ []characters.GeneratedUnresolvedMention) (core.Batch, []core.Chunk, error) {
+func (p *workflowFakePorts) PlanRuntimeBatch(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, _ []characters.GeneratedCharacter, _ []terms.GeneratedTerm, template core.Batch, chunks []core.Chunk, _ []characters.GeneratedUnresolvedMention, _ []characters.GeneratedIdentityMergeEvent) (core.Batch, []core.Chunk, error) {
 	if p.planErr != nil {
 		return core.Batch{}, nil, p.planErr
+	}
+	if p.runtimeBatchChunkLimit > 0 && len(chunks) > p.runtimeBatchChunkLimit {
+		return core.RuntimeBatch(template, chunks[:p.runtimeBatchChunkLimit]), append([]core.Chunk{}, chunks[p.runtimeBatchChunkLimit:]...), nil
 	}
 	return core.RuntimeBatch(template, chunks), nil, nil
 }
@@ -139,6 +152,11 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 	if p.generateErr != nil && (p.generateErrAfter == 0 || p.generateCalls >= p.generateErrAfter) {
 		return BatchResult{Usage: ai.UsageRequest{RequestIndex: 0, Kind: "extraction_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13}}, p.generateErr
 	}
+	if p.generateCalls < len(p.generateBatchResults) {
+		result := p.generateBatchResults[p.generateCalls]
+		p.generateCalls++
+		return result, nil
+	}
 	p.generateCalls++
 	return BatchResult{
 		Delta: core.Delta{NewCharacters: []characters.GeneratedCharacter{{CanonicalName: "Alice", CanonicalEpisodeIndex: "1", SummaryHistory: []characters.GeneratedHistoryVersion{{EpisodeIndex: "1", Text: "本文"}}}}},
@@ -146,7 +164,7 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 	}, nil
 }
 
-func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
 	if p.generateErr != nil {
 		return nil, core.GenerationState{}, nil, p.generateErr
@@ -156,7 +174,7 @@ func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store
 	return generated, core.GenerationState{Terms: seedTerms}, []ai.UsageRequest{{RequestIndex: 0, Kind: "extraction_parallel_identity", InputTokens: 12, OutputTokens: 4, TotalTokens: 16}}, nil
 }
 
-func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
 	if p.generateErr != nil {
 		return nil, core.GenerationState{}, nil, p.generateErr
@@ -184,8 +202,10 @@ func (p *workflowFakePorts) DeleteCheckpoint(string, string) error {
 	return nil
 }
 
-func (p *workflowFakePorts) SaveGeneratedSummary(_ string, _ string, _ []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, _ characters.SaveGeneratedSummaryOptions) error {
+func (p *workflowFakePorts) SaveGeneratedSummary(_ string, _ string, generated []characters.GeneratedCharacter, episodes []characters.HeuristicEpisode, options characters.SaveGeneratedSummaryOptions) error {
 	p.saveGenerated = true
+	p.savedCharacters = append([]characters.GeneratedCharacter{}, generated...)
+	p.savedSummaryOptions = options
 	p.generatedEpisodes = append([]characters.HeuristicEpisode{}, episodes...)
 	return p.saveGeneratedErr
 }
@@ -504,6 +524,36 @@ func TestWorkflowGeneratePreviewOpenRouterLoadsAndFiltersReprocessInputs(t *test
 	}
 	if len(ports.recordedUsage) != 1 || ports.recordedUsage[0].ProfileID == nil || *ports.recordedUsage[0].ProfileID != "override" {
 		t.Fatalf("usage = %+v, want override profile usage", ports.recordedUsage)
+	}
+}
+
+func TestWorkflowReprocessRemapsPersistenceToReusedRegistryID(t *testing.T) {
+	processed := "3"
+	ports := &workflowFakePorts{
+		settings:       ai.SettingsResponse{EffectiveGenerationMode: "openrouter"},
+		config:         &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ProfileLabel: "Profile A", ModelID: "model-a"},
+		seed:           []characters.GeneratedCharacter{{CharacterID: "char_old", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"}},
+		seedBeforeSet:  true,
+		processedIndex: &processed,
+		hasExisting:    true,
+		reprocessFrom:  "2",
+		inputs:         workflowInputsWithEpisodes("2"),
+		generateBatchResults: []BatchResult{{
+			Delta: core.Delta{NewCharacters: []characters.GeneratedCharacter{{CharacterID: "char_new", CanonicalName: "アリス", CanonicalEpisodeIndex: "2", FirstAppearanceEpisodeIndex: "2"}}},
+			Usage: ai.UsageRequest{Kind: "extraction_batch", InputTokens: 10, OutputTokens: 3, TotalTokens: 13},
+		}},
+	}
+
+	counts, err := NewWorkflow(ports).GenerateAndSave(context.Background(), "novel-a", "3", nil, GenerationStrategySerial, nil)
+	if err != nil {
+		t.Fatalf("GenerateAndSave returned error: %v", err)
+	}
+	if counts.CharacterCount != 1 || len(ports.savedCharacters) != 1 || ports.savedCharacters[0].CharacterID != "char_old" {
+		t.Fatalf("saved reprocess result did not reuse registry ID: counts=%+v saved=%+v", counts, ports.savedCharacters)
+	}
+	retired := ports.savedSummaryOptions.RetiredCharacterIDs
+	if len(retired) != 1 || retired[0].CharacterID != "char_new" || retired[0].MergedInto != "char_old" {
+		t.Fatalf("reprocess allocator state did not preserve remap: %+v", ports.savedSummaryOptions)
 	}
 }
 

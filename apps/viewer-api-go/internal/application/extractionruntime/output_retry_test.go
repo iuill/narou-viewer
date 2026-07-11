@@ -1,0 +1,111 @@
+package extractionruntime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/store"
+)
+
+func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"1","aliases":"invalid","appearanceHistory":[],"personalityHistory":[],"summaryHistory":[]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		`{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "1", nil, nil, batch)
+	if err != nil {
+		t.Fatalf("generateOpenRouterBatch should recover from the first invalid response: %v", err)
+	}
+	if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
+		t.Fatalf("retry usage should include both provider responses: %+v", result.Usage)
+	}
+}
+
+func TestGenerateOpenRouterBatchRetriesTruncatedModelOutput(t *testing.T) {
+	call := 0
+	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		call++
+		content := `{"processedUpToEpisodeIndex":"1"`
+		finishReason := "length"
+		if call == 2 {
+			content = `{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`
+			finishReason = "stop"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"finish_reason": finishReason, "message": map[string]any{"content": content}}},
+			"usage":   map[string]any{"prompt_tokens": 0, "completion_tokens": 7, "total_tokens": 0},
+		})
+	}))
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "1", nil, nil, batch)
+	if err != nil || call != 2 {
+		t.Fatalf("generateOpenRouterBatch should retry a truncated response: calls=%d err=%v", call, err)
+	}
+	if result.Usage.InputTokens <= 0 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != result.Usage.InputTokens+14 {
+		t.Fatalf("truncated retry usage should include both responses: %+v", result.Usage)
+	}
+}
+
+func TestDiscoverParallelIdentityNamesRetriesBoundaryViolation(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"1","reason":"誤った話数"}]}`,
+		`{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"20","reason":"第20話で登場"}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "王女セリアが名乗った。"}}}
+
+	names, usage, err := runtime.discoverParallelIdentityNamesForBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", 0, batch)
+	if err != nil || len(names) != 1 || names[0].EpisodeIndex != "20" {
+		t.Fatalf("discovery should recover from a boundary-invalid response: names=%+v err=%v", names, err)
+	}
+	if usage.InputTokens != 22 || usage.OutputTokens != 14 || usage.TotalTokens != 36 {
+		t.Fatalf("retry usage should include both discovery responses: %+v", usage)
+	}
+}
+
+func TestGenerateOpenRouterChatWithOutputRetryStopsDuringWait(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t, `not-json`)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	validationStarted := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := generateOpenRouterChatWithOutputRetry(ctx, ai.OpenRouterConfig{APIKey: "sk-test", ModelID: "model"}, []ai.ChatMessage{{Role: "user", Content: "JSON"}}, func(result ai.ChatResult) error {
+			close(validationStarted)
+			var decoded map[string]any
+			return json.Unmarshal([]byte(result.Answer), &decoded)
+		})
+		done <- err
+	}()
+	<-validationStarted
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("retry wait should return context cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry wait did not stop after context cancellation")
+	}
+}

@@ -2,8 +2,10 @@ package extractionruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -18,18 +20,20 @@ type extractionBatchResult struct {
 	Usage ai.UsageRequest
 }
 
-func (r *Runtime) nextRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
-	return r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, "", unresolvedMentions...)
+func (r *Runtime) nextRuntimeBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, unresolvedMentions []characters.GeneratedUnresolvedMention, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) (extractionBatch, []extractionChunk, error) {
+	return r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, template, chunks, "", unresolvedMentions, identityMergeEventSets...)
 }
 
-func (r *Runtime) nextRuntimeBatchForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, focus string, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (extractionBatch, []extractionChunk, error) {
+func (r *Runtime) nextRuntimeBatchForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, template extractionBatch, chunks []extractionChunk, focus string, unresolvedMentions []characters.GeneratedUnresolvedMention, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) (extractionBatch, []extractionChunk, error) {
+	identityMergeEvents := []characters.GeneratedIdentityMergeEvent(nil)
+	if len(identityMergeEventSets) > 0 {
+		identityMergeEvents = identityMergeEventSets[0]
+	}
 	return core.PlanRuntimeBatch(template, chunks, func(batch extractionBatch) (bool, error) {
-		return r.batchFitsContextForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, focus, unresolvedMentions...)
+		projectedUnresolved := filterGeneratedUnresolvedAtBoundary(unresolvedMentions, extractionBatchBoundary(batch))
+		projectedUnresolved = core.ApplyIdentityMergeEventsToUnresolvedMentions(projectedUnresolved, identityMergeEvents, extractionBatchBoundary(batch))
+		return r.batchFitsContextForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, focus, projectedUnresolved)
 	})
-}
-
-func (r *Runtime) batchFitsContext(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
-	return r.batchFitsContextForFocus(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, "", unresolvedMentions...)
 }
 
 func (r *Runtime) batchFitsContextForFocus(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, focus string, unresolvedMentions ...[]characters.GeneratedUnresolvedMention) (bool, error) {
@@ -92,7 +96,12 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		return extractionBatchResult{}, fmt.Errorf("OpenRouter request has only %d output tokens available for extraction; at least %d are required.", maxTokens, extractionMinimumCompletionTokens)
 	}
 	stageStartedAt = time.Now()
-	result, err := ai.GenerateOpenRouterChat(ctx, ai.OpenRouterConfig{
+	var delta extractionDelta
+	fallbackEpisodeIndex := upToEpisodeIndex
+	if len(batch.EpisodeIndexes) > 0 {
+		fallbackEpisodeIndex = batch.EpisodeIndexes[len(batch.EpisodeIndexes)-1]
+	}
+	result, outputAttempts, err := generateOpenRouterChatWithOutputRetry(ctx, ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
 		ModelID:           config.ModelID,
 		ProviderOrder:     config.ProviderOrder,
@@ -101,13 +110,25 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		Temperature:       &temperature,
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,
-	}, prepared.Messages)
+	}, prepared.Messages, func(result ai.ChatResult) error {
+		if contractErr := validateExtractionOutputContract([]byte(result.Answer)); contractErr != nil {
+			return contractErr
+		}
+		normalized, normalizeErr := normalizeExtractionOpenRouterResponseForEpisodes([]byte(result.Answer), novelID, fallbackEpisodeIndex, batch.EpisodeIndexes)
+		if normalizeErr == nil {
+			delta = normalized
+		}
+		return normalizeErr
+	})
 	usage := extractionUsageRequestForBatch(batch.BatchIndex-1, batch)
+	usedInputFallback := result.InputTokens <= 0
 	if result.InputTokens > 0 {
 		usage.InputTokens = result.InputTokens
+	} else {
+		usage.InputTokens = promptTokens * outputAttempts
 	}
 	usage.OutputTokens = result.OutputTokens
-	if result.TotalTokens > 0 {
+	if result.TotalTokens > 0 && !usedInputFallback {
 		usage.TotalTokens = result.TotalTokens
 	} else {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
@@ -118,17 +139,12 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 	}
 	r.log("batch_openrouter", stageStartedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
 	if err != nil {
-		if result.InputTokens == 0 && result.OutputTokens == 0 && result.TotalTokens == 0 {
+		if outputAttempts <= 0 {
 			return extractionBatchResult{}, err
 		}
 		return extractionBatchResult{Usage: usage}, err
 	}
 	stageStartedAt = time.Now()
-	fallbackEpisodeIndex := upToEpisodeIndex
-	if len(batch.EpisodeIndexes) > 0 {
-		fallbackEpisodeIndex = batch.EpisodeIndexes[len(batch.EpisodeIndexes)-1]
-	}
-	delta, err := normalizeExtractionOpenRouterResponseForEpisodes([]byte(result.Answer), novelID, fallbackEpisodeIndex, batch.EpisodeIndexes)
 	status = "ok"
 	if err != nil {
 		status = "error"
@@ -138,6 +154,153 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		return extractionBatchResult{Usage: usage}, err
 	}
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
+}
+
+func validateExtractionOutputContract(raw []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return err
+	}
+	if root["terms"] == nil || string(root["terms"]) == "null" {
+		return errors.New("OpenRouter response did not match the expected extraction schema.")
+	}
+	if root["newCharacters"] == nil {
+		var legacyCharacters []json.RawMessage
+		var legacyTerms []json.RawMessage
+		if root["characters"] == nil || json.Unmarshal(root["characters"], &legacyCharacters) != nil || legacyCharacters == nil || root["terms"] == nil || json.Unmarshal(root["terms"], &legacyTerms) != nil || legacyTerms == nil {
+			return errors.New("モデル出力が抽出契約のroot fieldsと一致しません")
+		}
+		return nil
+	}
+	var processed string
+	if json.Unmarshal(root["processedUpToEpisodeIndex"], &processed) != nil || !isDigitsEpisodeIndex(processed) {
+		return errors.New("モデル出力の processedUpToEpisodeIndex が不正です")
+	}
+	for _, field := range []string{"newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions", "terms"} {
+		var items []json.RawMessage
+		if root[field] == nil || json.Unmarshal(root[field], &items) != nil || items == nil {
+			return fmt.Errorf("モデル出力の %s は必須の配列です", field)
+		}
+		switch field {
+		case "newCharacters":
+			for _, item := range items {
+				if err := validateExtractionCharacterItem(item, false); err != nil {
+					return err
+				}
+			}
+		case "characterUpdates":
+			for _, item := range items {
+				if err := validateExtractionCharacterItem(item, true); err != nil {
+					return err
+				}
+			}
+		case "mergeProposals":
+			for _, item := range items {
+				if err := validateExtractionSimpleObject(item, []string{"sourceCharacterId", "targetCharacterId", "confidence", "reason"}); err != nil {
+					return errors.New("モデル出力の mergeProposals に不正な項目があります")
+				}
+			}
+		case "unresolvedMentions":
+			for _, item := range items {
+				if err := validateExtractionSimpleObject(item, []string{"mention", "episodeIndex", "reason"}); err != nil {
+					return errors.New("モデル出力の unresolvedMentions に不正な項目があります")
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateExtractionCharacterItem(raw json.RawMessage, update bool) error {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil {
+		return errors.New("モデル出力の人物項目がobjectではありません")
+	}
+	required := []string{"canonicalName", "fullName", "fullNameHistory", "gender", "genderHistory", "firstAppearanceEpisodeIndex", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"}
+	if update {
+		required = append(required, "characterId")
+	}
+	if len(item) != len(required) {
+		return errors.New("モデル出力の人物項目が抽出契約と一致しません")
+	}
+	for _, field := range required {
+		if item[field] == nil {
+			return fmt.Errorf("モデル出力の人物項目に %s がありません", field)
+		}
+	}
+	if update {
+		var characterID string
+		if json.Unmarshal(item["characterId"], &characterID) != nil || strings.TrimSpace(characterID) == "" || string(item["firstAppearanceEpisodeIndex"]) != "null" {
+			return errors.New("モデル出力の人物更新IDまたは初登場話が不正です")
+		}
+	}
+	if !update || string(item["canonicalName"]) != "null" {
+		if err := validateExtractionVersionObject(item["canonicalName"]); err != nil {
+			return err
+		}
+	}
+	for _, field := range []string{"fullName", "gender"} {
+		if string(item[field]) != "null" {
+			if err := validateExtractionVersionObject(item[field]); err != nil {
+				return err
+			}
+		}
+	}
+	if !update {
+		var firstAppearance string
+		if json.Unmarshal(item["firstAppearanceEpisodeIndex"], &firstAppearance) != nil || !isDigitsEpisodeIndex(firstAppearance) {
+			return errors.New("モデル出力の人物初登場話が不正です")
+		}
+	}
+	for _, field := range []string{"fullNameHistory", "genderHistory", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"} {
+		var versions []json.RawMessage
+		if json.Unmarshal(item[field], &versions) != nil || versions == nil {
+			return fmt.Errorf("モデル出力の人物項目 %s は配列ではありません", field)
+		}
+		for _, version := range versions {
+			if err := validateExtractionVersionObject(version); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateExtractionVersionObject(raw json.RawMessage) error {
+	var version map[string]json.RawMessage
+	if json.Unmarshal(raw, &version) != nil || len(version) != 2 || version["text"] == nil || version["episodeIndex"] == nil {
+		return errors.New("モデル出力の人物履歴項目が不正です")
+	}
+	var text string
+	var episodeIndex string
+	if json.Unmarshal(version["text"], &text) != nil || json.Unmarshal(version["episodeIndex"], &episodeIndex) != nil || !isDigitsEpisodeIndex(episodeIndex) {
+		return errors.New("モデル出力の人物履歴値が不正です")
+	}
+	return nil
+}
+
+func validateExtractionSimpleObject(raw json.RawMessage, required []string) error {
+	var item map[string]json.RawMessage
+	if json.Unmarshal(raw, &item) != nil || len(item) != len(required) {
+		return errors.New("object contract mismatch")
+	}
+	for _, field := range required {
+		if item[field] == nil {
+			return errors.New("object field missing")
+		}
+		if field == "confidence" {
+			var value float64
+			if json.Unmarshal(item[field], &value) != nil {
+				return errors.New("object number field invalid")
+			}
+			continue
+		}
+		var value string
+		if json.Unmarshal(item[field], &value) != nil || (field == "episodeIndex" && !isDigitsEpisodeIndex(value)) {
+			return errors.New("object string field invalid")
+		}
+	}
+	return nil
 }
 
 type preparedExtractionRequest struct {

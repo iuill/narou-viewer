@@ -182,7 +182,7 @@ func (p *Processor) resolveExecutionContext(job *extractdomain.Job) (*store.Reso
 		return nil, err
 	}
 	if config == nil {
-		return nil, errors.New("AI generation profile was not found.")
+		return nil, errors.New("AI生成プロファイルが見つかりません。")
 	}
 	job.ProfileID = stringPointer(config.ProfileID)
 	job.ProfileLabel = stringPointer(config.ProfileLabel)

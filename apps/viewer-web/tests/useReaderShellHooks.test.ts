@@ -232,6 +232,20 @@ describe("reader shell hooks", () => {
     expect(latest?.isReaderOverflowOpen).toBe(true);
 
     await act(async () => {
+      latest?.closeExtractionPanel();
+      await flushAsyncWork();
+    });
+    expect(latest?.activeReaderPanel).toBe("toc");
+
+    await act(async () => {
+      latest?.openTermsPanel();
+      latest?.closeExtractionPanel();
+      await flushAsyncWork();
+    });
+    expect(latest?.activeReaderPanel).toBeNull();
+
+    await act(async () => {
+      latest?.setIsReaderOverflowOpen(true);
       latest?.closeActiveReaderPanel();
       await flushAsyncWork();
     });

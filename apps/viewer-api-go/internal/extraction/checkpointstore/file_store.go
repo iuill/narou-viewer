@@ -24,6 +24,7 @@ type Checkpoint struct {
 	PendingUnresolvedMentions []characters.GeneratedUnresolvedMention  `json:"pendingUnresolvedMentions,omitempty"`
 	IssuedCharacterIDs        []string                                 `json:"issuedCharacterIds,omitempty"`
 	RetiredCharacterIDs       []characters.GeneratedRetiredCharacterID `json:"retiredCharacterIds,omitempty"`
+	IdentityMergeEvents       []characters.GeneratedIdentityMergeEvent `json:"identityMergeEvents,omitempty"`
 	NextCharacterOrdinal      int                                      `json:"nextCharacterOrdinal,omitempty"`
 	UpdatedAt                 string                                   `json:"updatedAt"`
 }

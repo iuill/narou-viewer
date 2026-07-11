@@ -8,6 +8,7 @@ func migrateLegacyProfilesToEvents(novelID string, profiles profilesDocument) ch
 		NovelID:                   novelID,
 		ProcessedUpToEpisodeIndex: profiles.ProcessedUpToEpisodeIndex,
 		NextCharacterOrdinal:      1,
+		IdentityMergeEvents:       append([]identityMergeEvent{}, profiles.IdentityMergeEvents...),
 		Characters:                profilesToEventRecords(profiles.Characters),
 	}
 	used := map[string]bool{}

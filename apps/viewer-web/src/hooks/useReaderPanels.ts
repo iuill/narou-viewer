@@ -39,8 +39,8 @@ export function useReaderPanels({
     setActiveReaderPanel(null);
   }, []);
 
-  const closeCharacterSummaryPanel = useCallback(() => {
-    setActiveReaderPanel((current) => (current === "characters" ? null : current));
+  const closeExtractionPanel = useCallback(() => {
+    setActiveReaderPanel((current) => (current === "characters" || current === "terms" ? null : current));
   }, []);
 
   const openCharacterSummaryPanel = useCallback(() => {
@@ -122,7 +122,7 @@ export function useReaderPanels({
   return {
     activeReaderPanel,
     closeActiveReaderPanel,
-    closeCharacterSummaryPanel,
+    closeExtractionPanel,
     closeReaderPanel,
     isCharacterSummaryOpen: activeReaderPanel === "characters",
     isTermsOpen: activeReaderPanel === "terms",

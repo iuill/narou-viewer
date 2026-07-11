@@ -171,7 +171,7 @@ func TestProcessorRejectsMissingOpenRouterExecutionProfile(t *testing.T) {
 		t.Fatal("processor should persist the missing profile failure")
 	}
 	last := jobStore.jobs[len(jobStore.jobs)-1]
-	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "AI generation profile was not found." {
+	if last.Status != "failed" || last.ErrorMessage == nil || *last.ErrorMessage != "AI生成プロファイルが見つかりません。" {
 		t.Fatalf("missing OpenRouter profile should fail before generation: %+v", last)
 	}
 }

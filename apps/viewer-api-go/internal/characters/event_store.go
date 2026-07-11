@@ -121,6 +121,15 @@ func applyGeneratedCharacterIDState(doc *characterEventsDocument, novelID string
 		retired = append(retired, retiredCharacterID{CharacterID: id, MergedInto: strings.TrimSpace(value.MergedInto)})
 	}
 	doc.RetiredCharacterIDs = normalizeRetiredCharacterIDs(retired)
+	identityEvents := append([]identityMergeEvent{}, doc.IdentityMergeEvents...)
+	for _, value := range options.IdentityMergeEvents {
+		identityEvents = append(identityEvents, identityMergeEvent{
+			SourceCharacterID:     strings.TrimSpace(value.SourceCharacterID),
+			TargetCharacterID:     strings.TrimSpace(value.TargetCharacterID),
+			EffectiveEpisodeIndex: strings.TrimSpace(value.EffectiveEpisodeIndex),
+		})
+	}
+	doc.IdentityMergeEvents = normalizeIdentityMergeEvents(identityEvents)
 	used := map[string]bool{}
 	for _, record := range doc.Characters {
 		if strings.TrimSpace(record.CharacterID) != "" {
@@ -142,6 +151,76 @@ func applyGeneratedCharacterIDState(doc *characterEventsDocument, novelID string
 		doc.NextCharacterOrdinal = options.NextCharacterOrdinal
 	}
 	advanceNextStableCharacterOrdinal(novelID, &doc.NextCharacterOrdinal, used)
+}
+
+func normalizeIdentityMergeEvents(values []identityMergeEvent) []identityMergeEvent {
+	generated := make([]GeneratedIdentityMergeEvent, 0, len(values))
+	for _, value := range values {
+		generated = append(generated, GeneratedIdentityMergeEvent{
+			SourceCharacterID:     value.SourceCharacterID,
+			TargetCharacterID:     value.TargetCharacterID,
+			EffectiveEpisodeIndex: value.EffectiveEpisodeIndex,
+		})
+	}
+	normalized := NormalizeGeneratedIdentityMergeEvents(generated)
+	result := make([]identityMergeEvent, 0, len(normalized))
+	for _, value := range normalized {
+		result = append(result, identityMergeEvent{
+			SourceCharacterID:     value.SourceCharacterID,
+			TargetCharacterID:     value.TargetCharacterID,
+			EffectiveEpisodeIndex: value.EffectiveEpisodeIndex,
+		})
+	}
+	return result
+}
+
+func NormalizeGeneratedIdentityMergeEvents(values []GeneratedIdentityMergeEvent) []GeneratedIdentityMergeEvent {
+	candidates := make([]GeneratedIdentityMergeEvent, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value.SourceCharacterID = strings.TrimSpace(value.SourceCharacterID)
+		value.TargetCharacterID = strings.TrimSpace(value.TargetCharacterID)
+		value.EffectiveEpisodeIndex = strings.TrimSpace(value.EffectiveEpisodeIndex)
+		if value.SourceCharacterID == "" || value.TargetCharacterID == "" || value.SourceCharacterID == value.TargetCharacterID || value.EffectiveEpisodeIndex == "" {
+			continue
+		}
+		key := value.EffectiveEpisodeIndex + "\x00" + value.SourceCharacterID + "\x00" + value.TargetCharacterID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		candidates = append(candidates, value)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if diff := compareEpisodeIndex(candidates[i].EffectiveEpisodeIndex, candidates[j].EffectiveEpisodeIndex); diff != 0 {
+			return diff < 0
+		}
+		if candidates[i].SourceCharacterID != candidates[j].SourceCharacterID {
+			return candidates[i].SourceCharacterID < candidates[j].SourceCharacterID
+		}
+		return candidates[i].TargetCharacterID < candidates[j].TargetCharacterID
+	})
+	result := make([]GeneratedIdentityMergeEvent, 0, len(candidates))
+	mergedInto := map[string]string{}
+	for _, candidate := range candidates {
+		seenIDs := map[string]bool{candidate.SourceCharacterID: true}
+		targetID := candidate.TargetCharacterID
+		cyclic := false
+		for targetID != "" {
+			if seenIDs[targetID] {
+				cyclic = true
+				break
+			}
+			seenIDs[targetID] = true
+			targetID = mergedInto[targetID]
+		}
+		if cyclic {
+			continue
+		}
+		mergedInto[candidate.SourceCharacterID] = candidate.TargetCharacterID
+		result = append(result, candidate)
+	}
+	return result
 }
 
 func normalizeRetiredCharacterIDs(values []retiredCharacterID) []retiredCharacterID {
@@ -169,9 +248,6 @@ func normalizeRetiredCharacterIDs(values []retiredCharacterID) []retiredCharacte
 }
 
 func mergeRetiredCharacterEventRecords(records []characterEventRecord, retired []retiredCharacterID) []characterEventRecord {
-	if len(records) == 0 || len(retired) == 0 {
-		return records
-	}
 	mergedInto := map[string]string{}
 	for _, value := range retired {
 		sourceID := strings.TrimSpace(value.CharacterID)
@@ -180,6 +256,24 @@ func mergeRetiredCharacterEventRecords(records []characterEventRecord, retired [
 			continue
 		}
 		mergedInto[sourceID] = targetID
+	}
+	return mergeCharacterEventRecordsByID(records, mergedInto)
+}
+
+func mergeIdentityCharacterEventRecordsAtBoundary(records []characterEventRecord, events []identityMergeEvent, boundary string) []characterEventRecord {
+	mergedInto := map[string]string{}
+	for _, value := range normalizeIdentityMergeEvents(events) {
+		if compareEpisodeIndex(value.EffectiveEpisodeIndex, boundary) > 0 {
+			continue
+		}
+		mergedInto[value.SourceCharacterID] = value.TargetCharacterID
+	}
+	return mergeCharacterEventRecordsByID(records, mergedInto)
+}
+
+func mergeCharacterEventRecordsByID(records []characterEventRecord, mergedInto map[string]string) []characterEventRecord {
+	if len(records) == 0 {
+		return records
 	}
 	if len(mergedInto) == 0 {
 		return records
@@ -236,6 +330,29 @@ func mergeRetiredCharacterEventRecords(records []characterEventRecord, retired [
 	result := make([]characterEventRecord, 0, len(byID))
 	for _, id := range order {
 		if record, ok := byID[id]; ok {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+func preserveIdentityMergeSourceRecords(records []characterEventRecord, events []identityMergeEvent, existing []characterEventRecord) []characterEventRecord {
+	sourceIDs := map[string]bool{}
+	for _, event := range normalizeIdentityMergeEvents(events) {
+		sourceIDs[event.SourceCharacterID] = true
+	}
+	if len(sourceIDs) == 0 {
+		return records
+	}
+	present := map[string]bool{}
+	for _, record := range records {
+		present[strings.TrimSpace(record.CharacterID)] = true
+	}
+	result := append([]characterEventRecord{}, records...)
+	for _, record := range existing {
+		id := strings.TrimSpace(record.CharacterID)
+		if id != "" && sourceIDs[id] && !present[id] {
+			present[id] = true
 			result = append(result, record)
 		}
 	}
@@ -323,6 +440,16 @@ func truncateEpisodeEtagsBeforeEpisode(values []episodeEtag, fromEpisodeIndex st
 		}
 	}
 	return result
+}
+
+func truncateIdentityMergeEventsBeforeEpisode(values []identityMergeEvent, fromEpisodeIndex string) []identityMergeEvent {
+	result := []identityMergeEvent{}
+	for _, value := range values {
+		if strings.TrimSpace(value.EffectiveEpisodeIndex) != "" && compareEpisodeIndex(value.EffectiveEpisodeIndex, fromEpisodeIndex) < 0 {
+			result = append(result, value)
+		}
+	}
+	return normalizeIdentityMergeEvents(result)
 }
 
 func previousProcessedEpisodeIndex(current *string, fromEpisodeIndex string) *string {

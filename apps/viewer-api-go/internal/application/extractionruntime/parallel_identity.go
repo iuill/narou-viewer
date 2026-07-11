@@ -32,10 +32,12 @@ const (
 var errParallelIdentityOneShotTooLarge = errors.New("parallel_identity target is too large")
 
 type parallelIdentityCandidate struct {
-	LocalID    string
-	Source     string
-	BatchIndex int
-	Character  characters.GeneratedCharacter
+	LocalID                 string
+	Source                  string
+	BatchIndex              int
+	Character               characters.GeneratedCharacter
+	PersistenceCharacter    characters.GeneratedCharacter
+	HasPersistenceCharacter bool
 }
 
 type parallelIdentityCluster struct {
@@ -45,9 +47,9 @@ type parallelIdentityCluster struct {
 	Reason        string   `json:"reason"`
 }
 
-func (r *Runtime) GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+func (r *Runtime) GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	startedAt := time.Now()
-	generated, state, requests, err := r.generateOpenRouterExtractionParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seed, seedTerms, batches, progressSink, pendingUnresolved)
+	generated, state, requests, err := r.generateOpenRouterExtractionParallelIdentityWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, seedIdentityMergeEvents, seedTerms, batches, progressSink, pendingUnresolved)
 	status := "ok"
 	if err != nil {
 		status = "error"
@@ -56,9 +58,9 @@ func (r *Runtime) GenerateParallelIdentity(ctx context.Context, config *store.Re
 	return generated, state, requests, err
 }
 
-func (r *Runtime) GenerateDiscoveryParallelCorrection(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+func (r *Runtime) GenerateDiscoveryParallelCorrection(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	startedAt := time.Now()
-	generated, state, requests, err := r.generateOpenRouterExtractionDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seed, seedTerms, batches, progressSink, pendingUnresolved)
+	generated, state, requests, err := r.generateOpenRouterExtractionDiscoveryParallelCorrectionWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, seedIdentityMergeEvents, seedTerms, batches, progressSink, pendingUnresolved)
 	status := "ok"
 	if err != nil {
 		status = "error"
@@ -68,22 +70,27 @@ func (r *Runtime) GenerateDiscoveryParallelCorrection(ctx context.Context, confi
 }
 
 func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+	return r.generateOpenRouterExtractionParallelIdentityWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, nil, seedTerms, batches, progressSink, initialUnresolved)
+}
+
+func (r *Runtime) generateOpenRouterExtractionParallelIdentityWithSeedState(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	if config == nil {
-		return nil, extractionGenerationState{}, nil, errors.New("AI generation profile was not found.")
+		return nil, extractionGenerationState{}, nil, errors.New("AI生成プロファイルが見つかりません。")
 	}
 	allocator, err := characters.LoadGeneratedCharacterIDAllocator(r.stateDir, novelID, seed)
 	if err != nil {
 		return nil, extractionGenerationState{}, nil, err
 	}
-	runtimeBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, nil, seedTerms, batches, initialUnresolved)
+	visibleSeed := core.ApplyIdentityMergeEvents(seed, seedIdentityMergeEvents, upToEpisodeIndex)
+	runtimeBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, visibleSeed, seedTerms, batches, initialUnresolved, seedIdentityMergeEvents)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
-	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidates(ctx, config, novelID, upToEpisodeIndex, seedTerms, runtimeBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, visibleSeed, seedTerms, runtimeBatches, progressSink, initialUnresolved, seedIdentityMergeEvents)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), usageRequests, err
 	}
-	candidates := seedParallelIdentityCandidates(seed)
+	candidates := seedParallelIdentityCandidates(visibleSeed)
 	candidates = append(candidates, extracted...)
 	clusters, identityUsage, err := r.resolveParallelIdentityClusters(ctx, config, novelID, upToEpisodeIndex, candidates)
 	if identityUsage.Kind != "" {
@@ -93,26 +100,30 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	if err != nil {
 		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
 	}
-	clusters = mergeParallelIdentityProposalClusters(clusters, candidates, mergeProposals)
-	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, allocator)
-	generated = core.MergeGeneratedCharactersByID(generated)
-	generated = allocator.Assign(generated)
+	generated, persistenceCharacters, identityMergeEvents := buildParallelIdentityGeneratedState(candidates, clusters, mergeProposals, allocator, upToEpisodeIndex, parallelIdentityInitialState{PersistenceCharacters: seed, IdentityMergeEvents: seedIdentityMergeEvents})
 	sortGeneratedCharacters(generated)
-	unresolved = filterResolvedGeneratedUnresolvedMentions(unresolved, generated)
+	unresolved = core.FilterResolvedGeneratedUnresolvedMentionsWithIdentityEvents(unresolved, identityMergeEvents, upToEpisodeIndex, generated)
 	state := extractionStateFromAllocator(unresolved, allocator)
 	state.Terms = core.FilterAndMergeParallelTermFacts(seedTerms, rawTerms, generated)
+	state.IdentityMergeEvents = identityMergeEvents
+	state.PersistenceCharacters = persistenceCharacters
 	return generated, state, usageRequests, nil
 }
 
 func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+	return r.generateOpenRouterExtractionDiscoveryParallelCorrectionWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, nil, seedTerms, batches, progressSink, initialUnresolved)
+}
+
+func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrectionWithSeedState(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	if config == nil {
-		return nil, extractionGenerationState{}, nil, errors.New("AI generation profile was not found.")
+		return nil, extractionGenerationState{}, nil, errors.New("AI生成プロファイルが見つかりません。")
 	}
 	allocator, err := characters.LoadGeneratedCharacterIDAllocator(r.stateDir, novelID, seed)
 	if err != nil {
 		return nil, extractionGenerationState{}, nil, err
 	}
-	discoveryBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, nil, seedTerms, batches, initialUnresolved)
+	visibleSeed := core.ApplyIdentityMergeEvents(seed, seedIdentityMergeEvents, upToEpisodeIndex)
+	discoveryBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, nil, seedTerms, batches, initialUnresolved, seedIdentityMergeEvents)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
@@ -121,13 +132,13 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), discoveryUsage, err
 	}
 	discovered = allocator.Assign(discovered)
-	knownCharacters := append([]characters.GeneratedCharacter{}, seed...)
+	knownCharacters := append([]characters.GeneratedCharacter{}, visibleSeed...)
 	knownCharacters = append(knownCharacters, discovered...)
-	detailBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, batches, initialUnresolved)
+	detailBatches, err := r.parallelIdentityRuntimeBatches(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, batches, initialUnresolved, seedIdentityMergeEvents)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), discoveryUsage, err
 	}
-	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved)
+	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, knownCharacters, seedTerms, detailBatches, progressSink, initialUnresolved, seedIdentityMergeEvents)
 	usageRequests = append(discoveryUsage, usageRequests...)
 	for index := range usageRequests {
 		usageRequests[index].RequestIndex = index
@@ -135,7 +146,7 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), usageRequests, err
 	}
-	candidates := seedParallelIdentityCandidates(seed)
+	candidates := seedParallelIdentityCandidates(visibleSeed)
 	candidates = append(candidates, discoveryParallelIdentityCandidates(discovered)...)
 	candidates = append(candidates, extracted...)
 	clusters, identityUsage, err := r.resolveParallelIdentityClusters(ctx, config, novelID, upToEpisodeIndex, candidates)
@@ -146,11 +157,9 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
 	}
-	clusters = mergeParallelIdentityProposalClusters(clusters, candidates, mergeProposals)
-	generated := buildParallelIdentityGeneratedCharacters(candidates, clusters, allocator)
-	generated = core.MergeGeneratedCharactersByID(generated)
-	generated = allocator.Assign(generated)
+	generated, persistenceCharacters, identityMergeEvents := buildParallelIdentityGeneratedState(candidates, clusters, mergeProposals, allocator, upToEpisodeIndex, parallelIdentityInitialState{PersistenceCharacters: seed, IdentityMergeEvents: seedIdentityMergeEvents})
 	sortGeneratedCharacters(generated)
+	preCorrectionGenerated := append([]characters.GeneratedCharacter{}, generated...)
 	generated, correctionUsage, err := r.correctParallelIdentityCharacters(ctx, config, novelID, upToEpisodeIndex, generated)
 	if correctionUsage.Kind != "" {
 		correctionUsage.RequestIndex = len(usageRequests)
@@ -159,14 +168,21 @@ func (r *Runtime) generateOpenRouterExtractionDiscoveryParallelCorrection(ctx co
 	if err != nil {
 		return nil, extractionStateFromAllocator(unresolved, allocator), usageRequests, err
 	}
+	persistenceCharacters = applyParallelIdentityCurrentProjectionToPersistence(persistenceCharacters, preCorrectionGenerated, generated, identityMergeEvents, upToEpisodeIndex)
 	sortGeneratedCharacters(generated)
-	unresolved = filterResolvedGeneratedUnresolvedMentions(unresolved, generated)
+	unresolved = core.FilterResolvedGeneratedUnresolvedMentionsWithIdentityEvents(unresolved, identityMergeEvents, upToEpisodeIndex, generated)
 	state := extractionStateFromAllocator(unresolved, allocator)
 	state.Terms = core.FilterAndMergeParallelTermFacts(seedTerms, rawTerms, generated)
+	state.IdentityMergeEvents = identityMergeEvents
+	state.PersistenceCharacters = persistenceCharacters
 	return generated, state, usageRequests, nil
 }
 
-func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, pendingUnresolved []characters.GeneratedUnresolvedMention) ([]extractionBatch, error) {
+func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, pendingUnresolved []characters.GeneratedUnresolvedMention, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) ([]extractionBatch, error) {
+	identityMergeEvents := []characters.GeneratedIdentityMergeEvent(nil)
+	if len(identityMergeEventSets) > 0 {
+		identityMergeEvents = identityMergeEventSets[0]
+	}
 	runtimeBatches := []extractionBatch{}
 	for _, batch := range batches {
 		boundary := extractionBatchBoundary(batch)
@@ -174,7 +190,7 @@ func (r *Runtime) parallelIdentityRuntimeBatches(ctx context.Context, config *st
 		projectedUnresolved := filterGeneratedUnresolvedAtBoundary(pendingUnresolved, boundary)
 		remaining := append([]extractionChunk{}, batch.Chunks...)
 		for len(remaining) > 0 {
-			runtimeBatch, nextRemaining, err := r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, remaining, "parallel_entities", projectedUnresolved)
+			runtimeBatch, nextRemaining, err := r.nextRuntimeBatchForFocus(ctx, config, novelID, upToEpisodeIndex, projectedCharacters, knownTerms, batch, remaining, "parallel_entities", projectedUnresolved, identityMergeEvents)
 			if err != nil {
 				return nil, err
 			}
@@ -330,8 +346,12 @@ func (r *Runtime) extractParallelIdentityCandidates(ctx context.Context, config 
 	return r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, nil, knownTerms, batches, progressSink, initialUnresolved)
 }
 
-func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
+func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
 	results := make([]parallelIdentityExtractionResult, len(batches))
+	identityMergeEvents := []characters.GeneratedIdentityMergeEvent(nil)
+	if len(identityMergeEventSets) > 0 {
+		identityMergeEvents = identityMergeEventSets[0]
+	}
 	var sinkMu sync.Mutex
 	completedCount := 0
 	completedCandidateCount := 0
@@ -341,6 +361,7 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		boundary := extractionBatchBoundary(batch)
 		projectedCharacters := projectGeneratedCharactersAtBoundary(knownCharacters, boundary)
 		projectedUnresolved := filterGeneratedUnresolvedAtBoundary(initialUnresolved, boundary)
+		projectedUnresolved = core.ApplyIdentityMergeEventsToUnresolvedMentions(projectedUnresolved, identityMergeEvents, boundary)
 		startedAt := time.Now()
 		if progressSink != nil {
 			sinkMu.Lock()
@@ -356,7 +377,10 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 		if err == nil {
 			extraction.Unresolved = result.Delta.UnresolvedMentions
 			extraction.Terms = result.Delta.Terms
-			extraction.MergeProposals = result.Delta.MergeProposals
+			extraction.MergeProposals = append([]core.MergeProposal{}, result.Delta.MergeProposals...)
+			for proposalIndex := range extraction.MergeProposals {
+				extraction.MergeProposals[proposalIndex].EffectiveEpisodeIndex = boundary
+			}
 			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
 		}
 		results[index] = extraction
@@ -481,28 +505,30 @@ func filterGeneratedUnresolvedAtBoundary(values []characters.GeneratedUnresolved
 	return result
 }
 
-func parallelIdentityCandidatesFromDelta(novelID string, requestIndex int, batch extractionBatch, delta extractionDelta) []parallelIdentityCandidate {
-	return parallelIdentityCandidatesFromDeltaWithKnown(novelID, requestIndex, batch, delta, nil)
-}
-
 func parallelIdentityCandidatesFromDeltaWithKnown(novelID string, requestIndex int, batch extractionBatch, delta extractionDelta, knownCharacters []characters.GeneratedCharacter) []parallelIdentityCandidate {
 	_ = novelID
 	knownByID := generatedCharacterMapByID(knownCharacters)
-	generated := append([]characters.GeneratedCharacter{}, delta.LegacyCharacters...)
-	generated = append(generated, delta.NewCharacters...)
+	candidates := make([]parallelIdentityCandidate, 0, len(delta.LegacyCharacters)+len(delta.NewCharacters)+len(delta.CharacterUpdates))
+	appendCandidate := func(character characters.GeneratedCharacter, persistence characters.GeneratedCharacter) {
+		candidates = append(candidates, parallelIdentityCandidate{
+			LocalID:                 fmt.Sprintf("b%d-c%d", requestIndex+1, len(candidates)+1),
+			Source:                  "batch",
+			BatchIndex:              batch.BatchIndex,
+			Character:               character,
+			PersistenceCharacter:    persistence,
+			HasPersistenceCharacter: true,
+		})
+	}
+	for _, character := range delta.LegacyCharacters {
+		appendCandidate(character, character)
+	}
+	for _, character := range delta.NewCharacters {
+		appendCandidate(character, character)
+	}
 	for _, update := range delta.CharacterUpdates {
 		if known, ok := knownByID[strings.TrimSpace(update.CharacterID)]; ok {
-			generated = append(generated, mergeGeneratedCharacter(known, update))
+			appendCandidate(mergeGeneratedCharacter(known, update), update)
 		}
-	}
-	candidates := make([]parallelIdentityCandidate, 0, len(generated))
-	for index, item := range generated {
-		candidates = append(candidates, parallelIdentityCandidate{
-			LocalID:    fmt.Sprintf("b%d-c%d", requestIndex+1, index+1),
-			Source:     "batch",
-			BatchIndex: batch.BatchIndex,
-			Character:  item,
-		})
 	}
 	return candidates
 }
@@ -514,46 +540,6 @@ func generatedCharacterMapByID(values []characters.GeneratedCharacter) map[strin
 		if id != "" {
 			result[id] = value
 		}
-	}
-	return result
-}
-
-func mergeParallelIdentityProposalClusters(clusters []parallelIdentityCluster, candidates []parallelIdentityCandidate, proposals []core.MergeProposal) []parallelIdentityCluster {
-	proposalClusters := parallelIdentityProposalClusters(candidates, proposals)
-	if len(proposalClusters) == 0 {
-		return clusters
-	}
-	return mergeOverlappingParallelIdentityClusters(append(clusters, proposalClusters...))
-}
-
-func parallelIdentityProposalClusters(candidates []parallelIdentityCandidate, proposals []core.MergeProposal) []parallelIdentityCluster {
-	localIDsByCharacterID := map[string][]string{}
-	for _, candidate := range candidates {
-		characterID := strings.TrimSpace(candidate.Character.CharacterID)
-		localID := strings.TrimSpace(candidate.LocalID)
-		if characterID == "" || localID == "" {
-			continue
-		}
-		localIDsByCharacterID[characterID] = append(localIDsByCharacterID[characterID], localID)
-	}
-	result := make([]parallelIdentityCluster, 0, len(proposals))
-	for _, proposal := range proposals {
-		sourceID := strings.TrimSpace(proposal.SourceCharacterID)
-		targetID := strings.TrimSpace(proposal.TargetCharacterID)
-		if proposal.Confidence < core.MergeAutoApplyConfidence || sourceID == "" || targetID == "" || sourceID == targetID {
-			continue
-		}
-		sourceLocalIDs := localIDsByCharacterID[sourceID]
-		targetLocalIDs := localIDsByCharacterID[targetID]
-		if len(sourceLocalIDs) == 0 || len(targetLocalIDs) == 0 {
-			continue
-		}
-		localIDs := append(append([]string{}, sourceLocalIDs...), targetLocalIDs...)
-		result = append(result, parallelIdentityCluster{
-			LocalIDs:   normalizeParallelIdentityLocalIDs(localIDs),
-			Confidence: proposal.Confidence,
-			Reason:     strings.TrimSpace(proposal.Reason),
-		})
 	}
 	return result
 }
@@ -637,7 +623,10 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 		return nil, ai.UsageRequest{}, fmt.Errorf("OpenRouter request has only %d output tokens available for character identity resolution; at least %d are required.", maxTokens, extractionMinimumCompletionTokens)
 	}
 	temperature := 0.1
-	result, err := ai.GenerateOpenRouterChat(ctx, ai.OpenRouterConfig{
+	var decoded struct {
+		Clusters []parallelIdentityCluster `json:"clusters"`
+	}
+	result, outputAttempts, err := generateOpenRouterChatWithOutputRetry(ctx, ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
 		ModelID:           config.ModelID,
 		ProviderOrder:     config.ProviderOrder,
@@ -649,20 +638,28 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 	}, []ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
+	}, func(result ai.ChatResult) error {
+		decoded.Clusters = nil
+		if contractErr := validateRequiredJSONArrayItems(result.Answer, "clusters", []string{"localIds", "canonicalName", "confidence", "reason"}); contractErr != nil {
+			return contractErr
+		}
+		if decodeErr := decodeRequiredJSONArray(result.Answer, "clusters", &decoded.Clusters); decodeErr != nil {
+			return decodeErr
+		}
+		for _, cluster := range decoded.Clusters {
+			if len(cluster.LocalIDs) < 2 || strings.TrimSpace(cluster.CanonicalName) == "" {
+				return errors.New("モデル出力の clusters に不正な項目があります")
+			}
+		}
+		return nil
 	})
 	status := "ok"
 	if err != nil {
 		status = "error"
 	}
 	r.log("parallel_identity_resolve_openrouter", startedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "candidates", len(candidates), "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
-	usage := parallelIdentityUsageFromChatResult("extraction_identity_resolution", promptTokens, result)
+	usage := parallelIdentityUsageFromChatResult("extraction_identity_resolution", promptTokens, outputAttempts, result)
 	if err != nil {
-		return nil, usage, err
-	}
-	var decoded struct {
-		Clusters []parallelIdentityCluster `json:"clusters"`
-	}
-	if err := json.Unmarshal([]byte(result.Answer), &decoded); err != nil {
 		return nil, usage, err
 	}
 	return completeParallelIdentitySingletons(filterAutoApplicableParallelIdentityClusters(decoded.Clusters), candidates), usage, nil
@@ -777,7 +774,8 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		return nil, ai.UsageRequest{}, err
 	}
 	temperature := 0.1
-	result, err := ai.GenerateOpenRouterChat(ctx, ai.OpenRouterConfig{
+	var normalized []parallelIdentityDiscoveredName
+	result, outputAttempts, err := generateOpenRouterChatWithOutputRetry(ctx, ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
 		ModelID:           config.ModelID,
 		ProviderOrder:     config.ProviderOrder,
@@ -789,6 +787,22 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	}, []ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
+	}, func(result ai.ChatResult) error {
+		var decoded []parallelIdentityDiscoveredName
+		if contractErr := validateRequiredJSONArrayItems(result.Answer, "characters", []string{"name", "aliases", "episodeIndex", "reason"}); contractErr != nil {
+			return contractErr
+		}
+		if decodeErr := decodeRequiredJSONArray(result.Answer, "characters", &decoded); decodeErr != nil {
+			return decodeErr
+		}
+		for _, character := range decoded {
+			if strings.TrimSpace(character.Name) == "" || character.Aliases == nil {
+				return errors.New("モデル出力の characters に不正な名前発見項目があります")
+			}
+		}
+		var normalizeErr error
+		normalized, normalizeErr = normalizeDiscoveredNamesForBatch(decoded, batch, upToEpisodeIndex)
+		return normalizeErr
 	})
 	status := "ok"
 	if err != nil {
@@ -796,30 +810,21 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	}
 	r.log("parallel_identity_name_discovery_openrouter", startedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "requestIndex", requestIndex, "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
 	usage := ai.UsageRequest{}
-	if result.InputTokens > 0 || result.OutputTokens > 0 || result.TotalTokens > 0 {
+	if outputAttempts > 0 {
 		usage = ai.UsageRequest{
 			Kind:         "extraction_name_discovery",
 			InputTokens:  result.InputTokens,
 			OutputTokens: result.OutputTokens,
 			TotalTokens:  result.TotalTokens,
 		}
+		usedInputFallback := usage.InputTokens <= 0
 		if usage.InputTokens <= 0 {
-			usage.InputTokens = promptTokens
+			usage.InputTokens = promptTokens * outputAttempts
 		}
-		if usage.TotalTokens <= 0 {
+		if usage.TotalTokens <= 0 || usedInputFallback {
 			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 		}
 	}
-	if err != nil {
-		return nil, usage, err
-	}
-	var decoded struct {
-		Characters []parallelIdentityDiscoveredName `json:"characters"`
-	}
-	if err := json.Unmarshal([]byte(result.Answer), &decoded); err != nil {
-		return nil, usage, err
-	}
-	normalized, err := normalizeDiscoveredNamesForBatch(decoded.Characters, batch, upToEpisodeIndex)
 	if err != nil {
 		return nil, usage, err
 	}
@@ -961,7 +966,10 @@ func (r *Runtime) correctParallelIdentityCharactersOneShot(ctx context.Context, 
 		return nil, ai.UsageRequest{}, err
 	}
 	temperature := 0.1
-	result, err := ai.GenerateOpenRouterChat(ctx, ai.OpenRouterConfig{
+	var decoded struct {
+		Characters []parallelIdentityCorrection `json:"characters"`
+	}
+	result, outputAttempts, err := generateOpenRouterChatWithOutputRetry(ctx, ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
 		ModelID:           config.ModelID,
 		ProviderOrder:     config.ProviderOrder,
@@ -973,35 +981,44 @@ func (r *Runtime) correctParallelIdentityCharactersOneShot(ctx context.Context, 
 	}, []ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
+	}, func(result ai.ChatResult) error {
+		decoded.Characters = nil
+		if contractErr := validateRequiredJSONArrayItems(result.Answer, "characters", []string{"characterId", "canonicalName", "aliases", "keep", "reason"}); contractErr != nil {
+			return contractErr
+		}
+		if decodeErr := decodeRequiredJSONArray(result.Answer, "characters", &decoded.Characters); decodeErr != nil {
+			return decodeErr
+		}
+		for _, correction := range decoded.Characters {
+			if strings.TrimSpace(correction.CharacterID) == "" || correction.Aliases == nil || correction.Keep == nil {
+				return errors.New("モデル出力の characters に不正な補正項目があります")
+			}
+		}
+		return nil
 	})
 	status := "ok"
 	if err != nil {
 		status = "error"
 	}
 	r.log("parallel_identity_correction_openrouter", startedAt, "status", status, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "characterCount", len(generated), "inputTokens", result.InputTokens, "outputTokens", result.OutputTokens, "totalTokens", result.TotalTokens)
-	usage := parallelIdentityUsageFromChatResult("extraction_correction", promptTokens, result)
+	usage := parallelIdentityUsageFromChatResult("extraction_correction", promptTokens, outputAttempts, result)
 	if err != nil {
-		return nil, usage, err
-	}
-	var decoded struct {
-		Characters []parallelIdentityCorrection `json:"characters"`
-	}
-	if err := json.Unmarshal([]byte(result.Answer), &decoded); err != nil {
 		return nil, usage, err
 	}
 	corrected := applyParallelIdentityCorrections(generated, decoded.Characters, upToEpisodeIndex)
 	return corrected, usage, nil
 }
 
-func parallelIdentityUsageFromChatResult(kind string, promptTokens int, result ai.ChatResult) ai.UsageRequest {
-	if result.InputTokens == 0 && result.OutputTokens == 0 && result.TotalTokens == 0 {
+func parallelIdentityUsageFromChatResult(kind string, promptTokens int, outputAttempts int, result ai.ChatResult) ai.UsageRequest {
+	if outputAttempts <= 0 {
 		return ai.UsageRequest{}
 	}
 	usage := ai.UsageRequest{Kind: kind, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens}
+	usedInputFallback := usage.InputTokens <= 0
 	if usage.InputTokens <= 0 {
-		usage.InputTokens = promptTokens
+		usage.InputTokens = promptTokens * outputAttempts
 	}
-	if usage.TotalTokens <= 0 {
+	if usage.TotalTokens <= 0 || usedInputFallback {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 	return usage
@@ -1489,82 +1506,169 @@ func normalizeParallelIdentityLocalIDs(values []string) []string {
 	return result
 }
 
-func buildParallelIdentityGeneratedCharacters(candidates []parallelIdentityCandidate, clusters []parallelIdentityCluster, allocator *characters.GeneratedCharacterIDAllocator) []characters.GeneratedCharacter {
-	candidateByID := map[string]parallelIdentityCandidate{}
-	for _, candidate := range candidates {
-		candidateByID[candidate.LocalID] = candidate
+type parallelIdentityInitialState struct {
+	PersistenceCharacters []characters.GeneratedCharacter
+	IdentityMergeEvents   []characters.GeneratedIdentityMergeEvent
+}
+
+func buildParallelIdentityGeneratedState(candidates []parallelIdentityCandidate, clusters []parallelIdentityCluster, proposals []core.MergeProposal, allocator *characters.GeneratedCharacterIDAllocator, effectiveEpisodeIndex string, initialStates ...parallelIdentityInitialState) ([]characters.GeneratedCharacter, []characters.GeneratedCharacter, []characters.GeneratedIdentityMergeEvent) {
+	raw := []characters.GeneratedCharacter{}
+	events := []characters.GeneratedIdentityMergeEvent{}
+	if len(initialStates) > 0 {
+		raw = append(raw, initialStates[0].PersistenceCharacters...)
+		events = append(events, initialStates[0].IdentityMergeEvents...)
 	}
-	generated := []characters.GeneratedCharacter{}
+	rawIndexByStableID := map[string]int{}
+	rawIndexByLocalID := map[string]int{}
+	for index, character := range raw {
+		if stableID := strings.TrimSpace(character.CharacterID); stableID != "" {
+			rawIndexByStableID[stableID] = index
+		}
+	}
+	for _, candidate := range candidates {
+		stableID := strings.TrimSpace(candidate.Character.CharacterID)
+		if stableID != "" {
+			if index, ok := rawIndexByStableID[stableID]; ok {
+				if candidate.Source != "seed" {
+					persistenceCharacter := candidate.Character
+					if candidate.HasPersistenceCharacter {
+						persistenceCharacter = candidate.PersistenceCharacter
+					}
+					raw[index] = mergeGeneratedCharacter(raw[index], persistenceCharacter)
+				}
+				rawIndexByLocalID[candidate.LocalID] = index
+				continue
+			}
+			rawIndexByStableID[stableID] = len(raw)
+		}
+		rawIndexByLocalID[candidate.LocalID] = len(raw)
+		raw = append(raw, candidate.Character)
+	}
+	raw = allocator.Assign(raw)
+	characterIDByLocalID := map[string]string{}
+	for localID, index := range rawIndexByLocalID {
+		if index >= 0 && index < len(raw) {
+			characterIDByLocalID[localID] = raw[index].CharacterID
+		}
+	}
+	proposalEvents := core.IdentityMergeEventsFromProposals(proposals, effectiveEpisodeIndex, raw)
+	events = append(events, parallelIdentityClusterMergeEvents(clusters, characterIDByLocalID, raw, effectiveEpisodeIndex, proposalEvents)...)
+	events = append(events, proposalEvents...)
+	events = core.NormalizeGeneratedIdentityMergeEvents(events)
+	generated := core.ApplyIdentityMergeEvents(raw, events, effectiveEpisodeIndex)
+	return generated, raw, events
+}
+
+func parallelIdentityClusterMergeEvents(clusters []parallelIdentityCluster, characterIDByLocalID map[string]string, raw []characters.GeneratedCharacter, effectiveEpisodeIndex string, preferredEvents []characters.GeneratedIdentityMergeEvent) []characters.GeneratedIdentityMergeEvent {
+	events := []characters.GeneratedIdentityMergeEvent{}
 	for _, cluster := range clusters {
-		clusterCandidates := []parallelIdentityCandidate{}
-		for _, id := range cluster.LocalIDs {
-			candidate, ok := candidateByID[id]
-			if ok {
-				clusterCandidates = append(clusterCandidates, candidate)
+		ids := []string{}
+		seen := map[string]bool{}
+		for _, localID := range cluster.LocalIDs {
+			id := strings.TrimSpace(characterIDByLocalID[localID])
+			if id == "" || seen[id] {
+				continue
 			}
+			seen[id] = true
+			ids = append(ids, id)
 		}
-		if len(clusterCandidates) == 0 {
+		if len(ids) < 2 {
 			continue
 		}
-		generated = append(generated, mergeParallelIdentityCluster(clusterCandidates, cluster, allocator))
-	}
-	return generated
-}
-
-func mergeParallelIdentityCluster(candidates []parallelIdentityCandidate, cluster parallelIdentityCluster, allocator *characters.GeneratedCharacterIDAllocator) characters.GeneratedCharacter {
-	representativeID := parallelIdentityRepresentativeID(candidates)
-	var merged characters.GeneratedCharacter
-	for index, candidate := range candidates {
-		item := candidate.Character
-		if representativeID != "" {
-			itemID := strings.TrimSpace(item.CharacterID)
-			if itemID != "" && itemID != representativeID && allocator != nil {
-				allocator.Retire(itemID, representativeID)
+		targetID := parallelIdentityPreferredTargetID(ids, preferredEvents)
+		if targetID == "" {
+			targetID = parallelIdentityGeneratedRepresentativeID(raw, ids)
+		}
+		for _, sourceID := range ids {
+			if sourceID != targetID {
+				events = append(events, characters.GeneratedIdentityMergeEvent{SourceCharacterID: sourceID, TargetCharacterID: targetID, EffectiveEpisodeIndex: effectiveEpisodeIndex})
 			}
-			item.CharacterID = representativeID
-		} else {
-			item.CharacterID = ""
-		}
-		if index == 0 {
-			merged = item
-		} else {
-			merged = mergeGeneratedCharacter(merged, item)
 		}
 	}
-	if strings.TrimSpace(cluster.CanonicalName) != "" && strings.TrimSpace(merged.CanonicalName) == "" {
-		merged.CanonicalName = strings.TrimSpace(cluster.CanonicalName)
-		merged.CanonicalEpisodeIndex = firstNonEmptySummaryString(merged.FirstAppearanceEpisodeIndex, merged.CanonicalEpisodeIndex)
-	}
-	return merged
+	return events
 }
 
-func parallelIdentityRepresentativeID(candidates []parallelIdentityCandidate) string {
-	type candidateID struct {
-		id              string
-		appearanceIndex string
+func parallelIdentityPreferredTargetID(ids []string, events []characters.GeneratedIdentityMergeEvent) string {
+	allowed := map[string]bool{}
+	for _, id := range ids {
+		allowed[id] = true
 	}
-	ids := []candidateID{}
-	for _, candidate := range candidates {
-		id := strings.TrimSpace(candidate.Character.CharacterID)
-		if id == "" {
-			continue
+	mergedInto := map[string]string{}
+	for _, event := range events {
+		if allowed[event.SourceCharacterID] && allowed[event.TargetCharacterID] {
+			mergedInto[event.SourceCharacterID] = event.TargetCharacterID
 		}
-		ids = append(ids, candidateID{
-			id:              id,
-			appearanceIndex: firstNonEmptySummaryString(candidate.Character.FirstAppearanceEpisodeIndex, candidate.Character.CanonicalEpisodeIndex),
-		})
 	}
+	for _, id := range ids {
+		if target := mergedInto[id]; target != "" && mergedInto[target] == "" {
+			return target
+		}
+	}
+	return ""
+}
+
+func parallelIdentityGeneratedRepresentativeID(values []characters.GeneratedCharacter, ids []string) string {
+	byID := generatedCharacterMapByID(values)
+	sort.SliceStable(ids, func(i, j int) bool {
+		left := byID[ids[i]]
+		right := byID[ids[j]]
+		if diff := compareEpisodeString(firstNonEmptySummaryString(left.FirstAppearanceEpisodeIndex, left.CanonicalEpisodeIndex), firstNonEmptySummaryString(right.FirstAppearanceEpisodeIndex, right.CanonicalEpisodeIndex)); diff != 0 {
+			return diff < 0
+		}
+		return ids[i] < ids[j]
+	})
 	if len(ids) == 0 {
 		return ""
 	}
-	sort.SliceStable(ids, func(i, j int) bool {
-		diff := compareEpisodeString(ids[i].appearanceIndex, ids[j].appearanceIndex)
-		if diff != 0 {
-			return diff < 0
+	return ids[0]
+}
+
+func applyParallelIdentityCurrentProjectionToPersistence(persistence []characters.GeneratedCharacter, before []characters.GeneratedCharacter, current []characters.GeneratedCharacter, events []characters.GeneratedIdentityMergeEvent, effectiveEpisodeIndex string) []characters.GeneratedCharacter {
+	currentByID := generatedCharacterMapByID(current)
+	removedCurrentIDs := map[string]bool{}
+	for _, character := range before {
+		if _, ok := currentByID[strings.TrimSpace(character.CharacterID)]; !ok {
+			removedCurrentIDs[strings.TrimSpace(character.CharacterID)] = true
 		}
-		return ids[i].id < ids[j].id
-	})
-	return ids[0].id
+	}
+	mergedInto := map[string]string{}
+	for _, event := range core.NormalizeGeneratedIdentityMergeEvents(events) {
+		if compareEpisodeString(event.EffectiveEpisodeIndex, effectiveEpisodeIndex) <= 0 {
+			mergedInto[event.SourceCharacterID] = event.TargetCharacterID
+		}
+	}
+	resolveTarget := func(id string) string {
+		seen := map[string]bool{}
+		for mergedInto[id] != "" && !seen[id] {
+			seen[id] = true
+			id = mergedInto[id]
+		}
+		return id
+	}
+	result := make([]characters.GeneratedCharacter, 0, len(persistence))
+	for _, raw := range persistence {
+		if removedCurrentIDs[resolveTarget(strings.TrimSpace(raw.CharacterID))] {
+			continue
+		}
+		index := len(result)
+		result = append(result, raw)
+		projected, ok := currentByID[strings.TrimSpace(raw.CharacterID)]
+		if !ok {
+			continue
+		}
+		if name := strings.TrimSpace(projected.CanonicalName); name != "" && generatedCharacterNameEpisodeIndex(raw, name) == "" {
+			result[index].CanonicalName = name
+			result[index].CanonicalEpisodeIndex = effectiveEpisodeIndex
+			result[index].NameHistory = mergeGeneratedTextVersionLists(append(result[index].NameHistory, characters.GeneratedTextVersion{Text: name, EpisodeIndex: effectiveEpisodeIndex}))
+		}
+		for _, alias := range projected.Aliases {
+			name := strings.TrimSpace(alias.Text)
+			if name != "" && generatedCharacterNameEpisodeIndex(raw, name) == "" {
+				result[index].Aliases = mergeGeneratedTextVersionLists(append(result[index].Aliases, characters.GeneratedTextVersion{Text: name, EpisodeIndex: effectiveEpisodeIndex}))
+			}
+		}
+	}
+	return result
 }
 
 func extractionConfigWithModel(config *store.ResolvedAIGenerationConfig, modelID string) *store.ResolvedAIGenerationConfig {

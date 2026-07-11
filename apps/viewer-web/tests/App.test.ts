@@ -3208,8 +3208,7 @@ describe("App", () => {
       dom.window.dispatchEvent(new dom.window.PopStateEvent("popstate"));
     });
     await waitFor(() => Boolean(container.querySelector(".reader-shell")) && container.textContent?.includes("小説A 第1話") === true);
-	await click(getButtonByLabel(container, "読書設定"), dom);
-	await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
+    await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
     resolveN1SettingsPut?.(
       jsonResponse({

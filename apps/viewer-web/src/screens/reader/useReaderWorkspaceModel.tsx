@@ -214,6 +214,7 @@ export function useReaderWorkspaceModel({
   const {
     activeReaderPanel,
     closeActiveReaderPanel,
+    closeExtractionPanel,
     closeReaderPanel,
     isCharacterSummaryOpen,
     isTermsOpen,
@@ -473,7 +474,7 @@ export function useReaderWorkspaceModel({
     currentTocEpisodeIndex,
     formatEpisodeOrderLabel: formatCharacterSummaryEpisodeOrder,
     isOpen: isCharacterSummaryOpen || isTermsOpen,
-    onClosePanel: closeActiveReaderPanel,
+    onClosePanel: closeExtractionPanel,
     onOpenPanel: openCharacterSummaryPanel,
     onOpenTermsPanel: openTermsPanel,
     screenMode,

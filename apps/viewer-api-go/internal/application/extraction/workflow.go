@@ -66,14 +66,14 @@ func (w *Workflow) RunOpenRouterWithCheckpoint(ctx context.Context, config *stor
 	if w == nil || w.ports == nil {
 		return nil, core.GenerationState{}, nil, nil
 	}
-	return generationRunner{ports: w.ports}.GenerateWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, seedTerms, batches, progressSink, pendingUnresolved)
+	return generationRunner{ports: w.ports}.GenerateWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seed, nil, seedTerms, batches, progressSink, pendingUnresolved)
 }
 
 func (w *Workflow) RunOpenRouterPreview(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	if w == nil || w.ports == nil {
 		return nil, core.GenerationState{}, nil, nil
 	}
-	return generationRunner{ports: w.ports}.GeneratePreview(ctx, config, novelID, upToEpisodeIndex, seed, seedTerms, batches, progressSink, pendingUnresolved)
+	return generationRunner{ports: w.ports}.GeneratePreview(ctx, config, novelID, upToEpisodeIndex, seed, nil, seedTerms, batches, progressSink, pendingUnresolved)
 }
 
 func (w *Workflow) prepareInputs(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedConfig *store.ResolvedAIGenerationConfig) (Inputs, error) {
@@ -149,7 +149,7 @@ func (w *Workflow) GenerateAndSave(ctx context.Context, novelID string, upToEpis
 		recorder.ActiveProfile = config
 		return w.generateOpenRouterAndSave(ctx, recorder, novelID, upToEpisodeIndex, config, generationStrategy, maxChunkChars, maxBatchChars, progressSink)
 	case "disabled":
-		return FinalCounts{}, errors.New("Extraction via LLM is unavailable because OpenRouter is not configured.")
+		return FinalCounts{}, errors.New("OpenRouter が設定されていないため、人物・用語を抽出できません。")
 	default:
 		inputs, err := w.ports.LoadInputs(ctx, novelID, upToEpisodeIndex, maxChunkChars, maxBatchChars, "")
 		if err != nil {
@@ -195,7 +195,7 @@ func (w *Workflow) GeneratePreview(ctx context.Context, novelID string, upToEpis
 		recorder.ActiveProfile = config
 		return w.generateOpenRouterPreview(ctx, recorder, novelID, upToEpisodeIndex, config, generationStrategy, maxChunkChars, maxBatchChars, progressSink, episodeIndexes, preloaded)
 	case "disabled":
-		return Result{}, errors.New("Extraction via LLM is unavailable because OpenRouter is not configured.")
+		return Result{}, errors.New("OpenRouter が設定されていないため、人物・用語を抽出できません。")
 	default:
 		inputs, err := w.previewInputs(ctx, novelID, upToEpisodeIndex, maxChunkChars, maxBatchChars, "", nil, preloaded)
 		if err != nil {
@@ -216,13 +216,13 @@ func (w *Workflow) resolveConfig(resolvedOverride *store.ResolvedAIGenerationCon
 		config = resolvedOverride
 	}
 	if config == nil {
-		return nil, errors.New("AI generation profile was not found.")
+		return nil, errors.New("AI生成プロファイルが見つかりません。")
 	}
 	return config, nil
 }
 
 func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usageRecorder, novelID string, upToEpisodeIndex string, config *store.ResolvedAIGenerationConfig, strategy string, maxChunkChars int, maxBatchChars int, progressSink func(BatchProgress)) (FinalCounts, error) {
-	seedGenerated, processedIndex, hasExisting, err := w.ports.LoadGenerationSeed(novelID, upToEpisodeIndex)
+	seedGenerated, seedIdentityMergeEvents, processedIndex, hasExisting, err := w.ports.LoadGenerationSeed(novelID, upToEpisodeIndex)
 	if err != nil {
 		return FinalCounts{}, err
 	}
@@ -238,7 +238,7 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 			return FinalCounts{}, ErrLegacyExtractionStateIncomplete
 		}
 	}
-	identityRegistry := append([]characters.GeneratedCharacter{}, seedGenerated...)
+	identityRegistry := core.ApplyIdentityMergeEvents(seedGenerated, seedIdentityMergeEvents, upToEpisodeIndex)
 	reprocessFromEpisodeIndex, err := w.ports.ReprocessFromEpisode(ctx, novelID, processedIndex, upToEpisodeIndex)
 	if err != nil {
 		return FinalCounts{}, err
@@ -249,7 +249,7 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 				return FinalCounts{}, err
 			}
 			recorder.Enabled = false
-			return FinalCounts{CharacterCount: len(seedGenerated), TermCount: len(seedTerms)}, nil
+			return FinalCounts{CharacterCount: len(identityRegistry), TermCount: len(seedTerms)}, nil
 		}
 	}
 
@@ -263,7 +263,7 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 	}
 	if reprocessFromEpisodeIndex != "" {
 		inputs = filterInputsFrom(inputs, reprocessFromEpisodeIndex)
-		seedGenerated, _, _, err = w.ports.LoadGeneratedCharactersBeforeEpisode(novelID, reprocessFromEpisodeIndex)
+		seedGenerated, seedIdentityMergeEvents, _, _, err = w.ports.LoadGeneratedCharactersBeforeEpisode(novelID, reprocessFromEpisodeIndex)
 		if err != nil {
 			return FinalCounts{}, err
 		}
@@ -283,12 +283,12 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 	var actualUsageRequests []ai.UsageRequest
 	switch strategy {
 	case GenerationStrategyParallelIdentity:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	case GenerationStrategyDiscoveryParallelCorrection:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	default:
 		runner := generationRunner{ports: w.ports}
-		generated, generationState, actualUsageRequests, err = runner.GenerateWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = runner.GenerateWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	}
 	recorder.UseActualRequests(actualUsageRequests)
 	if err != nil {
@@ -304,12 +304,17 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 	if err := w.ports.SaveGeneratedTerms(novelID, upToEpisodeIndex, generationState.Terms, replaceFromEpisodeIndex); err != nil {
 		return FinalCounts{}, err
 	}
-	err = w.ports.SaveGeneratedSummary(novelID, upToEpisodeIndex, generated, inputs.Episodes, characters.SaveGeneratedSummaryOptions{
+	persistenceCharacters := generated
+	if generationState.PersistenceCharacters != nil {
+		persistenceCharacters = generationState.PersistenceCharacters
+	}
+	err = w.ports.SaveGeneratedSummary(novelID, upToEpisodeIndex, persistenceCharacters, inputs.Episodes, characters.SaveGeneratedSummaryOptions{
 		ReplaceFromEpisodeIndex: reprocessFromEpisodeIndex,
 		UnresolvedMentions:      generationState.UnresolvedMentions,
 		SetUnresolvedMentions:   true,
 		IssuedCharacterIDs:      generationState.IssuedCharacterIDs,
 		RetiredCharacterIDs:     generationState.RetiredCharacterIDs,
+		IdentityMergeEvents:     generationState.IdentityMergeEvents,
 		NextCharacterOrdinal:    generationState.NextOrdinal,
 	})
 	if err == nil {
@@ -319,7 +324,7 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 }
 
 func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usageRecorder, novelID string, upToEpisodeIndex string, config *store.ResolvedAIGenerationConfig, strategy string, maxChunkChars int, maxBatchChars int, progressSink func(BatchProgress), episodeIndexes []string, preloaded *Inputs) (Result, error) {
-	seedGenerated, processedIndex, hasExisting, err := w.ports.LoadGenerationSeed(novelID, upToEpisodeIndex)
+	seedGenerated, seedIdentityMergeEvents, processedIndex, hasExisting, err := w.ports.LoadGenerationSeed(novelID, upToEpisodeIndex)
 	if err != nil {
 		return Result{}, err
 	}
@@ -356,7 +361,7 @@ func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usag
 		return Result{}, err
 	}
 	if reprocessFromEpisodeIndex != "" {
-		seedGenerated, _, _, err = w.ports.LoadGeneratedCharactersBeforeEpisode(novelID, reprocessFromEpisodeIndex)
+		seedGenerated, seedIdentityMergeEvents, _, _, err = w.ports.LoadGeneratedCharactersBeforeEpisode(novelID, reprocessFromEpisodeIndex)
 		if err != nil {
 			return Result{}, err
 		}
@@ -376,12 +381,12 @@ func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usag
 	var actualUsageRequests []ai.UsageRequest
 	switch strategy {
 	case GenerationStrategyParallelIdentity:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	case GenerationStrategyDiscoveryParallelCorrection:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	default:
 		runner := generationRunner{ports: w.ports}
-		generated, generationState, actualUsageRequests, err = runner.GeneratePreview(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = runner.GeneratePreview(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	}
 	recorder.UseActualRequests(actualUsageRequests)
 	if err != nil {
@@ -396,6 +401,7 @@ func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usag
 		SetUnresolvedMentions:   true,
 		IssuedCharacterIDs:      generationState.IssuedCharacterIDs,
 		RetiredCharacterIDs:     generationState.RetiredCharacterIDs,
+		IdentityMergeEvents:     generationState.IdentityMergeEvents,
 		NextCharacterOrdinal:    generationState.NextOrdinal,
 	})
 	return workflowResult(summary, terms.ProjectTerms(generationState.Terms, upToEpisodeIndex), "openrouter", strategy, config, w.ports.NovelTitle(ctx, novelID)), err

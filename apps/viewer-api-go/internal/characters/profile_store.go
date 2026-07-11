@@ -45,8 +45,13 @@ func LoadSummaryForEpisodes(stateDir string, novelID string, upToEpisodeIndex st
 	}
 	characters := []Character{}
 	if status == "ready" || status == "partial" {
+		profiles := doc.Characters
+		if len(doc.IdentityMergeEvents) > 0 {
+			records := mergeIdentityCharacterEventRecordsAtBoundary(profilesToEventRecords(doc.Characters), doc.IdentityMergeEvents, visibilityBoundary)
+			profiles = eventRecordsToProfiles(records)
+		}
 		visibleProfiles := []characterProfile{}
-		for _, profile := range doc.Characters {
+		for _, profile := range profiles {
 			if !episodeWithin(profile.FirstAppearanceEpisodeIndex, visibilityBoundary) {
 				continue
 			}
@@ -123,6 +128,7 @@ func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedU
 		replaceFromEpisodeIndex := strings.TrimSpace(options.ReplaceFromEpisodeIndex)
 		if replaceFromEpisodeIndex != "" {
 			eventsDoc.Characters = truncateCharacterEventRecordsBeforeEpisode(eventsDoc.Characters, replaceFromEpisodeIndex)
+			eventsDoc.IdentityMergeEvents = truncateIdentityMergeEventsBeforeEpisode(eventsDoc.IdentityMergeEvents, replaceFromEpisodeIndex)
 			eventsDoc.UnresolvedMentions = truncateUnresolvedMentionsBeforeEpisode(eventsDoc.UnresolvedMentions, replaceFromEpisodeIndex)
 			eventsDoc.EpisodeEtags = truncateEpisodeEtagsBeforeEpisode(eventsDoc.EpisodeEtags, replaceFromEpisodeIndex)
 		}
@@ -130,7 +136,9 @@ func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedU
 		eventsDoc.Characters = mergeRetiredCharacterEventRecords(eventsDoc.Characters, eventsDoc.RetiredCharacterIDs)
 		profiles := generatedCharactersToProfiles(novelID, processedUpToEpisodeIndex, assigned)
 		applyGeneratedImportanceMetrics(profiles, episodes)
-		eventsDoc.Characters = generatedCharactersToEventRecordsWithExisting(profiles, assigned, processedUpToEpisodeIndex, eventsDoc.Characters)
+		existingEventRecords := eventsDoc.Characters
+		eventsDoc.Characters = generatedCharactersToEventRecordsWithExisting(profiles, assigned, processedUpToEpisodeIndex, existingEventRecords)
+		eventsDoc.Characters = preserveIdentityMergeSourceRecords(eventsDoc.Characters, eventsDoc.IdentityMergeEvents, existingEventRecords)
 		if options.SetUnresolvedMentions {
 			eventsDoc.UnresolvedMentions = unresolvedMentionsToEventRecords(options.UnresolvedMentions)
 		}
@@ -139,6 +147,7 @@ func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedU
 		doc := profilesDocument{
 			NovelID:                   novelID,
 			ProcessedUpToEpisodeIndex: &processedUpToEpisodeIndex,
+			IdentityMergeEvents:       append([]identityMergeEvent{}, eventsDoc.IdentityMergeEvents...),
 			Characters:                materializedProfiles,
 		}
 		if err := writeYAMLAtomic(filepath.Join(stateDir, "character_events", novelID+".yaml"), eventsDoc); err != nil {
@@ -159,6 +168,7 @@ func MaterializeGeneratedSummary(stateDir string, novelID string) (bool, error) 
 		profileDoc := profilesDocument{
 			NovelID:                   novelID,
 			ProcessedUpToEpisodeIndex: doc.ProcessedUpToEpisodeIndex,
+			IdentityMergeEvents:       append([]identityMergeEvent{}, doc.IdentityMergeEvents...),
 			Characters:                profiles,
 		}
 		if err := writeYAMLAtomic(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), profileDoc); err != nil {
@@ -181,7 +191,24 @@ func LoadGeneratedCharacters(stateDir string, novelID string) ([]GeneratedCharac
 			return nil, nil, false, nil
 		}
 	}
-	return eventRecordsToGeneratedCharacters(doc.Characters), doc.ProcessedUpToEpisodeIndex, doc.ProcessedUpToEpisodeIndex != nil || len(doc.Characters) > 0, nil
+	records := doc.Characters
+	if doc.ProcessedUpToEpisodeIndex != nil {
+		records = mergeIdentityCharacterEventRecordsAtBoundary(records, doc.IdentityMergeEvents, *doc.ProcessedUpToEpisodeIndex)
+	}
+	return eventRecordsToGeneratedCharacters(records), doc.ProcessedUpToEpisodeIndex, doc.ProcessedUpToEpisodeIndex != nil || len(doc.Characters) > 0, nil
+}
+
+func LoadGeneratedCharacterState(stateDir string, novelID string) ([]GeneratedCharacter, []GeneratedIdentityMergeEvent, *string, bool, error) {
+	doc, ok, err := loadCharacterEventsDocument(stateDir, novelID)
+	if err != nil || !ok {
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		if doc.ProcessedUpToEpisodeIndex == nil && len(doc.Characters) == 0 {
+			return nil, nil, nil, false, nil
+		}
+	}
+	return eventRecordsToGeneratedCharacters(doc.Characters), generatedIdentityMergeEvents(doc.IdentityMergeEvents), doc.ProcessedUpToEpisodeIndex, doc.ProcessedUpToEpisodeIndex != nil || len(doc.Characters) > 0, nil
 }
 
 func LoadGeneratedCharactersBeforeEpisode(stateDir string, novelID string, fromEpisodeIndex string) ([]GeneratedCharacter, *string, bool, error) {
@@ -199,5 +226,41 @@ func LoadGeneratedCharactersBeforeEpisode(stateDir string, novelID string, fromE
 		}
 	}
 	truncated := truncateCharacterEventRecordsBeforeEpisode(doc.Characters, fromEpisodeIndex)
-	return eventRecordsToGeneratedCharacters(truncated), previousProcessedEpisodeIndex(doc.ProcessedUpToEpisodeIndex, fromEpisodeIndex), true, nil
+	processed := previousProcessedEpisodeIndex(doc.ProcessedUpToEpisodeIndex, fromEpisodeIndex)
+	if processed != nil {
+		truncated = mergeIdentityCharacterEventRecordsAtBoundary(truncated, doc.IdentityMergeEvents, *processed)
+	}
+	return eventRecordsToGeneratedCharacters(truncated), processed, true, nil
+}
+
+func LoadGeneratedCharacterStateBeforeEpisode(stateDir string, novelID string, fromEpisodeIndex string) ([]GeneratedCharacter, []GeneratedIdentityMergeEvent, *string, bool, error) {
+	fromEpisodeIndex = strings.TrimSpace(fromEpisodeIndex)
+	if fromEpisodeIndex == "" {
+		return LoadGeneratedCharacterState(stateDir, novelID)
+	}
+	doc, ok, err := loadCharacterEventsDocument(stateDir, novelID)
+	if err != nil || !ok {
+		if err != nil {
+			return nil, nil, nil, false, err
+		}
+		if doc.ProcessedUpToEpisodeIndex == nil && len(doc.Characters) == 0 {
+			return nil, nil, nil, false, nil
+		}
+	}
+	truncated := truncateCharacterEventRecordsBeforeEpisode(doc.Characters, fromEpisodeIndex)
+	processed := previousProcessedEpisodeIndex(doc.ProcessedUpToEpisodeIndex, fromEpisodeIndex)
+	events := truncateIdentityMergeEventsBeforeEpisode(doc.IdentityMergeEvents, fromEpisodeIndex)
+	return eventRecordsToGeneratedCharacters(truncated), generatedIdentityMergeEvents(events), processed, true, nil
+}
+
+func generatedIdentityMergeEvents(values []identityMergeEvent) []GeneratedIdentityMergeEvent {
+	result := make([]GeneratedIdentityMergeEvent, 0, len(values))
+	for _, value := range normalizeIdentityMergeEvents(values) {
+		result = append(result, GeneratedIdentityMergeEvent{
+			SourceCharacterID:     value.SourceCharacterID,
+			TargetCharacterID:     value.TargetCharacterID,
+			EffectiveEpisodeIndex: value.EffectiveEpisodeIndex,
+		})
+	}
+	return result
 }

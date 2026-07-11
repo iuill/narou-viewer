@@ -765,6 +765,98 @@ func TestSaveGeneratedSummaryMergesRetiredSourceEventHistory(t *testing.T) {
 	}
 }
 
+func TestIdentityMergeEventOnlyAppliesAtEffectiveEpisode(t *testing.T) {
+	stateDir := t.TempDir()
+	novelID := "novel-timed-identity"
+	blackKnight := GeneratedCharacter{
+		CharacterID:                 "char_black_knight",
+		CanonicalName:               "黒騎士",
+		CanonicalEpisodeIndex:       "1",
+		FirstAppearanceEpisodeIndex: "1",
+		NameHistory:                 []GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "1"}},
+		Aliases:                     []GeneratedTextVersion{{Text: "黒騎士", EpisodeIndex: "1"}},
+	}
+	alice := GeneratedCharacter{
+		CharacterID:                 "char_alice",
+		CanonicalName:               "アリス",
+		CanonicalEpisodeIndex:       "2",
+		FirstAppearanceEpisodeIndex: "2",
+		NameHistory:                 []GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "2"}},
+		Aliases:                     []GeneratedTextVersion{{Text: "アリス", EpisodeIndex: "2"}},
+	}
+	if err := SaveGeneratedSummaryWithOptions(stateDir, novelID, "20", []GeneratedCharacter{blackKnight, alice}, nil, SaveGeneratedSummaryOptions{
+		IdentityMergeEvents: []GeneratedIdentityMergeEvent{{
+			SourceCharacterID:     "char_black_knight",
+			TargetCharacterID:     "char_alice",
+			EffectiveEpisodeIndex: "20",
+		}},
+	}); err != nil {
+		t.Fatalf("SaveGeneratedSummaryWithOptions returned error: %v", err)
+	}
+
+	beforeReveal, ok, err := LoadSummary(stateDir, novelID, "2")
+	if err != nil || !ok {
+		t.Fatalf("LoadSummary before reveal failed: ok=%v err=%v", ok, err)
+	}
+	if len(beforeReveal.Characters) != 2 {
+		t.Fatalf("before reveal characters = %+v, want two separate identities", beforeReveal.Characters)
+	}
+	for _, character := range beforeReveal.Characters {
+		if len(character.Aliases) != 1 {
+			t.Fatalf("before reveal aliases leaked identity relation: %+v", beforeReveal.Characters)
+		}
+	}
+
+	afterReveal, ok, err := LoadSummary(stateDir, novelID, "20")
+	if err != nil || !ok {
+		t.Fatalf("LoadSummary after reveal failed: ok=%v err=%v", ok, err)
+	}
+	if len(afterReveal.Characters) != 1 || len(afterReveal.Characters[0].Aliases) != 2 {
+		t.Fatalf("after reveal characters = %+v, want merged identity", afterReveal.Characters)
+	}
+	mergedSeed, _, ok, err := LoadGeneratedCharacters(stateDir, novelID)
+	if err != nil || !ok || len(mergedSeed) != 1 {
+		t.Fatalf("LoadGeneratedCharacters after reveal = %+v ok=%v err=%v", mergedSeed, ok, err)
+	}
+	rawSeed, seedEvents, _, ok, err := LoadGeneratedCharacterState(stateDir, novelID)
+	if err != nil || !ok || len(rawSeed) != 2 || len(seedEvents) != 1 {
+		t.Fatalf("LoadGeneratedCharacterState = raw=%+v events=%+v ok=%v err=%v", rawSeed, seedEvents, ok, err)
+	}
+	if err := SaveGeneratedSummaryWithOptions(stateDir, novelID, "21", rawSeed, nil, SaveGeneratedSummaryOptions{IdentityMergeEvents: seedEvents}); err != nil {
+		t.Fatalf("incremental SaveGeneratedSummaryWithOptions returned error: %v", err)
+	}
+	beforeRevealAgain, ok, err := LoadSummary(stateDir, novelID, "2")
+	if err != nil || !ok || len(beforeRevealAgain.Characters) != 2 {
+		t.Fatalf("incremental save lost pre-reveal identities: characters=%+v ok=%v err=%v", beforeRevealAgain.Characters, ok, err)
+	}
+	aliasesByName := map[string][]string{}
+	for _, character := range beforeRevealAgain.Characters {
+		aliasesByName[character.CanonicalName] = character.Aliases
+	}
+	if len(aliasesByName["黒騎士"]) != 1 || aliasesByName["黒騎士"][0] != "黒騎士" || len(aliasesByName["アリス"]) != 1 || aliasesByName["アリス"][0] != "アリス" {
+		t.Fatalf("incremental save leaked merged aliases before reveal: %+v", beforeRevealAgain.Characters)
+	}
+}
+
+func TestIdentityMergeEventsDropDeterministicCycle(t *testing.T) {
+	stateDir := t.TempDir()
+	generated := []GeneratedCharacter{
+		{CharacterID: "char_a", CanonicalName: "甲", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", NameHistory: []GeneratedTextVersion{{Text: "甲", EpisodeIndex: "1"}}},
+		{CharacterID: "char_b", CanonicalName: "乙", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1", NameHistory: []GeneratedTextVersion{{Text: "乙", EpisodeIndex: "1"}}},
+	}
+	events := []GeneratedIdentityMergeEvent{
+		{SourceCharacterID: "char_a", TargetCharacterID: "char_b", EffectiveEpisodeIndex: "2"},
+		{SourceCharacterID: "char_b", TargetCharacterID: "char_a", EffectiveEpisodeIndex: "2"},
+	}
+	if err := SaveGeneratedSummaryWithOptions(stateDir, "novel-cycle", "2", generated, nil, SaveGeneratedSummaryOptions{IdentityMergeEvents: events}); err != nil {
+		t.Fatalf("save cycle: %v", err)
+	}
+	summary, ok, err := LoadSummary(stateDir, "novel-cycle", "2")
+	if err != nil || !ok || len(summary.Characters) != 1 || summary.Characters[0].CharacterID != "char_b" {
+		t.Fatalf("cycle normalization should keep deterministic A to B event: summary=%+v ok=%v err=%v", summary, ok, err)
+	}
+}
+
 func TestSaveGeneratedSummaryWithOptionsReplacesReprocessedEventRange(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := SaveGeneratedSummaryWithEpisodes(stateDir, "novel-reprocess", "2", []GeneratedCharacter{{

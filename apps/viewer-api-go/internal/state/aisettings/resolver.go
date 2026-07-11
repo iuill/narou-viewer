@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-var ErrAIGenerationProfileNotFound = errors.New("AI generation profile was not found")
+var ErrAIGenerationProfileNotFound = errors.New("AI生成プロファイルが見つかりません")
 
 type ResolvedAIGenerationConfig struct {
 	ProfileID                      string
