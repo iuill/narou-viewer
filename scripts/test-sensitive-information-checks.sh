@@ -40,7 +40,18 @@ if [[ "${1:-}" == "git" ]]; then
   if [[ " $* " == *" --staged "* ]]; then
     content="$(git diff --cached)"
   else
-    content="$(git log --all -p)"
+    log_opts=""
+    for argument in "$@"; do
+      if [[ "$argument" == --log-opts=* ]]; then
+        log_opts="${argument#--log-opts=}"
+      fi
+    done
+    [[ -n "$log_opts" ]] || {
+      echo "non-staged Betterleaks git scans must provide --log-opts" >&2
+      exit 1
+    }
+    read -r -a log_args <<<"$log_opts"
+    content="$(git log "${log_args[@]}" -p)"
   fi
   if grep -q 'SECRET_TEST_TOKEN' <<<"$content"; then
     echo "secret detected (redacted)" >&2
@@ -231,17 +242,45 @@ commit_all "$repo" binary-secret
 local_sha="$(git -C "$repo" rev-parse HEAD)"
 zero_sha="0000000000000000000000000000000000000000"
 scan_fails "$repo" range "$base_sha" HEAD
+scan_fails "$repo" branch
+scan_fails "$repo" branch origin/main
 scan_fails "$repo" history
 if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$base_sha" |
   scan_passes "$repo" pre-push origin; then
   echo "expected existing-branch binary blob scan to fail" >&2
   exit 1
 fi
+
 if printf 'refs/heads/new %s refs/heads/new %s\n' "$local_sha" "$zero_sha" |
   scan_passes "$repo" pre-push origin; then
   echo "expected new-branch binary blob scan to fail" >&2
   exit 1
 fi
+
+# Inferred branch bases fail closed when origin's default branch is the current
+# HEAD, while an explicit upstream base scans only the PR commit range.
+repo="$tmpdir/fork-branch-base"
+remote="$tmpdir/fork-branch-base.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+printf 'SECRET_TEST_TOKEN\n' >"$repo/example.txt"
+commit_all "$repo" branch-secret
+git -C "$repo" update-ref refs/remotes/upstream/main "$base_sha"
+git -C "$repo" push -q origin HEAD:main
+[[ "$(git -C "$repo" rev-parse origin/main)" == "$(git -C "$repo" rev-parse HEAD)" ]]
+branch_error="$tmpdir/fork-branch-base.err"
+if (cd "$repo" && PATH="$fake_bin:$PATH" bash ./scripts/scan-sensitive-changes.sh branch) \
+  >/dev/null 2>"$branch_error"; then
+  echo "expected an inferred empty branch range to fail closed" >&2
+  exit 1
+fi
+grep -q '走査対象commitがありません' "$branch_error"
+scan_fails "$repo" branch upstream/main
 
 repo="$tmpdir/binary-public-ip"
 new_repo "$repo"

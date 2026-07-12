@@ -40,8 +40,8 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: bash ./scripts/scan-sensitive-changes.sh history
 
-  build:
-    name: build (branch push)
+  viewer-web-build:
+    name: viewer-web build (branch push)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -68,8 +68,8 @@ jobs:
           path: apps/viewer-web/dist
           if-no-files-found: error
 
-  quality:
-    name: quality (branch push)
+  repository-quality:
+    name: Repository lint and TypeScript coverage (branch push)
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -92,7 +92,7 @@ jobs:
         run: bun run test:unit:coverage
 
   viewer-api-go:
-    name: viewer-api-go (branch push)
+    name: viewer-api-go verification and build (branch push)
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -141,7 +141,7 @@ jobs:
         run: docker build --file deploy/viewer-api-go/Dockerfile --tag narou-viewer-viewer-api-go:ci .
 
   novel-fetcher:
-    name: novel-fetcher / audit (branch push)
+    name: novel-fetcher verification and build (branch push)
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -173,36 +173,51 @@ jobs:
           path: .tmp/e2e-binaries/novel-fetcher
           if-no-files-found: error
 
+  dependency-audit:
+    name: Dependency and toolchain audit (branch push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
       - name: Setup Bun
-        id: setup_bun_for_audit
-        if: ${{ !cancelled() }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
 
+      - name: Setup Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: |
+            apps/viewer-api-go/go.sum
+            services/novel-fetcher/go.sum
+
       - name: Install dependencies
         id: install_dependencies_for_audit
-        if: ${{ !cancelled() && steps.setup_bun_for_audit.outcome == 'success' }}
         run: bun run install:locked
 
-      - name: Audit high-severity dependencies
+      - name: Audit Bun dependency vulnerabilities
         if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
-        run: bun run audit:dependencies
+        run: bun run audit:bun:vulnerabilities
 
-      - name: Audit Go vulnerabilities
+      - name: Verify Go toolchain consistency
         if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
-        run: bun run audit:go
+        run: bun run audit:go:toolchain
+
+      - name: Audit Go dependency vulnerabilities
+        if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
+        run: bun run audit:go:vulnerabilities
 
       - name: Audit Go module release age
         if: ${{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}
-        env:
-          # Temporary allowlist for security-fix modules; safe to remove after they exceed GO_MINIMUM_RELEASE_AGE_SECONDS.
-          GO_MODULE_AGE_ALLOWLIST: golang.org/x/net@v0.55.0 golang.org/x/sys@v0.45.0 modernc.org/sqlite@v1.52.0
         run: bun run audit:go:module-age
 
   api-contract:
-    name: API contract (branch push)
-    needs: build
+    name: Service API contract (branch push)
+    needs: viewer-web-build
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -268,12 +283,12 @@ jobs:
 
   e2e:
     name: E2E (${{ matrix.job_label }}, branch push)
-    # Intentionally depend only on build so the E2E matrix can overlap Docker,
+    # Intentionally depend only on the viewer-web build so the E2E matrix can overlap Docker,
     # fixture, and artifact setup with E2E binary builds.
     # The binaries are consumed by polling the same-run artifacts just before
     # service startup, which keeps the producer jobs out of the E2E critical
     # path while still failing explicitly if a required binary is not produced.
-    needs: build
+    needs: viewer-web-build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

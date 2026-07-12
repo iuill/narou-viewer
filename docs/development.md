@@ -18,7 +18,7 @@
 bun run dev
 ```
 
-Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
+Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。手動確認では commit 前に `bun run security:scan:staged`、PR / push 前に `bun run security:scan:branch` を使います。fork や通常と異なるbaseへPRを出す場合は `bun run security:scan:branch -- upstream/main` のように実際のbase refを明示してください。baseを省略して走査対象commitが0件になった場合、コマンドは未検査の正常終了を避けるため失敗します。全 commit と過去の binary blob を走査する `bun run security:scan:history` は定期 CI、scanner 変更時、または明示的な全履歴 audit に限定します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
 
 PR の機微情報検査は権限なしの `.github/workflows/sensitive-information-events.yml` で event と PR 番号を受け、`workflow_run` で起動する default branch 版 scanner へ渡します。後段は PR head を checkoutせずcommit objectとして検査します。PR本文・タイトル・通常コメント・review・diff上のreview commentを追加・編集・削除した場合も、同じhead SHAを持つopenなmain向けPRすべてをBetterleaksのGitHub sourceで再検査します。Betterleaksのallow markerと外部validationは有効にしません。
 
@@ -87,6 +87,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - Dev Container では post-create 時に機微情報検査用の Git hooks が自動で有効になります。Dev Container 外では Betterleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行してください。
 - コミットメッセージは日本語で記述してください。
 - Pull Request のタイトルと本文は日本語で記述してください。
+- Pull Request の作成・更新前に [PR template](../.github/pull_request_template.md) を読み、ユーザーへの影響、互換性・移行、検証結果を含む各セクションを維持してください。AI エージェントにも同じ手順を `AGENTS.md` で必須化しています。
 - Pull Request へ追いコミットする場合は、PR 本文の更新要否も確認し、必要であれば更新してください。
 
 ## ランタイムメモ
@@ -110,14 +111,14 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - そのため、日常運用では「Bun を標準導線にする」「Node 依存ツールは Bun から起動する」を両立させます。
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
 - Dev Container は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.25.12 (`GOTOOLCHAIN=local`) を有効化しています。CI も同じ考え方で運用します。
-- CI では `bun run audit:dependencies` で high severity の依存脆弱性も常時監査します。
+- CI では `bun run audit:bun:vulnerabilities` と `bun run audit:go:vulnerabilities` で Bun / Go それぞれの依存脆弱性を常時監査します。Go toolchain の整合性と module の公開後経過日数は、別の `bun run audit:go:toolchain` / `bun run audit:go:module-age` で検査します。
 - 依存差分のレビューは GitHub Actions の `Dependency Review` workflow を使い、`pull_request` のみで実行します。これは push ごとの再検査ではなく、「その PR が新たに持ち込む依存変更」を確認するためです。
 - 既知の悪性版や脆弱性通知は Dependabot alerts と CI の dependency audit で補完します。
 - Dependabot の version updates は、このリポジトリの `minimumReleaseAge` と運用ノイズの兼ね合いを見て、既定では前提にしません。必要になったときだけ個別に導入を検討します。
 
 ## Go ツールチェーン方針
 
-- Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。`bun run audit:go` でも同じ検査を先に実行するため、CI ではズレた時点で audit job が失敗します。
+- Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。CI でも脆弱性検査とは別 step で実行するため、どの方針に違反したかを job 上で区別できます。
 - Go は `services/novel-fetcher` の取得 sidecar 用に使います。Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。

@@ -43,6 +43,7 @@
 - 症状への場当たり対応より、原因に対する修正を優先する。
 - ユーザーへの応答、commit message、PR title / body / comment は、特段の指定がない限り日本語で書く。
 - PR は、特段の理由や明示的な指定がない限り draft ではなく ready for review で起票する。
+- PR を作成・更新する前に `.github/pull_request_template.md` を読み、各セクションを省略せず、該当しない項目にも理由を記載する。追いコミット後は変更内容、ユーザー影響、互換性・移行、検証結果が PR 本文と一致しているか再確認する。
 - 仕様、セットアップ、データ契約に影響する変更をした場合は、関連ドキュメントも更新する。
 - 破壊的な git 操作は避ける。
 - 依頼範囲外のユーザー変更を上書きしない。
@@ -103,7 +104,7 @@
 
 ## 検証
 
-- 機微情報検査の CI 相当確認には `bun run security:scan:history` を使う。出力時は Betterleaks の redaction を維持し、検出値をログや報告へ貼らない。外部 validation は有効にしない。
+- 通常の commit 前は hook と `bun run security:scan:staged`、PR / push 前は `bun run security:scan:branch` または pre-push hook で現在ブランチの merge-base 以降だけを検査する。fork や通常と異なるbaseへPRを出す場合は `bun run security:scan:branch -- upstream/main` のように実際のbase refを明示する。base省略時に走査対象commitが0件なら安全のため失敗する。`bun run security:scan:history` は定期 CI、scanner 自体の変更、または明示的な repository 全履歴 audit に限定し、通常の commit / PR ごとには実行しない。出力時は Betterleaks の redaction を維持し、検出値をログや報告へ貼らない。外部 validation は有効にしない。
 - Git hook、Betterleaks range、禁止 path、公開 IPv4 検査を変更した場合は `bun run test:security` で一時 Git repository を使う回帰テストも実行する。
 - コードを変更した場合は、`bun run lint` の実行を必須とする。
 - コードを変更した場合は、まず `bun run lint` を実行し、その後に変更箇所に応じた高速コードレベルテストを実行し、最後に build、原則として E2E テストを実施する。

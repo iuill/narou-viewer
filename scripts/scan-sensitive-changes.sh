@@ -131,6 +131,34 @@ scan_range() {
   run_betterleaks git --git-workers=1 --redact=100 --no-banner --log-opts="$log_opts" .
 }
 
+resolve_branch_base() {
+  local requested_base="${1:-}"
+  local remote_name="${SECURITY_SCAN_REMOTE:-origin}"
+  local remote_default=""
+  local candidate
+
+  if [[ -n "$requested_base" ]]; then
+    git rev-parse --verify --quiet "${requested_base}^{commit}" >/dev/null || {
+      echo "branch scan の base ref が見つかりません: $requested_base" >&2
+      return 1
+    }
+    printf '%s\n' "$requested_base"
+    return
+  fi
+
+  remote_default="$(git symbolic-ref --quiet --short "refs/remotes/${remote_name}/HEAD" 2>/dev/null || true)"
+  for candidate in "$remote_default" "${remote_name}/main" "${remote_name}/master"; do
+    [[ -n "$candidate" ]] || continue
+    if git rev-parse --verify --quiet "${candidate}^{commit}" >/dev/null; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  echo "branch scan の base ref を解決できません。base ref を明示してください。" >&2
+  return 1
+}
+
 case "$mode" in
   staged)
     git diff --cached --no-renames --name-only --diff-filter=ACMR -z |
@@ -148,6 +176,20 @@ case "$mode" in
   range)
     [[ $# -eq 3 ]] || { echo "usage: $0 range <base> <head>" >&2; exit 2; }
     scan_range "$2..$3"
+    ;;
+  branch)
+    [[ $# -le 2 ]] || { echo "usage: $0 branch [base-ref]" >&2; exit 2; }
+    inferred_base=1
+    [[ -n "${2:-}" ]] && inferred_base=0
+    base_ref="$(resolve_branch_base "${2:-}")"
+    merge_base="$(git merge-base "$base_ref" HEAD)"
+    commit_count="$(git rev-list --count "$merge_base..HEAD")"
+    printf 'branch scan: base=%s merge-base=%s commits=%s\n' "$base_ref" "$merge_base" "$commit_count" >&2
+    if [[ "$inferred_base" == "1" && "$commit_count" == "0" ]]; then
+      echo "推測したbaseでは走査対象commitがありません。PRのbaseを明示してください: bun run security:scan:branch -- <base-ref>" >&2
+      exit 1
+    fi
+    scan_range "$merge_base..HEAD"
     ;;
   pre-push)
     remote_name="${2:-origin}"
@@ -185,7 +227,7 @@ case "$mode" in
       --log-opts="--diff-merges=remerge --all" .
     ;;
   *)
-    echo "usage: $0 {staged|message <message-file>|pre-push <remote>|range <base> <head>|history}" >&2
+    echo "usage: $0 {staged|message <message-file>|branch [base-ref]|pre-push <remote>|range <base> <head>|history}" >&2
     exit 2
     ;;
 esac
