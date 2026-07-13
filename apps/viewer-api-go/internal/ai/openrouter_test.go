@@ -48,7 +48,7 @@ func TestGenerateOpenRouterChatUsesOpenAICompatibleEndpoint(t *testing.T) {
 			t.Fatalf("unexpected provider options: %+v", provider)
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": " テスト応答 "}}],
+			"choices": [{"message": {"content": " テスト応答 ", "reasoning": null, "reasoning_details": null}}],
 			"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
 		}`))
 	}))
@@ -69,6 +69,9 @@ func TestGenerateOpenRouterChatUsesOpenAICompatibleEndpoint(t *testing.T) {
 	}
 	if result.Answer != "テスト応答" || result.InputTokens != 3 || result.OutputTokens != 4 || result.TotalTokens != 7 {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+	if result.Reasoning != nil || result.ReasoningDetails != nil {
+		t.Fatalf("explicit null reasoning fields should be normalized away: %+v", result)
 	}
 }
 
@@ -130,6 +133,18 @@ func TestApplyOpenRouterReasoningUsesEnvironmentFallback(t *testing.T) {
 	}
 	if _, err := applyOpenRouterReasoning(map[string]any{}, OpenRouterConfig{ReasoningEffort: "extreme"}); err == nil {
 		t.Fatal("invalid reasoning effort should be rejected")
+	}
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "extreme")
+	if _, err := ResolveOpenRouterReasoningRequest(OpenRouterConfig{}); err == nil {
+		t.Fatal("invalid environment reasoning effort should be rejected during startup validation")
+	}
+}
+
+func TestNormalizeOpenRouterReasoningEffortAcceptsGatewayValues(t *testing.T) {
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+		if normalized, ok := NormalizeOpenRouterReasoningEffort(effort); !ok || normalized != effort {
+			t.Fatalf("gateway effort %q should be accepted, got %q ok=%v", effort, normalized, ok)
+		}
 	}
 }
 

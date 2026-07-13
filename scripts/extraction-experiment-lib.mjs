@@ -355,12 +355,15 @@ function joinNonEmpty(values, separator = ", ") {
 
 export function renderExtractionMarkdown(execution) {
   const result = execution.result;
+  const reasoningRequestedEffort = execution.reasoning
+    ? (execution.reasoning.requestedEffort ?? "provider-default")
+    : "unknown";
   const lines = [
     `# ${execution.profileLabel ?? execution.profileId}`,
     "",
     `- modelId: ${execution.modelId ?? "unknown"}`,
     `- profileId: ${execution.profileId}`,
-    `- reasoningRequestedEffort: ${execution.reasoning?.requestedEffort ?? "provider-default"}`,
+    `- reasoningRequestedEffort: ${reasoningRequestedEffort}`,
     `- reasoningSource: ${execution.reasoning?.source ?? "unknown"}`,
     `- reasoningRequireParameters: ${execution.reasoning?.requireParameters ?? "unknown"}`,
     `- processedUpToEpisodeIndex: ${result.processedUpToEpisodeIndex}`,

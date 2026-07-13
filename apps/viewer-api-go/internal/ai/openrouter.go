@@ -226,6 +226,7 @@ func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, me
 
 func NormalizeOpenRouterReasoningEffort(value string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
+	// OpenRouter gateway values: https://openrouter.ai/docs/api/reference/parameters#reasoning-effort
 	switch normalized {
 	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max":
 		return normalized, true
@@ -333,12 +334,19 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	result.Answer = strings.TrimSpace(decoded.Choices[0].Message.Content)
 	result.FinishReason = finishReason
 	result.ToolCalls = decoded.Choices[0].Message.ToolCalls
-	result.Reasoning = decoded.Choices[0].Message.Reasoning
-	result.ReasoningDetails = decoded.Choices[0].Message.ReasoningDetails
+	result.Reasoning = normalizeOptionalOpenRouterJSON(decoded.Choices[0].Message.Reasoning)
+	result.ReasoningDetails = normalizeOptionalOpenRouterJSON(decoded.Choices[0].Message.ReasoningDetails)
 	if isTruncatedOpenRouterFinishReason(finishReason) {
 		return result, false, fmt.Errorf("%w: finish_reason=%s", ErrOpenRouterTruncatedResponse, finishReason)
 	}
 	return result, false, nil
+}
+
+func normalizeOptionalOpenRouterJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	return raw
 }
 
 func readLimitedOpenRouterResponseBody(response *http.Response) ([]byte, error) {

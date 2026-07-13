@@ -352,13 +352,9 @@ async function run() {
     ...new Set(requestedModels.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
   const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
-  const reasoningEffort = rawReasoningEffort === null ? null : rawReasoningEffort.trim().toLowerCase();
-  if (
-    reasoningEffort !== null &&
-    !new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).has(reasoningEffort)
-  ) {
-    throw new Error("--reasoning-effort には none / minimal / low / medium / high / xhigh / max を指定してください。");
-  }
+  const normalizedReasoningEffort = rawReasoningEffort === null ? "" : rawReasoningEffort.trim().toLowerCase();
+  // 有効値の正本はviewer-api側とし、不正値はAPIの400レスポンスで明示的に失敗させる。
+  const reasoningEffort = normalizedReasoningEffort === "" ? null : normalizedReasoningEffort;
   const explicitRequireParameters =
     values["require-parameters"] === undefined ? undefined : getBooleanOption(values, "require-parameters", true);
   const requireParametersOverride = resolveExperimentRequireParameters({

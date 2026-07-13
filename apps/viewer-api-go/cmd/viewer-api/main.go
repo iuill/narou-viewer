@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/config"
 	"narou-viewer/apps/viewer-api-go/internal/runtime"
 )
@@ -18,6 +19,9 @@ func main() {
 	defer stop()
 
 	cfg := config.Load()
+	if _, err := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{}); err != nil {
+		log.Fatalf("validate OPENROUTER_REASONING_EFFORT: %v", err)
+	}
 	handlerResult := runtime.NewHandler(cfg.DataDir)
 	if handlerResult.InitErr != nil {
 		log.Fatalf("initialize viewer-api-go state: %v", handlerResult.InitErr)
