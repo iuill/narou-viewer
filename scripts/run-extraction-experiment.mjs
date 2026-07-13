@@ -38,6 +38,7 @@ function printHelp() {
     [--provider <name> ...] \\
     [--allow-fallbacks true|false] \\
     [--require-parameters true|false] \\
+    [--reasoning-effort none|minimal|low|medium|high|xhigh|max] \\
     [--system-prompt <text>] \\
     [--system-prompt-file <path>] \\
     [--all-profiles] \\
@@ -238,6 +239,7 @@ function createInitialManifest({
   upToEpisodeIndex,
   concurrency,
   systemPromptOverride,
+  reasoningEffort,
   profiles,
   models,
   baseProfileId,
@@ -256,6 +258,7 @@ function createInitialManifest({
     tocUrl,
     upToEpisodeIndex,
     concurrency,
+    reasoningEffort,
     systemPromptOverrideHash: systemPromptOverride ? sha256Hex(systemPromptOverride.text) : null,
     systemPromptOverrideSource: systemPromptOverride?.source ?? null,
     systemPromptOverrideFile:
@@ -273,10 +276,12 @@ function createInitialManifest({
       providerOrder: Array.isArray(profile.providerOrder) ? profile.providerOrder : [],
       allowFallbacks: Boolean(profile.allowFallbacks),
       requireParameters: profile.requireParameters !== false,
+      reasoningEffort,
     })),
     modelOverrides: models.map((modelId) => ({
       modelId,
       baseProfileId,
+      reasoningEffort,
     })),
     executions: [],
   };
@@ -359,6 +364,14 @@ async function run() {
   ];
   const baseProfileToken = getStringOption(values, "base-profile", null);
   const systemPromptOverride = await loadSystemPromptOverride(values);
+  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
+  const reasoningEffort = rawReasoningEffort === null ? null : rawReasoningEffort.trim().toLowerCase();
+  if (
+    reasoningEffort !== null &&
+    !new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).has(reasoningEffort)
+  ) {
+    throw new Error("--reasoning-effort には none / minimal / low / medium / high / xhigh / max を指定してください。");
+  }
 
   const settings = await fetchJson(`${apiBaseUrl}/api/ai-generation/settings`);
   const systemStatus = normalizedRequestedModels.length > 0 ? await fetchJson(`${apiBaseUrl}/api/system/status`) : null;
@@ -423,6 +436,7 @@ async function run() {
     upToEpisodeIndex,
     concurrency,
     systemPromptOverride,
+    reasoningEffort,
     profiles,
     models: normalizedRequestedModels,
     baseProfileId: baseProfile?.id ?? null,
@@ -433,6 +447,7 @@ async function run() {
       type: "profile",
       profile,
       baseName: buildExecutionBaseName(0, profile),
+      reasoningEffort,
       displayLabel: `${profile.label} (${profile.modelId ?? profile.id})`,
     })),
     ...normalizedRequestedModels.map((modelId) => ({
@@ -442,6 +457,7 @@ async function run() {
       providerOrderOverride,
       allowFallbacksOverride,
       requireParametersOverride,
+      reasoningEffort,
       baseName: "",
       displayLabel: modelId,
     })),
@@ -469,6 +485,7 @@ async function run() {
       profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
       requestedModelId: target.type === "model" ? target.modelId : null,
       modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
+      reasoningEffort: target.reasoningEffort,
       status: "pending",
       startedAt: null,
       finishedAt: null,
@@ -521,11 +538,13 @@ async function run() {
           ...(target.type === "profile"
             ? {
                 profileId: target.profile.id,
+                ...(target.reasoningEffort ? { reasoningEffort: target.reasoningEffort } : {}),
                 ...(systemPromptOverride ? { systemPromptOverride: systemPromptOverride.text } : {}),
               }
             : {
                 profileId: target.baseProfile?.id ?? null,
                 modelId: target.modelId,
+                ...(target.reasoningEffort ? { reasoningEffort: target.reasoningEffort } : {}),
                 ...(target.providerOrderOverride.length > 0 ? { providerOrder: target.providerOrderOverride } : {}),
                 ...(target.allowFallbacksOverride !== undefined
                   ? { allowFallbacks: target.allowFallbacksOverride }
@@ -616,6 +635,7 @@ async function run() {
         profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
         requestedModelId: target.type === "model" ? target.modelId : null,
         modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
+        reasoningEffort: target.reasoningEffort,
         providerOrder: target.type === "profile" ? target.profile.providerOrder : target.providerOrderOverride,
         allowFallbacks:
           target.type === "profile" ? target.profile.allowFallbacks : (target.allowFallbacksOverride ?? null),

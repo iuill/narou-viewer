@@ -103,6 +103,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 		"providerOrder":        []any{"ProviderA", " ProviderB "},
 		"allowFallbacks":       false,
 		"requireParameters":    true,
+		"reasoningEffort":      " xHIGH ",
 		"systemPromptOverride": nil,
 	})
 	if message != "" || !options.ProfileResolution || options.Transient == nil || options.ProfileID != nil {
@@ -114,7 +115,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	if strategyOptions, message := (&Server{}).parseExtractionRequestOptions(map[string]any{"generationStrategy": "discovery_parallel_correction"}); message != "" || strategyOptions.GenerationStrategy != "discovery_parallel_correction" {
 		t.Fatalf("discovery generation strategy should be accepted: options=%+v message=%q", strategyOptions, message)
 	}
-	if options.Transient.ModelID != nil || len(options.Transient.ProviderOrder) != 2 || options.Transient.AllowFallbacks == nil || *options.Transient.AllowFallbacks || options.Transient.RequireParameters == nil || !*options.Transient.RequireParameters {
+	if options.Transient.ModelID != nil || len(options.Transient.ProviderOrder) != 2 || options.Transient.AllowFallbacks == nil || *options.Transient.AllowFallbacks || options.Transient.RequireParameters == nil || !*options.Transient.RequireParameters || options.Transient.ReasoningEffort == nil || *options.Transient.ReasoningEffort != "xhigh" {
 		t.Fatalf("transient overrides should be normalized: %+v", options.Transient)
 	}
 	if message, status := (&Server{}).resolveExtractionRequestOptions(&extractionRequestOptions{ProfileResolution: true}); message != "AI生成プロファイルが見つかりません。" || status != http.StatusBadRequest {
@@ -126,6 +127,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"modelId": 10},
 		{"systemPromptOverride": 10},
+		{"reasoningEffort": "extreme"},
 		{"generationStrategy": "unknown"},
 	} {
 		if _, message := (&Server{}).parseExtractionRequestOptions(body); message == "" {
@@ -3337,6 +3339,10 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 		if _, ok := body["response_format"].(map[string]any); !ok {
 			t.Fatalf("character summary should request json_schema response: %+v", body)
 		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "xhigh" {
+			t.Fatalf("transient reasoning effort should be forwarded: %+v", body)
+		}
 		providerOptions := body["provider"].(map[string]any)
 		order := providerOptions["order"].([]any)
 		if len(order) != 2 || order[0] != "ProviderA" || order[1] != "ProviderB" || providerOptions["allow_fallbacks"] != true || providerOptions["require_parameters"] != false {
@@ -3391,6 +3397,7 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 		"providerOrder":        "ProviderA, ProviderB",
 		"allowFallbacks":       true,
 		"requireParameters":    false,
+		"reasoningEffort":      "xhigh",
 		"systemPromptOverride": "一時システムプロンプト",
 	}, http.StatusOK)
 	if response["generationMode"] != "openrouter" || response["modelId"] != "openrouter/transient" {
@@ -3500,6 +3507,8 @@ func TestPlaygroundExtractionRejectsInvalidTransientOverrides(t *testing.T) {
 		{"novelId": novelID, "upToEpisodeIndex": "1", "providerOrder": 10},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "allowFallbacks": "true"},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "requireParameters": "false"},
+		{"novelId": novelID, "upToEpisodeIndex": "1", "reasoningEffort": "extreme"},
+		{"novelId": novelID, "upToEpisodeIndex": "1", "reasoningEffort": "  "},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "systemPromptOverride": "  "},
 	} {
 		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", body, http.StatusBadRequest)

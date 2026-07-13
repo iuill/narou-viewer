@@ -38,14 +38,19 @@ bun run experiment:extraction:run -- \
 - `--profiles-file`: profile 定義をファイルから読む
 - `--model`: 比較対象モデル。複数指定できる
 - `--system-prompt-file`: system prompt を一時差し替えする
+- `--reasoning-effort`: OpenRouter の `reasoning.effort` を実験中だけ指定する。`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を受け付け、未指定時は provider の既定値を使う
 - `--concurrency`: 同時実行数
 - `--output-dir`: 保存先。既定は `data/ai-experiments/runs`
 
 モデル直接指定には利用可能な OpenRouter API key が必要。通常は AI 生成設定の共有 OpenRouter key か、key を持つ base profile を使う。
 
+読書AIを含む隔離した `viewer-api` プロセス全体で reasoning effort を比較するときは、`OPENROUTER_REASONING_EFFORT=xhigh` のように環境変数を指定できる。実験 runner の `--reasoning-effort` が指定されている抽出リクエストでは、リクエスト側の値を優先する。未指定時の通常動作は provider の既定値のままであり、この環境変数は本番の既定設定を変更せずに行う一時的な比較用途に限定する。
+
 ## 保存先
 
 run は `data/ai-experiments/runs/<runId>/` に保存する。`data/` 配下なので、通常は Git 管理しない runtime / analysis data として扱う。実作品由来の比較メモや出力レビューは repository に置かず、必要な場合は synthetic fixture を使った benchmark メモへ置き換える。
+
+複数 run を比較するときは、同じ入力・話数範囲・prompt 条件で原則3回以上実行し、人物の完全一致、用語の recall / precision、処理時間、入出力 token、概算費用を集計する。読書AIも比較する場合は、根拠と推測の分離に加えて、現在話より後の情報を漏らさないことを確認する。横断的な評価レポートをローカルへ残す場合は `data/ai-experiments/reports/` に保存し、run と同様に Git 管理しない。
 
 保存物の考え方:
 

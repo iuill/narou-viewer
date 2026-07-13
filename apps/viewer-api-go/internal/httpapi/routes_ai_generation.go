@@ -749,6 +749,18 @@ func (s *Server) parseExtractionRequestOptions(body map[string]any) (extractionR
 		transient.RequireParameters = &value
 		hasTransient = true
 	}
+	if raw, exists := body["reasoningEffort"]; exists {
+		value, ok := raw.(string)
+		if !ok {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		normalized, ok := ai.NormalizeOpenRouterReasoningEffort(value)
+		if !ok || normalized == "" {
+			return options, "一時 AI 生成設定が不正です。"
+		}
+		transient.ReasoningEffort = &normalized
+		hasTransient = true
+	}
 	if raw, exists := body["systemPromptOverride"]; exists {
 		if raw == nil {
 			hasTransient = true

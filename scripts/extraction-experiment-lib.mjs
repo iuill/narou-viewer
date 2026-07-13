@@ -321,6 +321,7 @@ export function renderExtractionMarkdown(execution) {
     "",
     `- modelId: ${execution.modelId ?? "unknown"}`,
     `- profileId: ${execution.profileId}`,
+    `- reasoningEffort: ${execution.reasoningEffort ?? "default"}`,
     `- processedUpToEpisodeIndex: ${result.processedUpToEpisodeIndex}`,
     `- characterCount: ${Array.isArray(result.characters) ? result.characters.length : 0}`,
     `- termCount: ${Array.isArray(result.terms) ? result.terms.length : 0}`,

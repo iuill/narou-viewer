@@ -16,6 +16,7 @@ type ResolvedAIGenerationConfig struct {
 	ProviderOrder                  []string
 	AllowFallbacks                 bool
 	RequireParameters              bool
+	ReasoningEffort                string
 	SystemPrompt                   *string
 	ExtractionNameDiscoveryModelID string
 	ExtractionParallelConcurrency  int
@@ -27,6 +28,7 @@ type AIGenerationTransientConfig struct {
 	ProviderOrderSet     bool
 	AllowFallbacks       *bool
 	RequireParameters    *bool
+	ReasoningEffort      *string
 	SystemPromptOverride *string
 }
 
@@ -114,6 +116,7 @@ func resolveAIGenerationConfigFromDocument(doc aiGenerationSettingsDocument, pro
 	providerOrder := normalizeStringList(profile.ProviderOrder)
 	allowFallbacks := profile.AllowFallbacks
 	requireParameters := profile.RequireParameters
+	reasoningEffort := ""
 	var systemPrompt *string
 	if transient != nil {
 		if transient.ModelID != nil {
@@ -128,6 +131,9 @@ func resolveAIGenerationConfigFromDocument(doc aiGenerationSettingsDocument, pro
 		if transient.RequireParameters != nil {
 			requireParameters = *transient.RequireParameters
 		}
+		if transient.ReasoningEffort != nil {
+			reasoningEffort = strings.ToLower(strings.TrimSpace(*transient.ReasoningEffort))
+		}
 		systemPrompt = normalizeStringPtr(transient.SystemPromptOverride)
 	}
 	if strings.TrimSpace(apiKey) == "" || modelID == nil || strings.TrimSpace(*modelID) == "" {
@@ -141,6 +147,7 @@ func resolveAIGenerationConfigFromDocument(doc aiGenerationSettingsDocument, pro
 		ProviderOrder:                  providerOrder,
 		AllowFallbacks:                 allowFallbacks,
 		RequireParameters:              requireParameters,
+		ReasoningEffort:                reasoningEffort,
 		SystemPrompt:                   systemPrompt,
 		ExtractionNameDiscoveryModelID: stringValue(doc.ExtractionStrategyModels.NameDiscoveryModelID),
 		ExtractionParallelConcurrency:  normalizeParallelRequestConcurrency(doc.ExtractionRuntime.ParallelRequestConcurrency),

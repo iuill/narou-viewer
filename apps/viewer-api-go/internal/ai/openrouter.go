@@ -29,6 +29,7 @@ type OpenRouterConfig struct {
 	ProviderOrder     []string
 	AllowFallbacks    bool
 	RequireParameters bool
+	ReasoningEffort   string
 	Temperature       *float64
 	MaxTokens         int
 	ResponseFormat    any
@@ -121,6 +122,9 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 	if config.ResponseFormat != nil {
 		body["response_format"] = config.ResponseFormat
 	}
+	if err := applyOpenRouterReasoning(body, config.ReasoningEffort); err != nil {
+		return ChatResult{}, err
+	}
 	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || config.RequireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
@@ -174,6 +178,9 @@ func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, me
 	if config.MaxTokens > 0 {
 		body["max_tokens"] = config.MaxTokens
 	}
+	if err := applyOpenRouterReasoning(body, config.ReasoningEffort); err != nil {
+		return ChatResult{}, err
+	}
 	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || config.RequireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
@@ -203,6 +210,31 @@ func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, me
 		}
 	}
 	return ChatResult{}, lastErr
+}
+
+func NormalizeOpenRouterReasoningEffort(value string) (string, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+func applyOpenRouterReasoning(body map[string]any, configured string) error {
+	value := strings.TrimSpace(configured)
+	if value == "" {
+		value = strings.TrimSpace(os.Getenv("OPENROUTER_REASONING_EFFORT"))
+	}
+	effort, ok := NormalizeOpenRouterReasoningEffort(value)
+	if !ok {
+		return fmt.Errorf("OpenRouter reasoning effort %q is invalid", value)
+	}
+	if effort != "" {
+		body["reasoning"] = map[string]any{"effort": effort}
+	}
+	return nil
 }
 
 func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config OpenRouterConfig, raw []byte) (ChatResult, bool, error) {

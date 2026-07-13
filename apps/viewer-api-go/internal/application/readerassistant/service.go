@@ -241,6 +241,7 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		ProviderOrder:     config.ProviderOrder,
 		AllowFallbacks:    config.AllowFallbacks,
 		RequireParameters: config.RequireParameters,
+		ReasoningEffort:   config.ReasoningEffort,
 	}, streamSink)
 	if err != nil {
 		_ = s.recordReaderAssistantUsage(readerAssistantUsageInput{

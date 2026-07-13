@@ -46,10 +46,13 @@ description: Use when reviewing saved extraction experiment runs that are synthe
 - 情報量が多すぎないか
 - 読みやすく端的か
 - batch timing から見て実験用途として重すぎないか
+- 複数回実行した run では、人物の完全一致、用語の recall / precision、処理時間、入出力 token、概算費用が安定しているか
 
 ## 既定の出力
 
 ユーザーが保存を望む場合は、既定で `evaluations/agent-run-review.md` を書く。
+
+複数 run を横断するモデル比較を保存する場合は `data/ai-experiments/reports/<report-name>.md` にまとめる。このディレクトリも runtime / private analysis data として Git 管理しない。
 
 推奨構成:
 
@@ -65,6 +68,7 @@ description: Use when reviewing saved extraction experiment runs that are synthe
 
 - 複数モデルで同じ欠点が再現していれば、まず prompt 起因を疑う
 - 単一モデルだけなら、モデル固有の癖や性能差として扱う
+- モデル比較は同じ入力・話数範囲・prompt 条件を使い、可能なら各条件を3回以上実行して単発の揺れと区別する
 - 根拠が弱い場合は断定せず、仮説として書く
 - 改善案は抽象論より、次 run で差し替えられる prompt 指示として書く
 - repository に保存する出力は、本文引用ではなく問題の種類と改善方針を中心に書く

@@ -659,6 +659,7 @@ func TestResolveAIGenerationConfigOverrideBranches(t *testing.T) {
 	transientModel := "openrouter/transient"
 	allowFallbacks := true
 	requireParameters := false
+	reasoningEffort := " xHIGH "
 	systemPrompt := "override prompt"
 	config, err := stateStore.ResolveAIGenerationConfigOverride(&profileID, &AIGenerationTransientConfig{
 		ModelID:              &transientModel,
@@ -666,6 +667,7 @@ func TestResolveAIGenerationConfigOverrideBranches(t *testing.T) {
 		ProviderOrderSet:     true,
 		AllowFallbacks:       &allowFallbacks,
 		RequireParameters:    &requireParameters,
+		ReasoningEffort:      &reasoningEffort,
 		SystemPromptOverride: &systemPrompt,
 	})
 	if err != nil {
@@ -678,6 +680,7 @@ func TestResolveAIGenerationConfigOverrideBranches(t *testing.T) {
 		len(config.ProviderOrder) != 2 ||
 		!config.AllowFallbacks ||
 		config.RequireParameters ||
+		config.ReasoningEffort != "xhigh" ||
 		config.SystemPrompt == nil ||
 		*config.SystemPrompt != systemPrompt ||
 		config.ExtractionNameDiscoveryModelID != nameDiscoveryModelID {
