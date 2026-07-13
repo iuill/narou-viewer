@@ -90,7 +90,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - Pull Request の作成・更新前に [PR template](../.github/pull_request_template.md) を読み、ユーザーへの影響、互換性・移行、検証結果を含む各セクションを維持してください。AI エージェントにも同じ手順を `AGENTS.md` で必須化しています。
 - Pull Request へ追いコミットする場合は、PR 本文の更新要否も確認し、必要であれば更新してください。
 - Pull Request の merge には merge commit を使い、squash merge / rebase merge は使いません。エージェントはユーザーから明示的に依頼された場合だけ merge を実行します。
-- merge 後は `git fetch --prune origin`、base branch への切り替え、`git pull --ff-only origin <base-branch>`、不要になった remote / local branch の削除確認までを一続きの作業として扱います。dirty worktree や別 worktree で使用中の branch は勝手に変更・削除しません。
+- merge 後は PR の base repository に対応する Git remote で `git fetch --prune`、base branch への切り替え、`git pull --ff-only`、不要になった remote / local branch の削除確認までを一続きの作業として扱います。dirty worktree や別 worktree で使用中の branch は勝手に変更・削除しません。
 
 ## ランタイムメモ
 
