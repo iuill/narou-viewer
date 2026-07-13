@@ -83,6 +83,17 @@ export function getStringOption(values, key, fallback = null) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+export function resolveReasoningEffortOption(values) {
+  const hasReasoningEffortOption = Object.hasOwn(values, "reasoning-effort");
+  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
+  if (hasReasoningEffortOption && rawReasoningEffort === null) {
+    throw new Error(
+      "--reasoning-effort には none / minimal / low / medium / high / xhigh / max のいずれかを指定してください。",
+    );
+  }
+  return rawReasoningEffort === null ? null : rawReasoningEffort.toLowerCase();
+}
+
 export function getBooleanOption(values, key, fallback = false) {
   const value = values[key];
   if (value === undefined) {

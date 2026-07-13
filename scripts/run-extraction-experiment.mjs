@@ -18,6 +18,7 @@ import {
   renderExtractionMarkdown,
   requireOption,
   resolveExperimentRequireParameters,
+  resolveReasoningEffortOption,
   resolveReportedReasoning,
   sanitizeFileName,
   sha256Hex,
@@ -351,10 +352,8 @@ async function run() {
   const normalizedRequestedModels = [
     ...new Set(requestedModels.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
-  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
-  const normalizedReasoningEffort = rawReasoningEffort === null ? "" : rawReasoningEffort.trim().toLowerCase();
   // 有効値の正本はviewer-api側とし、不正値はAPIの400レスポンスで明示的に失敗させる。
-  const reasoningEffort = normalizedReasoningEffort === "" ? null : normalizedReasoningEffort;
+  const reasoningEffort = resolveReasoningEffortOption(values);
   const explicitRequireParameters =
     values["require-parameters"] === undefined ? undefined : getBooleanOption(values, "require-parameters", true);
   const requireParametersOverride = resolveExperimentRequireParameters({

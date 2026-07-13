@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseArgs,
   renderExtractionMarkdown,
   resolveExperimentRequireParameters,
+  resolveReasoningEffortOption,
   resolveReportedReasoning,
 } from "../../scripts/extraction-experiment-lib.mjs";
 
 describe("extraction experiment reasoning metadata", () => {
+  it.each([["--reasoning-effort"], ["--reasoning-effort="]])(
+    "rejects an explicitly empty reasoning effort: %s",
+    (...argv) => {
+      const { values } = parseArgs(argv);
+      expect(() => resolveReasoningEffortOption(values)).toThrow(
+        "--reasoning-effort には none / minimal / low / medium / high / xhigh / max",
+      );
+    },
+  );
+
+  it("distinguishes an omitted reasoning effort from a normalized value", () => {
+    expect(resolveReasoningEffortOption(parseArgs([]).values)).toBeNull();
+    expect(resolveReasoningEffortOption(parseArgs(["--reasoning-effort", " XHIGH "]).values)).toBe("xhigh");
+  });
+
   it("requires provider parameter support when reasoning effort is requested", () => {
     expect(
       resolveExperimentRequireParameters({
