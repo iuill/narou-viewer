@@ -215,7 +215,15 @@ jobs:
           SCAN_RESULT: ${{ needs.scan.result }}
           STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set +e
           bash ./scripts/assert-latest-sensitive-status.sh "$CURRENT_HEAD_SHA" "$STATUS_TARGET_URL"
+          freshness_status=$?
+          set -e
+          if [[ "$freshness_status" -eq 3 ]]; then
+            exit 0
+          elif [[ "$freshness_status" -ne 0 ]]; then
+            exit "$freshness_status"
+          fi
           if [[ "$SCAN_RESULT" == "success" && "$CURRENT_HEAD_SHA" == "$SCANNED_HEAD_SHA" && "$COMMITS_OUTCOME" == "success" ]]; then
             bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" success "commitに機微情報は検出されませんでした" "$STATUS_TARGET_URL"
           else
@@ -235,7 +243,15 @@ jobs:
           SCAN_RESULT: ${{ needs.scan.result }}
           STATUS_TARGET_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set +e
           bash ./scripts/assert-latest-sensitive-status.sh "$CURRENT_HEAD_SHA" "$STATUS_TARGET_URL"
+          freshness_status=$?
+          set -e
+          if [[ "$freshness_status" -eq 3 ]]; then
+            exit 0
+          elif [[ "$freshness_status" -ne 0 ]]; then
+            exit "$freshness_status"
+          fi
           if [[ "$SCAN_RESULT" == "success" && "$CURRENT_HEAD_SHA" == "$SCANNED_HEAD_SHA" && "$CURRENT_PR_SET" == "$SCANNED_PR_SET" && "$METADATA_OUTCOME" == "success" ]]; then
             bash ./scripts/update-sensitive-status.sh "$CURRENT_HEAD_SHA" success "機微情報は検出されませんでした（advisory）" "$STATUS_TARGET_URL"
           else
