@@ -48,7 +48,7 @@ func TestGenerateOpenRouterChatUsesOpenAICompatibleEndpoint(t *testing.T) {
 			t.Fatalf("unexpected provider options: %+v", provider)
 		}
 		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": " テスト応答 "}}],
+			"choices": [{"message": {"content": " テスト応答 ", "reasoning": null, "reasoning_details": null}}],
 			"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
 		}`))
 	}))
@@ -70,6 +70,9 @@ func TestGenerateOpenRouterChatUsesOpenAICompatibleEndpoint(t *testing.T) {
 	if result.Answer != "テスト応答" || result.InputTokens != 3 || result.OutputTokens != 4 || result.TotalTokens != 7 {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	if result.Reasoning != nil || result.ReasoningDetails != nil {
+		t.Fatalf("explicit null reasoning fields should be normalized away: %+v", result)
+	}
 }
 
 func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T) {
@@ -81,12 +84,17 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 		if body["temperature"] != float64(0.2) || body["max_tokens"] != float64(4096) {
 			t.Fatalf("optional generation parameters should be forwarded: %+v", body)
 		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "xhigh" {
+			t.Fatalf("reasoning effort should be forwarded: %+v", body)
+		}
 		responseFormat := body["response_format"].(map[string]any)
 		if responseFormat["type"] != "json_schema" {
 			t.Fatalf("response_format should be forwarded: %+v", body)
 		}
-		if _, exists := body["provider"]; exists {
-			t.Fatalf("provider options should be omitted when no provider constraint is needed: %+v", body)
+		provider := body["provider"].(map[string]any)
+		if provider["require_parameters"] != true {
+			t.Fatalf("reasoning requests should require provider parameter support: %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	}))
@@ -99,6 +107,7 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 		ModelID:           "openrouter/auto",
 		AllowFallbacks:    true,
 		RequireParameters: false,
+		ReasoningEffort:   " xHIGH ",
 		Temperature:       &temperature,
 		MaxTokens:         4096,
 		ResponseFormat:    map[string]any{"type": "json_schema"},
@@ -108,6 +117,34 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 	}
 	if result.Answer != "ok" {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestApplyOpenRouterReasoningUsesEnvironmentFallback(t *testing.T) {
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
+	body := map[string]any{}
+	request, err := applyOpenRouterReasoning(body, OpenRouterConfig{})
+	if err != nil {
+		t.Fatalf("applyOpenRouterReasoning returned error: %v", err)
+	}
+	reasoning := body["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" || request.RequestedEffort == nil || *request.RequestedEffort != "high" || request.Source != "environment" || !request.RequireParameters {
+		t.Fatalf("environment reasoning effort should be forwarded: %+v", body)
+	}
+	if _, err := applyOpenRouterReasoning(map[string]any{}, OpenRouterConfig{ReasoningEffort: "extreme"}); err == nil {
+		t.Fatal("invalid reasoning effort should be rejected")
+	}
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "extreme")
+	if _, err := ResolveOpenRouterReasoningRequest(OpenRouterConfig{}); err == nil {
+		t.Fatal("invalid environment reasoning effort should be rejected during startup validation")
+	}
+}
+
+func TestNormalizeOpenRouterReasoningEffortAcceptsGatewayValues(t *testing.T) {
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+		if normalized, ok := NormalizeOpenRouterReasoningEffort(effort); !ok || normalized != effort {
+			t.Fatalf("gateway effort %q should be accepted, got %q ok=%v", effort, normalized, ok)
+		}
 	}
 }
 
@@ -126,6 +163,10 @@ func TestGenerateOpenRouterToolChatForwardsToolsAndReturnsToolCalls(t *testing.T
 		messages := body["messages"].([]any)
 		if messages[0].(map[string]any)["role"] != "user" {
 			t.Fatalf("messages should be forwarded: %+v", body)
+		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" {
+			t.Fatalf("reasoning effort should be forwarded to tool chat: %+v", body)
 		}
 		_, _ = w.Write([]byte(`{
 			"choices": [{
@@ -148,8 +189,9 @@ func TestGenerateOpenRouterToolChatForwardsToolsAndReturnsToolCalls(t *testing.T
 	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
 
 	result, err := GenerateOpenRouterToolChat(context.Background(), OpenRouterConfig{
-		APIKey:  "sk-test",
-		ModelID: "openrouter/auto",
+		APIKey:          "sk-test",
+		ModelID:         "openrouter/auto",
+		ReasoningEffort: "high",
 	}, []ChatMessage{{Role: "user", Content: "1〜5話を見たい"}}, []ToolDefinition{
 		{Type: "function", Function: ToolFunction{Name: "load_episode_range", Parameters: map[string]any{"type": "object"}}},
 	})

@@ -107,6 +107,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		ProviderOrder:     config.ProviderOrder,
 		AllowFallbacks:    config.AllowFallbacks,
 		RequireParameters: config.RequireParameters,
+		ReasoningEffort:   config.ReasoningEffort,
 		Temperature:       &temperature,
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,

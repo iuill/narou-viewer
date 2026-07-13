@@ -103,6 +103,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 		"providerOrder":        []any{"ProviderA", " ProviderB "},
 		"allowFallbacks":       false,
 		"requireParameters":    true,
+		"reasoningEffort":      " xHIGH ",
 		"systemPromptOverride": nil,
 	})
 	if message != "" || !options.ProfileResolution || options.Transient == nil || options.ProfileID != nil {
@@ -114,7 +115,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	if strategyOptions, message := (&Server{}).parseExtractionRequestOptions(map[string]any{"generationStrategy": "discovery_parallel_correction"}); message != "" || strategyOptions.GenerationStrategy != "discovery_parallel_correction" {
 		t.Fatalf("discovery generation strategy should be accepted: options=%+v message=%q", strategyOptions, message)
 	}
-	if options.Transient.ModelID != nil || len(options.Transient.ProviderOrder) != 2 || options.Transient.AllowFallbacks == nil || *options.Transient.AllowFallbacks || options.Transient.RequireParameters == nil || !*options.Transient.RequireParameters {
+	if options.Transient.ModelID != nil || len(options.Transient.ProviderOrder) != 2 || options.Transient.AllowFallbacks == nil || *options.Transient.AllowFallbacks || options.Transient.RequireParameters == nil || !*options.Transient.RequireParameters || options.Transient.ReasoningEffort == nil || *options.Transient.ReasoningEffort != "xhigh" {
 		t.Fatalf("transient overrides should be normalized: %+v", options.Transient)
 	}
 	if message, status := (&Server{}).resolveExtractionRequestOptions(&extractionRequestOptions{ProfileResolution: true}); message != "AI生成プロファイルが見つかりません。" || status != http.StatusBadRequest {
@@ -126,6 +127,7 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"modelId": 10},
 		{"systemPromptOverride": 10},
+		{"reasoningEffort": "extreme"},
 		{"generationStrategy": "unknown"},
 	} {
 		if _, message := (&Server{}).parseExtractionRequestOptions(body); message == "" {
@@ -2329,9 +2331,17 @@ func TestServerFallbackStateBranches(t *testing.T) {
 
 func TestReaderAssistantUsesConfiguredOpenRouterProvider(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("authorization") != "Bearer sk-reader-secret" {
 			t.Fatalf("unexpected authorization: %q", r.Header.Get("authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode reader OpenRouter request: %v", err)
+		}
+		if body["reasoning"].(map[string]any)["effort"] != "high" || body["provider"].(map[string]any)["require_parameters"] != true {
+			t.Fatalf("environment reasoning should require provider support: %+v", body)
 		}
 		_, _ = w.Write([]byte(`{
 			"choices": [{"message": {"content": "OpenRouterからの応答です。"}}],
@@ -2377,6 +2387,19 @@ func TestReaderAssistantUsesConfiguredOpenRouterProvider(t *testing.T) {
 	if response["generationMode"] != "remote" || response["answer"] != "OpenRouterからの応答です。" || response["runId"] == nil {
 		t.Fatalf("reader assistant should use fake OpenRouter provider: %+v", response)
 	}
+	reasoningMetadata := response["reasoning"].(map[string]any)
+	if reasoningMetadata["requestedEffort"] != "high" || reasoningMetadata["source"] != "environment" || reasoningMetadata["requireParameters"] != true {
+		t.Fatalf("reader response should report resolved reasoning request: %+v", response)
+	}
+	run, ok, err := ai.LoadUsageRun(handler.(*Server).aiUsageDBPath(), response["runId"].(string))
+	if err != nil || !ok {
+		t.Fatalf("reader usage should be readable: ok=%v run=%+v err=%v", ok, run, err)
+	}
+	snapshot := run.Snapshot.(map[string]any)
+	snapshotReasoning := snapshot["reasoning"].(map[string]any)
+	if snapshotReasoning["requestedEffort"] != "high" || snapshotReasoning["source"] != "environment" || snapshotReasoning["requireParameters"] != true {
+		t.Fatalf("reader usage should persist resolved reasoning request: %+v", snapshot)
+	}
 	usage := requestJSON(t, handler, http.MethodGet, "/api/ai-generation/usage", nil, http.StatusOK)
 	runs := usage["runs"].([]any)
 	if len(runs) == 0 || runs[0].(map[string]any)["generationMode"] != "remote" {
@@ -2387,10 +2410,16 @@ func TestReaderAssistantUsesConfiguredOpenRouterProvider(t *testing.T) {
 func TestReaderAssistantRunsOpenRouterToolLoop(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	providerCalls := 0
+	reasoning := json.RawMessage(`"tool reasoning"`)
+	reasoningDetails := json.RawMessage(`[{"type":"reasoning.encrypted","data":"signed-first","id":"first"},{"type":"reasoning.summary","summary":"second block","id":"second"}]`)
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
+		rawBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read OpenRouter request: %v", err)
+		}
 		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.Unmarshal(rawBody, &body); err != nil {
 			t.Fatalf("decode OpenRouter request: %v", err)
 		}
 		if _, ok := body["tools"].([]any); !ok {
@@ -2401,6 +2430,8 @@ func TestReaderAssistantRunsOpenRouterToolLoop(t *testing.T) {
 				"choices": []any{map[string]any{
 					"finish_reason": "tool_calls",
 					"message": map[string]any{
+						"reasoning":         reasoning,
+						"reasoning_details": reasoningDetails,
 						"tool_calls": []any{map[string]any{
 							"id":   "call_range",
 							"type": "function",
@@ -2419,6 +2450,20 @@ func TestReaderAssistantRunsOpenRouterToolLoop(t *testing.T) {
 		last := messages[len(messages)-1].(map[string]any)
 		if last["role"] != "tool" || last["tool_call_id"] != "call_range" || !strings.Contains(last["content"].(string), "episodes") {
 			t.Fatalf("second request should include tool result message: %+v", body)
+		}
+		var request struct {
+			Messages []struct {
+				Role             string          `json:"role"`
+				Reasoning        json.RawMessage `json:"reasoning"`
+				ReasoningDetails json.RawMessage `json:"reasoning_details"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(rawBody, &request); err != nil {
+			t.Fatalf("decode typed OpenRouter request: %v", err)
+		}
+		assistant := request.Messages[len(request.Messages)-2]
+		if assistant.Role != "assistant" || !bytes.Equal(assistant.Reasoning, reasoning) || !bytes.Equal(assistant.ReasoningDetails, reasoningDetails) {
+			t.Fatalf("second request should preserve reasoning blocks unchanged and in order: reasoning=%s details=%s", assistant.Reasoning, assistant.ReasoningDetails)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []any{map[string]any{
@@ -3337,9 +3382,13 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 		if _, ok := body["response_format"].(map[string]any); !ok {
 			t.Fatalf("character summary should request json_schema response: %+v", body)
 		}
+		reasoning := body["reasoning"].(map[string]any)
+		if reasoning["effort"] != "xhigh" {
+			t.Fatalf("transient reasoning effort should be forwarded: %+v", body)
+		}
 		providerOptions := body["provider"].(map[string]any)
 		order := providerOptions["order"].([]any)
-		if len(order) != 2 || order[0] != "ProviderA" || order[1] != "ProviderB" || providerOptions["allow_fallbacks"] != true || providerOptions["require_parameters"] != false {
+		if len(order) != 2 || order[0] != "ProviderA" || order[1] != "ProviderB" || providerOptions["allow_fallbacks"] != true || providerOptions["require_parameters"] != true {
 			t.Fatalf("transient provider options should be forwarded: %+v", providerOptions)
 		}
 		messages := body["messages"].([]any)
@@ -3391,18 +3440,31 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 		"providerOrder":        "ProviderA, ProviderB",
 		"allowFallbacks":       true,
 		"requireParameters":    false,
+		"reasoningEffort":      "xhigh",
 		"systemPromptOverride": "一時システムプロンプト",
 	}, http.StatusOK)
 	if response["generationMode"] != "openrouter" || response["modelId"] != "openrouter/transient" {
 		t.Fatalf("playground should report transient generation metadata: %+v", response)
 	}
+	reasoningMetadata := response["reasoning"].(map[string]any)
+	if reasoningMetadata["requestedEffort"] != "xhigh" || reasoningMetadata["source"] != "request" || reasoningMetadata["requireParameters"] != true {
+		t.Fatalf("playground should report requested reasoning metadata: %+v", response)
+	}
 }
 
 func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
 	providerCalls := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode OpenRouter request: %v", err)
+		}
+		if body["reasoning"].(map[string]any)["effort"] != "high" || body["provider"].(map[string]any)["require_parameters"] != true {
+			t.Fatalf("environment reasoning should require provider support: %+v", body)
+		}
 		_, _ = w.Write([]byte(`{
 			"choices": [{"finish_reason": "stop", "message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
 			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
@@ -3481,6 +3543,10 @@ func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t 
 	if result["terms"] == nil || len(result["terms"].([]any)) != 0 {
 		t.Fatalf("stream final result should always include terms: %+v", result)
 	}
+	reasoningMetadata := result["reasoning"].(map[string]any)
+	if reasoningMetadata["requestedEffort"] != "high" || reasoningMetadata["source"] != "environment" || reasoningMetadata["requireParameters"] != true {
+		t.Fatalf("stream result should report resolved reasoning request: %+v", result)
+	}
 	if _, err := os.Stat(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stream playground preview should not persist reader-facing profiles, stat err=%v", err)
 	}
@@ -3500,6 +3566,8 @@ func TestPlaygroundExtractionRejectsInvalidTransientOverrides(t *testing.T) {
 		{"novelId": novelID, "upToEpisodeIndex": "1", "providerOrder": 10},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "allowFallbacks": "true"},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "requireParameters": "false"},
+		{"novelId": novelID, "upToEpisodeIndex": "1", "reasoningEffort": "extreme"},
+		{"novelId": novelID, "upToEpisodeIndex": "1", "reasoningEffort": "  "},
 		{"novelId": novelID, "upToEpisodeIndex": "1", "systemPromptOverride": "  "},
 	} {
 		response := requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", body, http.StatusBadRequest)

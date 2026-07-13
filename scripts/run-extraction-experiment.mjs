@@ -17,6 +17,9 @@ import {
   readResponseDetail,
   renderExtractionMarkdown,
   requireOption,
+  resolveExperimentRequireParameters,
+  resolveReasoningEffortOption,
+  resolveReportedReasoning,
   sanitizeFileName,
   sha256Hex,
   toAbsolutePath,
@@ -38,6 +41,7 @@ function printHelp() {
     [--provider <name> ...] \\
     [--allow-fallbacks true|false] \\
     [--require-parameters true|false] \\
+    [--reasoning-effort none|minimal|low|medium|high|xhigh|max] \\
     [--system-prompt <text>] \\
     [--system-prompt-file <path>] \\
     [--all-profiles] \\
@@ -238,6 +242,7 @@ function createInitialManifest({
   upToEpisodeIndex,
   concurrency,
   systemPromptOverride,
+  reasoningEffort,
   profiles,
   models,
   baseProfileId,
@@ -256,6 +261,7 @@ function createInitialManifest({
     tocUrl,
     upToEpisodeIndex,
     concurrency,
+    requestedReasoningEffort: reasoningEffort,
     systemPromptOverrideHash: systemPromptOverride ? sha256Hex(systemPromptOverride.text) : null,
     systemPromptOverrideSource: systemPromptOverride?.source ?? null,
     systemPromptOverrideFile:
@@ -273,10 +279,12 @@ function createInitialManifest({
       providerOrder: Array.isArray(profile.providerOrder) ? profile.providerOrder : [],
       allowFallbacks: Boolean(profile.allowFallbacks),
       requireParameters: profile.requireParameters !== false,
+      requestedReasoningEffort: reasoningEffort,
     })),
     modelOverrides: models.map((modelId) => ({
       modelId,
       baseProfileId,
+      requestedReasoningEffort: reasoningEffort,
     })),
     executions: [],
   };
@@ -344,12 +352,15 @@ async function run() {
   const normalizedRequestedModels = [
     ...new Set(requestedModels.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
-  const requireParametersOverride =
-    values["require-parameters"] === undefined
-      ? normalizedRequestedModels.length > 0
-        ? false
-        : undefined
-      : getBooleanOption(values, "require-parameters", true);
+  // 有効値の正本はviewer-api側とし、不正値はAPIの400レスポンスで明示的に失敗させる。
+  const reasoningEffort = resolveReasoningEffortOption(values);
+  const explicitRequireParameters =
+    values["require-parameters"] === undefined ? undefined : getBooleanOption(values, "require-parameters", true);
+  const requireParametersOverride = resolveExperimentRequireParameters({
+    explicitValue: explicitRequireParameters,
+    reasoningEffort,
+    hasModelOverrides: normalizedRequestedModels.length > 0,
+  });
   const providerOrderOverride = [
     ...new Set(
       getRepeatableOption(values, "provider")
@@ -423,6 +434,7 @@ async function run() {
     upToEpisodeIndex,
     concurrency,
     systemPromptOverride,
+    reasoningEffort,
     profiles,
     models: normalizedRequestedModels,
     baseProfileId: baseProfile?.id ?? null,
@@ -433,6 +445,7 @@ async function run() {
       type: "profile",
       profile,
       baseName: buildExecutionBaseName(0, profile),
+      reasoningEffort,
       displayLabel: `${profile.label} (${profile.modelId ?? profile.id})`,
     })),
     ...normalizedRequestedModels.map((modelId) => ({
@@ -442,6 +455,7 @@ async function run() {
       providerOrderOverride,
       allowFallbacksOverride,
       requireParametersOverride,
+      reasoningEffort,
       baseName: "",
       displayLabel: modelId,
     })),
@@ -469,6 +483,7 @@ async function run() {
       profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
       requestedModelId: target.type === "model" ? target.modelId : null,
       modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
+      reasoning: null,
       status: "pending",
       startedAt: null,
       finishedAt: null,
@@ -521,11 +536,13 @@ async function run() {
           ...(target.type === "profile"
             ? {
                 profileId: target.profile.id,
+                ...(target.reasoningEffort ? { reasoningEffort: target.reasoningEffort } : {}),
                 ...(systemPromptOverride ? { systemPromptOverride: systemPromptOverride.text } : {}),
               }
             : {
                 profileId: target.baseProfile?.id ?? null,
                 modelId: target.modelId,
+                ...(target.reasoningEffort ? { reasoningEffort: target.reasoningEffort } : {}),
                 ...(target.providerOrderOverride.length > 0 ? { providerOrder: target.providerOrderOverride } : {}),
                 ...(target.allowFallbacksOverride !== undefined
                   ? { allowFallbacks: target.allowFallbacksOverride }
@@ -580,6 +597,8 @@ async function run() {
         throw new Error("Playground stream did not return a result.");
       }
 
+      const reasoning = resolveReportedReasoning(streamState.result, target.reasoningEffort);
+
       const promptPreview = streamState.promptPreview;
       if (!promptPreview) {
         throw new Error("Playground stream did not return a prompt preview.");
@@ -616,11 +635,11 @@ async function run() {
         profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
         requestedModelId: target.type === "model" ? target.modelId : null,
         modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
+        reasoning,
         providerOrder: target.type === "profile" ? target.profile.providerOrder : target.providerOrderOverride,
         allowFallbacks:
           target.type === "profile" ? target.profile.allowFallbacks : (target.allowFallbacksOverride ?? null),
-        requireParameters:
-          target.type === "profile" ? target.profile.requireParameters : (target.requireParametersOverride ?? null),
+        requireParameters: reasoning.requireParameters,
         systemPromptOverrideHash: systemPromptOverride ? sha256Hex(systemPromptOverride.text) : null,
         promptPreview,
         batchTimings: streamState.batchTimings,
@@ -639,6 +658,7 @@ async function run() {
         : 0;
       executionRecord.termCount = Array.isArray(streamState.result.terms) ? streamState.result.terms.length : 0;
       executionRecord.processedUpToEpisodeIndex = streamState.result.processedUpToEpisodeIndex;
+      executionRecord.reasoning = reasoning;
     } catch (error) {
       executionRecord.status = "failed";
       executionRecord.finishedAt = new Date().toISOString();

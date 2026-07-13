@@ -83,6 +83,17 @@ export function getStringOption(values, key, fallback = null) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+export function resolveReasoningEffortOption(values) {
+  const hasReasoningEffortOption = Object.hasOwn(values, "reasoning-effort");
+  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
+  if (hasReasoningEffortOption && rawReasoningEffort === null) {
+    throw new Error(
+      "--reasoning-effort には none / minimal / low / medium / high / xhigh / max のいずれかを指定してください。",
+    );
+  }
+  return rawReasoningEffort === null ? null : rawReasoningEffort.toLowerCase();
+}
+
 export function getBooleanOption(values, key, fallback = false) {
   const value = values[key];
   if (value === undefined) {
@@ -103,6 +114,45 @@ export function getBooleanOption(values, key, fallback = false) {
   }
 
   return fallback;
+}
+
+export function resolveExperimentRequireParameters({ explicitValue, reasoningEffort, hasModelOverrides }) {
+  if (reasoningEffort !== null && explicitValue === false) {
+    throw new Error("--reasoning-effort を指定するときは --require-parameters false を使用できません。");
+  }
+  if (explicitValue !== undefined) {
+    return explicitValue;
+  }
+  if (!hasModelOverrides) {
+    return undefined;
+  }
+  return reasoningEffort !== null;
+}
+
+export function resolveReportedReasoning(result, requestedEffort) {
+  const reasoning = result?.reasoning;
+  const source = reasoning?.source;
+  const reportedEffort = typeof reasoning?.requestedEffort === "string" ? reasoning.requestedEffort : null;
+  if (
+    !reasoning ||
+    !["request", "environment", "provider-default"].includes(source) ||
+    typeof reasoning.requireParameters !== "boolean"
+  ) {
+    throw new Error("viewer-api did not report resolved reasoning request metadata.");
+  }
+  if (requestedEffort !== null && (reportedEffort !== requestedEffort || source !== "request")) {
+    throw new Error(
+      `viewer-api reported reasoning ${reportedEffort ?? "default"} from ${source}; requested ${requestedEffort}.`,
+    );
+  }
+  if (reportedEffort !== null && reasoning.requireParameters !== true) {
+    throw new Error("viewer-api did not require provider support for the requested reasoning effort.");
+  }
+  return {
+    requestedEffort: reportedEffort,
+    source,
+    requireParameters: reasoning.requireParameters,
+  };
 }
 
 export function getRepeatableOption(values, ...keys) {
@@ -316,11 +366,17 @@ function joinNonEmpty(values, separator = ", ") {
 
 export function renderExtractionMarkdown(execution) {
   const result = execution.result;
+  const reasoningRequestedEffort = execution.reasoning
+    ? (execution.reasoning.requestedEffort ?? "provider-default")
+    : "unknown";
   const lines = [
     `# ${execution.profileLabel ?? execution.profileId}`,
     "",
     `- modelId: ${execution.modelId ?? "unknown"}`,
     `- profileId: ${execution.profileId}`,
+    `- reasoningRequestedEffort: ${reasoningRequestedEffort}`,
+    `- reasoningSource: ${execution.reasoning?.source ?? "unknown"}`,
+    `- reasoningRequireParameters: ${execution.reasoning?.requireParameters ?? "unknown"}`,
     `- processedUpToEpisodeIndex: ${result.processedUpToEpisodeIndex}`,
     `- characterCount: ${Array.isArray(result.characters) ? result.characters.length : 0}`,
     `- termCount: ${Array.isArray(result.terms) ? result.terms.length : 0}`,
