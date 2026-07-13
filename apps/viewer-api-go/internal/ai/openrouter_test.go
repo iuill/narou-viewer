@@ -120,6 +120,40 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 	}
 }
 
+func TestGenerateOpenRouterChatStrictJSONSchemaRequiresSupportedProvider(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		provider, ok := body["provider"].(map[string]any)
+		if !ok || provider["require_parameters"] != true {
+			t.Fatalf("strict JSON Schema must require provider parameter support: %+v", body)
+		}
+		if provider["allow_fallbacks"] != true {
+			t.Fatalf("strict JSON Schema should preserve fallback preference: %+v", provider)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "")
+
+	result, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+		APIKey:            "sk-test",
+		ModelID:           "openrouter/auto",
+		AllowFallbacks:    true,
+		RequireParameters: false,
+		ResponseFormat:    map[string]any{"type": "json_schema"},
+	}, []ChatMessage{{Role: "user", Content: "hello"}})
+	if err != nil {
+		t.Fatalf("GenerateOpenRouterChat returned error: %v", err)
+	}
+	if result.Answer != "ok" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestApplyOpenRouterReasoningUsesEnvironmentFallback(t *testing.T) {
 	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
 	body := map[string]any{}

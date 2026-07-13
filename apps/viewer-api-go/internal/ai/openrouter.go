@@ -147,11 +147,12 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 	if err != nil {
 		return ChatResult{}, err
 	}
-	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || reasoningRequest.RequireParameters {
+	requireParameters := reasoningRequest.RequireParameters || openRouterResponseFormatRequiresParameters(config.ResponseFormat)
+	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || requireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
 			"allow_fallbacks":    config.AllowFallbacks,
-			"require_parameters": reasoningRequest.RequireParameters,
+			"require_parameters": requireParameters,
 		}
 	}
 	raw, err := json.Marshal(body)
@@ -183,6 +184,15 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		}
 	}
 	return accumulated, lastErr
+}
+
+func openRouterResponseFormatRequiresParameters(responseFormat any) bool {
+	format, ok := responseFormat.(map[string]any)
+	if !ok {
+		return false
+	}
+	responseType, _ := format["type"].(string)
+	return strings.TrimSpace(responseType) == "json_schema"
 }
 
 func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, messages []ChatMessage, tools []ToolDefinition) (ChatResult, error) {
