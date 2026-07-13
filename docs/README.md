@@ -43,3 +43,4 @@
 - [`.agents/skills/e2e-recovery/SKILL.md`](../.agents/skills/e2e-recovery/SKILL.md): E2E fixture / service / state の復旧手順
 - [`.agents/skills/e2e-smoke/SKILL.md`](../.agents/skills/e2e-smoke/SKILL.md): 内部 E2E service や generic self-host origin の read-only smoke check 判断
 - [`.agents/skills/ui-review-screenshot/SKILL.md`](../.agents/skills/ui-review-screenshot/SKILL.md): UI 変更時の `playwright-cli` 画面確認手順
+- [`.agents/skills/pr-merge/SKILL.md`](../.agents/skills/pr-merge/SKILL.md): PR の merge と base branch 同期、remote / local 作業 branch の cleanup 手順

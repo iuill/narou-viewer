@@ -1,0 +1,4 @@
+interface:
+  display_name: "PRマージ"
+  short_description: "PRの安全なマージとローカル・リモートブランチ整理"
+  default_prompt: "Use $pr-merge to merge the requested narou-viewer PR safely and finish all branch cleanup."
