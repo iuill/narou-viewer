@@ -69,6 +69,9 @@ chmod +x "$fake_bin/betterleaks"
 cat >"$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_GH_EXIT_CODE:-}" ]]; then
+  exit "$FAKE_GH_EXIT_CODE"
+fi
 if [[ -n "${FAKE_LATEST_TARGET_URL:-}" ]]; then
   printf '%s\n' "$FAKE_LATEST_TARGET_URL"
   exit 0
@@ -145,6 +148,16 @@ stale_status=$?
 set -e
 if [[ "$stale_status" -ne 3 ]]; then
   echo "expected a stale metadata scan result to return status 3, got ${stale_status}" >&2
+  exit 1
+fi
+set +e
+GITHUB_REPOSITORY=example/repository FAKE_GH_EXIT_CODE=3 \
+  PATH="$fake_bin:$PATH" bash "$source_root/scripts/assert-latest-sensitive-status.sh" \
+  1111111111111111111111111111111111111111 "$status_target" >/dev/null 2>&1
+api_error_status=$?
+set -e
+if [[ "$api_error_status" -ne 1 ]]; then
+  echo "expected a gh api failure to be normalized to status 1, got ${api_error_status}" >&2
   exit 1
 fi
 GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
