@@ -47,6 +47,7 @@ description: Use when reviewing saved extraction experiment runs that are synthe
 - 読みやすく端的か
 - batch timing から見て実験用途として重すぎないか
 - 複数回実行した run では、人物の完全一致、用語の recall / precision、処理時間、入出力 token、概算費用が安定しているか
+- reasoning比較では、サーバー報告の `requestedEffort` / `source` / `requireParameters` が意図した条件と一致しているか
 
 ## 既定の出力
 

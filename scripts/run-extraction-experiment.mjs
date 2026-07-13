@@ -17,6 +17,8 @@ import {
   readResponseDetail,
   renderExtractionMarkdown,
   requireOption,
+  resolveExperimentRequireParameters,
+  resolveReportedReasoning,
   sanitizeFileName,
   sha256Hex,
   toAbsolutePath,
@@ -258,7 +260,7 @@ function createInitialManifest({
     tocUrl,
     upToEpisodeIndex,
     concurrency,
-    reasoningEffort,
+    requestedReasoningEffort: reasoningEffort,
     systemPromptOverrideHash: systemPromptOverride ? sha256Hex(systemPromptOverride.text) : null,
     systemPromptOverrideSource: systemPromptOverride?.source ?? null,
     systemPromptOverrideFile:
@@ -276,12 +278,12 @@ function createInitialManifest({
       providerOrder: Array.isArray(profile.providerOrder) ? profile.providerOrder : [],
       allowFallbacks: Boolean(profile.allowFallbacks),
       requireParameters: profile.requireParameters !== false,
-      reasoningEffort,
+      requestedReasoningEffort: reasoningEffort,
     })),
     modelOverrides: models.map((modelId) => ({
       modelId,
       baseProfileId,
-      reasoningEffort,
+      requestedReasoningEffort: reasoningEffort,
     })),
     executions: [],
   };
@@ -349,12 +351,21 @@ async function run() {
   const normalizedRequestedModels = [
     ...new Set(requestedModels.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
-  const requireParametersOverride =
-    values["require-parameters"] === undefined
-      ? normalizedRequestedModels.length > 0
-        ? false
-        : undefined
-      : getBooleanOption(values, "require-parameters", true);
+  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
+  const reasoningEffort = rawReasoningEffort === null ? null : rawReasoningEffort.trim().toLowerCase();
+  if (
+    reasoningEffort !== null &&
+    !new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).has(reasoningEffort)
+  ) {
+    throw new Error("--reasoning-effort には none / minimal / low / medium / high / xhigh / max を指定してください。");
+  }
+  const explicitRequireParameters =
+    values["require-parameters"] === undefined ? undefined : getBooleanOption(values, "require-parameters", true);
+  const requireParametersOverride = resolveExperimentRequireParameters({
+    explicitValue: explicitRequireParameters,
+    reasoningEffort,
+    hasModelOverrides: normalizedRequestedModels.length > 0,
+  });
   const providerOrderOverride = [
     ...new Set(
       getRepeatableOption(values, "provider")
@@ -364,14 +375,6 @@ async function run() {
   ];
   const baseProfileToken = getStringOption(values, "base-profile", null);
   const systemPromptOverride = await loadSystemPromptOverride(values);
-  const rawReasoningEffort = getStringOption(values, "reasoning-effort", null);
-  const reasoningEffort = rawReasoningEffort === null ? null : rawReasoningEffort.trim().toLowerCase();
-  if (
-    reasoningEffort !== null &&
-    !new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]).has(reasoningEffort)
-  ) {
-    throw new Error("--reasoning-effort には none / minimal / low / medium / high / xhigh / max を指定してください。");
-  }
 
   const settings = await fetchJson(`${apiBaseUrl}/api/ai-generation/settings`);
   const systemStatus = normalizedRequestedModels.length > 0 ? await fetchJson(`${apiBaseUrl}/api/system/status`) : null;
@@ -485,7 +488,7 @@ async function run() {
       profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
       requestedModelId: target.type === "model" ? target.modelId : null,
       modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
-      reasoningEffort: target.reasoningEffort,
+      reasoning: null,
       status: "pending",
       startedAt: null,
       finishedAt: null,
@@ -599,6 +602,8 @@ async function run() {
         throw new Error("Playground stream did not return a result.");
       }
 
+      const reasoning = resolveReportedReasoning(streamState.result, target.reasoningEffort);
+
       const promptPreview = streamState.promptPreview;
       if (!promptPreview) {
         throw new Error("Playground stream did not return a prompt preview.");
@@ -635,12 +640,11 @@ async function run() {
         profileLabel: target.type === "profile" ? target.profile.label : (target.baseProfile?.label ?? null),
         requestedModelId: target.type === "model" ? target.modelId : null,
         modelId: target.type === "profile" ? target.profile.modelId : target.modelId,
-        reasoningEffort: target.reasoningEffort,
+        reasoning,
         providerOrder: target.type === "profile" ? target.profile.providerOrder : target.providerOrderOverride,
         allowFallbacks:
           target.type === "profile" ? target.profile.allowFallbacks : (target.allowFallbacksOverride ?? null),
-        requireParameters:
-          target.type === "profile" ? target.profile.requireParameters : (target.requireParametersOverride ?? null),
+        requireParameters: reasoning.requireParameters,
         systemPromptOverrideHash: systemPromptOverride ? sha256Hex(systemPromptOverride.text) : null,
         promptPreview,
         batchTimings: streamState.batchTimings,
@@ -659,6 +663,7 @@ async function run() {
         : 0;
       executionRecord.termCount = Array.isArray(streamState.result.terms) ? streamState.result.terms.length : 0;
       executionRecord.processedUpToEpisodeIndex = streamState.result.processedUpToEpisodeIndex;
+      executionRecord.reasoning = reasoning;
     } catch (error) {
       executionRecord.status = "failed";
       executionRecord.finishedAt = new Date().toISOString();

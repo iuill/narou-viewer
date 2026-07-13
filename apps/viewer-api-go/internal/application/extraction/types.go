@@ -74,17 +74,18 @@ type PreparedPreview struct {
 }
 
 type Result struct {
-	NovelID                   string                 `json:"novelId"`
-	NovelTitle                string                 `json:"novelTitle"`
-	UpToEpisodeIndex          string                 `json:"upToEpisodeIndex"`
-	ProcessedUpToEpisodeIndex *string                `json:"processedUpToEpisodeIndex"`
-	ProfileID                 *string                `json:"profileId"`
-	ProfileLabel              *string                `json:"profileLabel"`
-	GenerationMode            string                 `json:"generationMode"`
-	GenerationStrategy        string                 `json:"generationStrategy"`
-	ModelID                   *string                `json:"modelId"`
-	Characters                []characters.Character `json:"characters"`
-	Terms                     []terms.Term           `json:"terms"`
+	NovelID                   string                         `json:"novelId"`
+	NovelTitle                string                         `json:"novelTitle"`
+	UpToEpisodeIndex          string                         `json:"upToEpisodeIndex"`
+	ProcessedUpToEpisodeIndex *string                        `json:"processedUpToEpisodeIndex"`
+	ProfileID                 *string                        `json:"profileId"`
+	ProfileLabel              *string                        `json:"profileLabel"`
+	GenerationMode            string                         `json:"generationMode"`
+	GenerationStrategy        string                         `json:"generationStrategy"`
+	ModelID                   *string                        `json:"modelId"`
+	Reasoning                 *ai.OpenRouterReasoningRequest `json:"reasoning,omitempty"`
+	Characters                []characters.Character         `json:"characters"`
+	Terms                     []terms.Term                   `json:"terms"`
 }
 
 type FinalCounts struct {

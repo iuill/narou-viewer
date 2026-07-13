@@ -235,14 +235,19 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		RecentPreviousEpisodeCount: readerAssistantRecentPreviousEpisodeCount(message),
 		HitRegistry:                newReaderAssistantHitRegistry(),
 	}
-	result, toolRequests, toolResults, err := s.runReaderAssistantAgentLoop(ctx, assistantContext, ai.OpenRouterConfig{
+	openRouterConfig := ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
 		ModelID:           config.ModelID,
 		ProviderOrder:     config.ProviderOrder,
 		AllowFallbacks:    config.AllowFallbacks,
 		RequireParameters: config.RequireParameters,
 		ReasoningEffort:   config.ReasoningEffort,
-	}, streamSink)
+	}
+	reasoningRequest, err := ai.ResolveOpenRouterReasoningRequest(openRouterConfig)
+	if err != nil {
+		return nil, err
+	}
+	result, toolRequests, toolResults, err := s.runReaderAssistantAgentLoop(ctx, assistantContext, openRouterConfig, streamSink)
 	if err != nil {
 		_ = s.recordReaderAssistantUsage(readerAssistantUsageInput{
 			RunID:                      runID,
@@ -260,6 +265,7 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 			ModelID:                    modelID,
 			ProfileID:                  profileID,
 			ProfileLabel:               profileLabel,
+			Reasoning:                  &reasoningRequest,
 			ToolRequests:               toolRequests,
 			ToolResults:                toolResults,
 			RecentPreviousEpisodeCount: assistantContext.RecentPreviousEpisodeCount,
@@ -292,6 +298,7 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		ModelID:                    modelID,
 		ProfileID:                  profileID,
 		ProfileLabel:               profileLabel,
+		Reasoning:                  &reasoningRequest,
 		InputTokens:                inputTokens,
 		OutputTokens:               outputTokens,
 		ToolRequests:               toolRequests,
@@ -312,6 +319,7 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		"toolRequests":    toolRequests,
 		"toolResults":     toolResults,
 		"generationMode":  "remote",
+		"reasoning":       reasoningRequest,
 	}, nil
 }
 
@@ -331,6 +339,7 @@ type readerAssistantUsageInput struct {
 	ModelID                    *string
 	ProfileID                  *string
 	ProfileLabel               *string
+	Reasoning                  *ai.OpenRouterReasoningRequest
 	InputTokens                int
 	OutputTokens               int
 	ToolRequests               []map[string]any
@@ -406,6 +415,7 @@ func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai
 		"toolResults":   sanitizeReaderAssistantSnapshotValue(input.ToolResults),
 		"usageRequests": requests,
 		"mode":          input.GenerationMode,
+		"reasoning":     input.Reasoning,
 	}
 }
 
@@ -521,9 +531,11 @@ func (s *Service) runReaderAssistantAgentLoop(ctx context.Context, assistantCont
 		}
 
 		messages = append(messages, ai.ChatMessage{
-			Role:      "assistant",
-			Content:   result.Answer,
-			ToolCalls: result.ToolCalls,
+			Role:             "assistant",
+			Content:          result.Answer,
+			ToolCalls:        result.ToolCalls,
+			Reasoning:        result.Reasoning,
+			ReasoningDetails: result.ReasoningDetails,
 		})
 		for _, toolCall := range result.ToolCalls {
 			if streamSink != nil {

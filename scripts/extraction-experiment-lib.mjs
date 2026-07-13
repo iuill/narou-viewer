@@ -105,6 +105,45 @@ export function getBooleanOption(values, key, fallback = false) {
   return fallback;
 }
 
+export function resolveExperimentRequireParameters({ explicitValue, reasoningEffort, hasModelOverrides }) {
+  if (reasoningEffort !== null && explicitValue === false) {
+    throw new Error("--reasoning-effort を指定するときは --require-parameters false を使用できません。");
+  }
+  if (explicitValue !== undefined) {
+    return explicitValue;
+  }
+  if (!hasModelOverrides) {
+    return undefined;
+  }
+  return reasoningEffort !== null;
+}
+
+export function resolveReportedReasoning(result, requestedEffort) {
+  const reasoning = result?.reasoning;
+  const source = reasoning?.source;
+  const reportedEffort = typeof reasoning?.requestedEffort === "string" ? reasoning.requestedEffort : null;
+  if (
+    !reasoning ||
+    !["request", "environment", "provider-default"].includes(source) ||
+    typeof reasoning.requireParameters !== "boolean"
+  ) {
+    throw new Error("viewer-api did not report resolved reasoning request metadata.");
+  }
+  if (requestedEffort !== null && (reportedEffort !== requestedEffort || source !== "request")) {
+    throw new Error(
+      `viewer-api reported reasoning ${reportedEffort ?? "default"} from ${source}; requested ${requestedEffort}.`,
+    );
+  }
+  if (reportedEffort !== null && reasoning.requireParameters !== true) {
+    throw new Error("viewer-api did not require provider support for the requested reasoning effort.");
+  }
+  return {
+    requestedEffort: reportedEffort,
+    source,
+    requireParameters: reasoning.requireParameters,
+  };
+}
+
 export function getRepeatableOption(values, ...keys) {
   const items = [];
   for (const key of keys) {
@@ -321,7 +360,9 @@ export function renderExtractionMarkdown(execution) {
     "",
     `- modelId: ${execution.modelId ?? "unknown"}`,
     `- profileId: ${execution.profileId}`,
-    `- reasoningEffort: ${execution.reasoningEffort ?? "default"}`,
+    `- reasoningRequestedEffort: ${execution.reasoning?.requestedEffort ?? "provider-default"}`,
+    `- reasoningSource: ${execution.reasoning?.source ?? "unknown"}`,
+    `- reasoningRequireParameters: ${execution.reasoning?.requireParameters ?? "unknown"}`,
     `- processedUpToEpisodeIndex: ${result.processedUpToEpisodeIndex}`,
     `- characterCount: ${Array.isArray(result.characters) ? result.characters.length : 0}`,
     `- termCount: ${Array.isArray(result.terms) ? result.terms.length : 0}`,

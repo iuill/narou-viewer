@@ -38,13 +38,13 @@ bun run experiment:extraction:run -- \
 - `--profiles-file`: profile 定義をファイルから読む
 - `--model`: 比較対象モデル。複数指定できる
 - `--system-prompt-file`: system prompt を一時差し替えする
-- `--reasoning-effort`: OpenRouter の `reasoning.effort` を実験中だけ指定する。`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を受け付け、未指定時は provider の既定値を使う
+- `--reasoning-effort`: OpenRouter の `reasoning.effort` を実験中だけ指定する。`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を受け付け、未指定時は provider の既定値を使う。指定時は未対応 provider が値を無視しないよう `require_parameters=true` を強制し、`--require-parameters false` との併用は拒否する
 - `--concurrency`: 同時実行数
 - `--output-dir`: 保存先。既定は `data/ai-experiments/runs`
 
 モデル直接指定には利用可能な OpenRouter API key が必要。通常は AI 生成設定の共有 OpenRouter key か、key を持つ base profile を使う。
 
-読書AIを含む隔離した `viewer-api` プロセス全体で reasoning effort を比較するときは、`OPENROUTER_REASONING_EFFORT=xhigh` のように環境変数を指定できる。実験 runner の `--reasoning-effort` が指定されている抽出リクエストでは、リクエスト側の値を優先する。未指定時の通常動作は provider の既定値のままであり、この環境変数は本番の既定設定を変更せずに行う一時的な比較用途に限定する。
+読書AIを含む隔離した `viewer-api` プロセス全体で reasoning effort を比較するときは、`OPENROUTER_REASONING_EFFORT=xhigh` のように環境変数を指定できる。実験 runner の `--reasoning-effort` が指定されている抽出リクエストでは、リクエスト側の値を優先する。未指定時の通常動作は provider の既定値のままであり、この環境変数は本番の既定設定を変更せずに行う一時的な比較用途に限定する。APIは解決した要求値を `reasoning.requestedEffort`、由来を `reasoning.source`、provider絞り込みを `reasoning.requireParameters` として返す。runnerと読書AI usage snapshotはこのサーバー報告値を保存し、providerが実際に採用した値を意味する `effectiveEffort` とは呼ばない。
 
 ## 保存先
 

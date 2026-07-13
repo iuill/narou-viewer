@@ -89,8 +89,9 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 		if responseFormat["type"] != "json_schema" {
 			t.Fatalf("response_format should be forwarded: %+v", body)
 		}
-		if _, exists := body["provider"]; exists {
-			t.Fatalf("provider options should be omitted when no provider constraint is needed: %+v", body)
+		provider := body["provider"].(map[string]any)
+		if provider["require_parameters"] != true {
+			t.Fatalf("reasoning requests should require provider parameter support: %+v", body)
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
 	}))
@@ -119,14 +120,15 @@ func TestGenerateOpenRouterChatForwardsOptionalGenerationParameters(t *testing.T
 func TestApplyOpenRouterReasoningUsesEnvironmentFallback(t *testing.T) {
 	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
 	body := map[string]any{}
-	if err := applyOpenRouterReasoning(body, ""); err != nil {
+	request, err := applyOpenRouterReasoning(body, OpenRouterConfig{})
+	if err != nil {
 		t.Fatalf("applyOpenRouterReasoning returned error: %v", err)
 	}
 	reasoning := body["reasoning"].(map[string]any)
-	if reasoning["effort"] != "high" {
+	if reasoning["effort"] != "high" || request.RequestedEffort == nil || *request.RequestedEffort != "high" || request.Source != "environment" || !request.RequireParameters {
 		t.Fatalf("environment reasoning effort should be forwarded: %+v", body)
 	}
-	if err := applyOpenRouterReasoning(map[string]any{}, "extreme"); err == nil {
+	if _, err := applyOpenRouterReasoning(map[string]any{}, OpenRouterConfig{ReasoningEffort: "extreme"}); err == nil {
 		t.Fatal("invalid reasoning effort should be rejected")
 	}
 }

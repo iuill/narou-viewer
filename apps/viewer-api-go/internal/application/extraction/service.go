@@ -70,6 +70,17 @@ func (s *Service) Result(ctx context.Context, novelID string, upToEpisodeIndex s
 	if err != nil {
 		return Result{}, err
 	}
+	var reasoning *ai.OpenRouterReasoningRequest
+	if resolvedProfile != nil {
+		resolved, resolveErr := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{
+			ReasoningEffort:   resolvedProfile.ReasoningEffort,
+			RequireParameters: resolvedProfile.RequireParameters,
+		})
+		if resolveErr != nil {
+			return Result{}, resolveErr
+		}
+		reasoning = &resolved
+	}
 
 	summary, projectedTerms, err := s.resolveSummary(ctx, novelID, upToEpisodeIndex, episodeIndexes, resolvedProfile, options)
 	if err != nil {
@@ -86,6 +97,7 @@ func (s *Service) Result(ctx context.Context, novelID string, upToEpisodeIndex s
 		GenerationMode:            generationMode,
 		GenerationStrategy:        NormalizeGenerationStrategy(options.GenerationStrategy),
 		ModelID:                   profileModelID(profile),
+		Reasoning:                 reasoning,
 		Characters:                summary.Characters,
 		Terms:                     projectedTerms,
 	}, nil

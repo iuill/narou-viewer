@@ -36,11 +36,13 @@ type OpenRouterConfig struct {
 }
 
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role"`
+	Content          any             `json:"content,omitempty"`
+	ToolCallID       string          `json:"tool_call_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
+	ReasoningDetails json.RawMessage `json:"reasoning_details,omitempty"`
 }
 
 type ToolDefinition struct {
@@ -66,12 +68,20 @@ type ToolCallFunction struct {
 }
 
 type ChatResult struct {
-	Answer       string
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
-	FinishReason string
-	ToolCalls    []ToolCall
+	Answer           string
+	InputTokens      int
+	OutputTokens     int
+	TotalTokens      int
+	FinishReason     string
+	ToolCalls        []ToolCall
+	Reasoning        json.RawMessage
+	ReasoningDetails json.RawMessage
+}
+
+type OpenRouterReasoningRequest struct {
+	RequestedEffort   *string `json:"requestedEffort"`
+	Source            string  `json:"source"`
+	RequireParameters bool    `json:"requireParameters"`
 }
 
 type OpenRouterModelInfo struct {
@@ -122,14 +132,15 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 	if config.ResponseFormat != nil {
 		body["response_format"] = config.ResponseFormat
 	}
-	if err := applyOpenRouterReasoning(body, config.ReasoningEffort); err != nil {
+	reasoningRequest, err := applyOpenRouterReasoning(body, config)
+	if err != nil {
 		return ChatResult{}, err
 	}
-	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || config.RequireParameters {
+	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || reasoningRequest.RequireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
 			"allow_fallbacks":    config.AllowFallbacks,
-			"require_parameters": config.RequireParameters,
+			"require_parameters": reasoningRequest.RequireParameters,
 		}
 	}
 	raw, err := json.Marshal(body)
@@ -178,14 +189,15 @@ func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, me
 	if config.MaxTokens > 0 {
 		body["max_tokens"] = config.MaxTokens
 	}
-	if err := applyOpenRouterReasoning(body, config.ReasoningEffort); err != nil {
+	reasoningRequest, err := applyOpenRouterReasoning(body, config)
+	if err != nil {
 		return ChatResult{}, err
 	}
-	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || config.RequireParameters {
+	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || reasoningRequest.RequireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
 			"allow_fallbacks":    config.AllowFallbacks,
-			"require_parameters": config.RequireParameters,
+			"require_parameters": reasoningRequest.RequireParameters,
 		}
 	}
 	raw, err := json.Marshal(body)
@@ -222,19 +234,38 @@ func NormalizeOpenRouterReasoningEffort(value string) (string, bool) {
 	}
 }
 
-func applyOpenRouterReasoning(body map[string]any, configured string) error {
-	value := strings.TrimSpace(configured)
+func ResolveOpenRouterReasoningRequest(config OpenRouterConfig) (OpenRouterReasoningRequest, error) {
+	value := strings.TrimSpace(config.ReasoningEffort)
+	source := "request"
 	if value == "" {
 		value = strings.TrimSpace(os.Getenv("OPENROUTER_REASONING_EFFORT"))
+		source = "environment"
 	}
 	effort, ok := NormalizeOpenRouterReasoningEffort(value)
 	if !ok {
-		return fmt.Errorf("OpenRouter reasoning effort %q is invalid", value)
+		return OpenRouterReasoningRequest{}, fmt.Errorf("OpenRouter reasoning effort %q is invalid", value)
 	}
-	if effort != "" {
-		body["reasoning"] = map[string]any{"effort": effort}
+	request := OpenRouterReasoningRequest{
+		Source:            source,
+		RequireParameters: config.RequireParameters || effort != "",
 	}
-	return nil
+	if effort == "" {
+		request.Source = "provider-default"
+		return request, nil
+	}
+	request.RequestedEffort = &effort
+	return request, nil
+}
+
+func applyOpenRouterReasoning(body map[string]any, config OpenRouterConfig) (OpenRouterReasoningRequest, error) {
+	request, err := ResolveOpenRouterReasoningRequest(config)
+	if err != nil {
+		return OpenRouterReasoningRequest{}, err
+	}
+	if request.RequestedEffort != nil {
+		body["reasoning"] = map[string]any{"effort": *request.RequestedEffort}
+	}
+	return request, nil
 }
 
 func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config OpenRouterConfig, raw []byte) (ChatResult, bool, error) {
@@ -262,8 +293,10 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	var decoded struct {
 		Choices []struct {
 			Message struct {
-				Content   string     `json:"content"`
-				ToolCalls []ToolCall `json:"tool_calls"`
+				Content          string          `json:"content"`
+				ToolCalls        []ToolCall      `json:"tool_calls"`
+				Reasoning        json.RawMessage `json:"reasoning"`
+				ReasoningDetails json.RawMessage `json:"reasoning_details"`
 			} `json:"message"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -300,6 +333,8 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	result.Answer = strings.TrimSpace(decoded.Choices[0].Message.Content)
 	result.FinishReason = finishReason
 	result.ToolCalls = decoded.Choices[0].Message.ToolCalls
+	result.Reasoning = decoded.Choices[0].Message.Reasoning
+	result.ReasoningDetails = decoded.Choices[0].Message.ReasoningDetails
 	if isTruncatedOpenRouterFinishReason(finishReason) {
 		return result, false, fmt.Errorf("%w: finish_reason=%s", ErrOpenRouterTruncatedResponse, finishReason)
 	}
