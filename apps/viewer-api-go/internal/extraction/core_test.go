@@ -2,6 +2,7 @@ package extraction
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +11,30 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
+
+func TestStructuredOutputEpisodeIndexEnumLimits(t *testing.T) {
+	values := make([]string, 750)
+	for index := range values {
+		values[index] = fmt.Sprintf("%020d", index)
+	}
+	if !FitsStructuredOutputEpisodeIndexEnum(values) {
+		t.Fatal("750 unique 20-character episode IDs should fit the structured output enum limit")
+	}
+	values = append(values, fmt.Sprintf("%020d", len(values)))
+	if FitsStructuredOutputEpisodeIndexEnum(values) {
+		t.Fatal("751 unique 20-character episode IDs must exceed the structured output enum string limit")
+	}
+	chunks := make([]Chunk, len(values))
+	for index, value := range values {
+		chunks[index] = Chunk{EpisodeIndex: value, Text: "x"}
+	}
+	batches, err := PlanRuntimeBatches(RuntimeBatch(Batch{}, chunks), func(batch Batch) (bool, error) {
+		return FitsStructuredOutputEpisodeIndexEnum(batch.EpisodeIndexes), nil
+	})
+	if err != nil || len(batches) != 2 || len(batches[0].EpisodeIndexes) != 750 || len(batches[1].EpisodeIndexes) != 1 {
+		t.Fatalf("enum overflow should split at the provider boundary: batches=%d err=%v", len(batches), err)
+	}
+}
 
 func TestExtractionLimitsPreferNewEnvironmentAndFallbackToLegacy(t *testing.T) {
 	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "20")

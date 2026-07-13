@@ -386,6 +386,32 @@ func UniqueChunkEpisodeIndexes(chunks []Chunk) []string {
 	return result
 }
 
+const (
+	structuredOutputMaxEnumValues          = 1000
+	structuredOutputLongEnumThreshold      = 250
+	structuredOutputMaxLongEnumStringRunes = 15000
+	extractionSchemaReservedEnumValues     = 7
+)
+
+func FitsStructuredOutputEpisodeIndexEnum(values []string) bool {
+	seen := map[string]bool{}
+	count := 0
+	totalRunes := 0
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		count++
+		totalRunes += len([]rune(value))
+	}
+	if count+extractionSchemaReservedEnumValues > structuredOutputMaxEnumValues {
+		return false
+	}
+	return count <= structuredOutputLongEnumThreshold || totalRunes <= structuredOutputMaxLongEnumStringRunes
+}
+
 type BatchFitFunc func(Batch) (bool, error)
 
 func PlanRuntimeBatch(template Batch, chunks []Chunk, fits BatchFitFunc) (Batch, []Chunk, error) {

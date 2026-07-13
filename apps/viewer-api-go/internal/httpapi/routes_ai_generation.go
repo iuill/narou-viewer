@@ -1417,6 +1417,9 @@ func extractionBatchFitsContext(ctx context.Context, config *store.ResolvedAIGen
 	if config == nil {
 		return true, nil
 	}
+	if !extraction.FitsStructuredOutputEpisodeIndexEnum(batch.EpisodeIndexes) {
+		return false, nil
+	}
 	stageStartedAt := time.Now()
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {

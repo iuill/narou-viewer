@@ -1291,6 +1291,54 @@ func TestDiscoveryParallelCorrectionHelpers(t *testing.T) {
 	}
 }
 
+func TestParallelIdentityDiscoveryResponseFormatFallsBackForUnsupportedAuxiliaryModel(t *testing.T) {
+	const (
+		baseModel      = "openai/base-structured-review"
+		discoveryModel = "openai/name-json-review"
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		modelID := r.URL.Query().Get("q")
+		parameters := []string{"response_format"}
+		if modelID == baseModel {
+			parameters = append(parameters, "structured_outputs")
+		} else if modelID != discoveryModel {
+			t.Fatalf("unexpected model query: %s", r.URL.RawQuery)
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"id":                   modelID,
+				"context_length":       128000,
+				"supported_parameters": parameters,
+				"top_provider": map[string]any{
+					"context_length":        128000,
+					"max_completion_tokens": 8192,
+				},
+			}},
+		}); err != nil {
+			t.Fatalf("encode model response: %v", err)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+
+	baseConfig := &store.ResolvedAIGenerationConfig{
+		APIKey:                         "dummy-openrouter-key-capability-review",
+		ModelID:                        baseModel,
+		ExtractionNameDiscoveryModelID: discoveryModel,
+	}
+	baseFormat := resolveParallelIdentityDiscoveryResponseFormat(context.Background(), baseConfig, []string{"20"})
+	if baseFormat["type"] != "json_schema" {
+		t.Fatalf("structured-output model format = %+v", baseFormat)
+	}
+	discoveryFormat := resolveParallelIdentityDiscoveryResponseFormat(context.Background(), extractionNameDiscoveryConfig(baseConfig), []string{"20"})
+	if !reflect.DeepEqual(discoveryFormat, map[string]any{"type": "json_object"}) {
+		t.Fatalf("unsupported discovery model format = %+v", discoveryFormat)
+	}
+}
+
 func TestDiscoveredNamesKeepSameRoleCandidatesSeparate(t *testing.T) {
 	discovered := discoveredNamesToGeneratedCharacters([]parallelIdentityDiscoveredName{
 		{Name: "先生", EpisodeIndex: "3", Reason: "王都の教師"},

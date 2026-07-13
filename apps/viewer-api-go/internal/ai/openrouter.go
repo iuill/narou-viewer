@@ -88,6 +88,17 @@ type OpenRouterModelInfo struct {
 	ID                  string
 	ContextLength       int
 	MaxCompletionTokens int
+	SupportedParameters []string
+}
+
+func (info OpenRouterModelInfo) SupportsParameter(name string) bool {
+	name = strings.TrimSpace(name)
+	for _, parameter := range info.SupportedParameters {
+		if strings.TrimSpace(parameter) == name {
+			return true
+		}
+	}
+	return false
 }
 
 type openRouterModelInfoCacheEntry struct {
@@ -518,10 +529,11 @@ func fetchOpenRouterModelInfo(ctx context.Context, apiKey string, modelID string
 	}
 	var decoded struct {
 		Data []struct {
-			ID            string `json:"id"`
-			CanonicalSlug string `json:"canonical_slug"`
-			ContextLength int    `json:"context_length"`
-			TopProvider   struct {
+			ID                  string   `json:"id"`
+			CanonicalSlug       string   `json:"canonical_slug"`
+			ContextLength       int      `json:"context_length"`
+			SupportedParameters []string `json:"supported_parameters"`
+			TopProvider         struct {
 				ContextLength       int `json:"context_length"`
 				MaxCompletionTokens int `json:"max_completion_tokens"`
 			} `json:"top_provider"`
@@ -550,6 +562,7 @@ func fetchOpenRouterModelInfo(ctx context.Context, apiKey string, modelID string
 			ID:                  model.ID,
 			ContextLength:       contextLength,
 			MaxCompletionTokens: maxCompletionTokens,
+			SupportedParameters: append([]string{}, model.SupportedParameters...),
 		}, true, nil
 	}
 	return OpenRouterModelInfo{}, false, nil

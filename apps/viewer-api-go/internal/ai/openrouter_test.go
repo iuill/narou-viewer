@@ -443,6 +443,7 @@ func TestLookupOpenRouterModelInfoUsesModelsEndpoint(t *testing.T) {
 				"id": "openai/gpt-4.1-mini",
 				"canonical_slug": "openai/gpt-4.1-mini",
 				"context_length": 128000,
+				"supported_parameters": ["structured_outputs", "response_format"],
 				"top_provider": {
 					"context_length": 64000,
 					"max_completion_tokens": 16384
@@ -459,6 +460,9 @@ func TestLookupOpenRouterModelInfoUsesModelsEndpoint(t *testing.T) {
 	}
 	if info.ContextLength != 64000 || info.MaxCompletionTokens != 16384 {
 		t.Fatalf("unexpected model metadata: %+v", info)
+	}
+	if !info.SupportsParameter("structured_outputs") || info.SupportsParameter("tools") {
+		t.Fatalf("unexpected supported parameters: %+v", info.SupportedParameters)
 	}
 }
 

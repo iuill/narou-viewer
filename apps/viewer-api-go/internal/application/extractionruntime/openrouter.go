@@ -40,6 +40,9 @@ func (r *Runtime) batchFitsContextForFocus(ctx context.Context, config *store.Re
 	if config == nil {
 		return true, nil
 	}
+	if !core.FitsStructuredOutputEpisodeIndexEnum(batch.EpisodeIndexes) {
+		return false, nil
+	}
 	stageStartedAt := time.Now()
 	pending := []characters.GeneratedUnresolvedMention(nil)
 	if len(unresolvedMentions) > 0 {

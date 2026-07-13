@@ -820,7 +820,7 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := parallelIdentityDiscoveryResponseFormat(batch.EpisodeIndexes...)
+	responseFormat := resolveParallelIdentityDiscoveryResponseFormat(ctx, config, batch.EpisodeIndexes)
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -886,6 +886,20 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		return nil, usage, err
 	}
 	return normalized, usage, nil
+}
+
+func resolveParallelIdentityDiscoveryResponseFormat(ctx context.Context, config *store.ResolvedAIGenerationConfig, episodeIndexes []string) map[string]any {
+	jsonObject := map[string]any{"type": "json_object"}
+	if config == nil || !core.FitsStructuredOutputEpisodeIndexEnum(episodeIndexes) {
+		return jsonObject
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	info, ok := ai.LookupOpenRouterModelInfo(lookupCtx, config.APIKey, config.ModelID, config.ProviderOrder)
+	cancel()
+	if !ok || !info.SupportsParameter("structured_outputs") {
+		return jsonObject
+	}
+	return parallelIdentityDiscoveryResponseFormat(episodeIndexes...)
 }
 
 func normalizeDiscoveredNamesForBatch(values []parallelIdentityDiscoveredName, batch extractionBatch, upToEpisodeIndex string) ([]parallelIdentityDiscoveredName, error) {
