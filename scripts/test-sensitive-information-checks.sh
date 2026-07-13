@@ -136,11 +136,15 @@ status_target="https://github.com/example/repository/actions/runs/123"
 GITHUB_REPOSITORY=example/repository FAKE_LATEST_TARGET_URL="$status_target" \
   PATH="$fake_bin:$PATH" bash "$source_root/scripts/assert-latest-sensitive-status.sh" \
   1111111111111111111111111111111111111111 "$status_target"
-if GITHUB_REPOSITORY=example/repository \
+set +e
+GITHUB_REPOSITORY=example/repository \
   FAKE_LATEST_TARGET_URL="https://github.com/example/repository/actions/runs/124" \
   PATH="$fake_bin:$PATH" bash "$source_root/scripts/assert-latest-sensitive-status.sh" \
-  1111111111111111111111111111111111111111 "$status_target" >/dev/null 2>&1; then
-  echo "expected a stale metadata scan result to be rejected" >&2
+  1111111111111111111111111111111111111111 "$status_target" >/dev/null 2>&1
+stale_status=$?
+set -e
+if [[ "$stale_status" -ne 3 ]]; then
+  echo "expected a stale metadata scan result to return status 3, got ${stale_status}" >&2
   exit 1
 fi
 GITHUB_REPOSITORY=example/repository EXPECT_STATUS_TARGET_URL="$status_target" \
