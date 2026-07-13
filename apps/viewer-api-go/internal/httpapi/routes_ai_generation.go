@@ -1425,7 +1425,7 @@ func extractionBatchFitsContext(ctx context.Context, config *store.ResolvedAIGen
 	systemPrompt, userPrompt := extraction.BuildPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, batch, pending, config.SystemPrompt)
 	logExtractionTiming("context_fit_prompt", stageStartedAt, "novelId", novelID, "upToEpisodeIndex", upToEpisodeIndex, "batch", batch.BatchIndex, "chunks", len(batch.Chunks), "knownCharacters", len(knownCharacters), "unresolvedMentions", len(pending))
 	stageStartedAt = time.Now()
-	responseFormat := extractionOpenRouterResponseFormat()
+	responseFormat := extractionOpenRouterResponseFormat(batch.EpisodeIndexes...)
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -1459,8 +1459,8 @@ func (s *Server) generateOpenRouterExtractionBatch(ctx context.Context, config *
 	return extractionBatchResult{Delta: result.Delta, Usage: result.Usage}, nil
 }
 
-func extractionOpenRouterResponseFormat() map[string]any {
-	return extractionruntime.ExtractionOpenRouterResponseFormat()
+func extractionOpenRouterResponseFormat(allowedEpisodeIndexes ...string) map[string]any {
+	return extractionruntime.ExtractionOpenRouterResponseFormat(allowedEpisodeIndexes...)
 }
 
 func extractionBatchTimingEvent(progress extractionBatchProgress) map[string]any {

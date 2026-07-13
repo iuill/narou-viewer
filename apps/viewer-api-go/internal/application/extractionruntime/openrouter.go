@@ -320,7 +320,7 @@ func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID 
 		systemPrompt += "\n並列抽出では人物と用語を同じレスポンスで必ず抽出してください。この場合だけ、term の descriptionHistory は累積 snapshot ではなく、今回の episodes で新しく明示された事実だけを書いてください。過去や未来の本文から補完しないでください。"
 	}
 	messages := []ai.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}}
-	responseFormat := extractionOpenRouterResponseFormat()
+	responseFormat := extractionOpenRouterResponseFormat(batch.EpisodeIndexes...)
 	return preparedExtractionRequest{
 		Messages:       messages,
 		ResponseFormat: responseFormat,
@@ -341,14 +341,29 @@ func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRe
 	}
 }
 
-func extractionOpenRouterResponseFormat() map[string]any {
+func extractionOpenRouterResponseFormat(allowedEpisodeIndexes ...string) map[string]any {
+	episodeIndexValues := make([]any, 0, len(allowedEpisodeIndexes))
+	seenEpisodeIndexes := map[string]bool{}
+	for _, value := range allowedEpisodeIndexes {
+		value = strings.TrimSpace(value)
+		if value == "" || seenEpisodeIndexes[value] {
+			continue
+		}
+		seenEpisodeIndexes[value] = true
+		episodeIndexValues = append(episodeIndexValues, value)
+	}
+	episodeIndexSchema := map[string]any{"type": "string", "pattern": "^\\d+$"}
+	if len(episodeIndexValues) > 0 {
+		episodeIndexSchema = map[string]any{"type": "string", "enum": episodeIndexValues}
+	}
+	episodeIndexRef := map[string]any{"$ref": "#/$defs/episodeIndex"}
 	textVersionSchema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required":             []any{"text", "episodeIndex"},
 		"properties": map[string]any{
 			"text":         map[string]any{"type": "string"},
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"episodeIndex": episodeIndexRef,
 		},
 	}
 	historyVersionSchema := map[string]any{
@@ -356,7 +371,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 		"additionalProperties": false,
 		"required":             []any{"episodeIndex", "text"},
 		"properties": map[string]any{
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"episodeIndex": episodeIndexRef,
 			"text":         map[string]any{"type": "string"},
 		},
 	}
@@ -381,7 +396,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"fullNameHistory":             map[string]any{"type": "array", "items": textVersionSchema},
 			"gender":                      map[string]any{"anyOf": []any{map[string]any{"type": "null"}, textVersionSchema}},
 			"genderHistory":               map[string]any{"type": "array", "items": textVersionSchema},
-			"firstAppearanceEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"firstAppearanceEpisodeIndex": episodeIndexRef,
 			"aliases":                     map[string]any{"type": "array", "items": textVersionSchema},
 			"appearanceHistory":           map[string]any{"type": "array", "items": historyVersionSchema},
 			"personalityHistory":          map[string]any{"type": "array", "items": historyVersionSchema},
@@ -424,7 +439,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 		"required":             []any{"text", "episodeIndex"},
 		"properties": map[string]any{
 			"text":         map[string]any{"type": "string"},
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"episodeIndex": episodeIndexRef,
 		},
 	}
 	termCategory := map[string]any{
@@ -436,7 +451,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 				"type": "string",
 				"enum": []any{"organization", "place", "item", "skill", "race", "event", "other"},
 			},
-			"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+			"episodeIndex": episodeIndexRef,
 		},
 	}
 	termSchema := map[string]any{
@@ -462,9 +477,12 @@ func extractionOpenRouterResponseFormat() map[string]any {
 			"schema": map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
-				"required":             []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions", "terms"},
+				"$defs": map[string]any{
+					"episodeIndex": episodeIndexSchema,
+				},
+				"required": []any{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions", "terms"},
 				"properties": map[string]any{
-					"processedUpToEpisodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+					"processedUpToEpisodeIndex": episodeIndexRef,
 					"newCharacters": map[string]any{
 						"type":  "array",
 						"items": characterDeltaSchema,
@@ -495,7 +513,7 @@ func extractionOpenRouterResponseFormat() map[string]any {
 							"required":             []any{"mention", "episodeIndex", "reason"},
 							"properties": map[string]any{
 								"mention":      map[string]any{"type": "string"},
-								"episodeIndex": map[string]any{"type": "string", "pattern": "^\\d+$"},
+								"episodeIndex": episodeIndexRef,
 								"reason":       map[string]any{"type": "string"},
 							},
 						},
@@ -510,6 +528,6 @@ func extractionOpenRouterResponseFormat() map[string]any {
 	}
 }
 
-func ExtractionOpenRouterResponseFormat() map[string]any {
-	return extractionOpenRouterResponseFormat()
+func ExtractionOpenRouterResponseFormat(allowedEpisodeIndexes ...string) map[string]any {
+	return extractionOpenRouterResponseFormat(allowedEpisodeIndexes...)
 }

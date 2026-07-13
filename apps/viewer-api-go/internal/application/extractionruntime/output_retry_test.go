@@ -13,6 +13,55 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
 
+func TestParallelIdentityResponseFormatsUseStrictJSONSchema(t *testing.T) {
+	tests := []struct {
+		name            string
+		format          map[string]any
+		field           string
+		requiredItemKey string
+	}{
+		{name: "clusters", format: parallelIdentityClusterResponseFormat(), field: "clusters", requiredItemKey: "localIds"},
+		{name: "discovery", format: parallelIdentityDiscoveryResponseFormat("16818093084122790426"), field: "characters", requiredItemKey: "episodeIndex"},
+		{name: "correction", format: parallelIdentityCorrectionResponseFormat(), field: "characters", requiredItemKey: "keep"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.format["type"] != "json_schema" {
+				t.Fatalf("response format must use json_schema: %+v", test.format)
+			}
+			jsonSchema := test.format["json_schema"].(map[string]any)
+			if jsonSchema["strict"] != true {
+				t.Fatalf("response schema must be strict: %+v", jsonSchema)
+			}
+			root := jsonSchema["schema"].(map[string]any)
+			if root["additionalProperties"] != false {
+				t.Fatalf("root schema must reject extra fields: %+v", root)
+			}
+			items := root["properties"].(map[string]any)[test.field].(map[string]any)["items"].(map[string]any)
+			if items["additionalProperties"] != false {
+				t.Fatalf("item schema must reject extra fields: %+v", items)
+			}
+			required := items["required"].([]any)
+			found := false
+			for _, key := range required {
+				if key == test.requiredItemKey {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("item schema must require %s: %+v", test.requiredItemKey, required)
+			}
+			if test.name == "discovery" {
+				episodeIndex := items["properties"].(map[string]any)["episodeIndex"].(map[string]any)
+				values := episodeIndex["enum"].([]any)
+				if len(values) != 1 || values[0] != "16818093084122790426" {
+					t.Fatalf("discovery schema must restrict episodeIndex to the current batch: %+v", episodeIndex)
+				}
+			}
+		})
+	}
+}
+
 func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,

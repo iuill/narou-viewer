@@ -632,7 +632,7 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
+	responseFormat := parallelIdentityClusterResponseFormat()
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -820,7 +820,7 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
+	responseFormat := parallelIdentityDiscoveryResponseFormat(batch.EpisodeIndexes...)
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -1010,7 +1010,7 @@ func (r *Runtime) correctParallelIdentityCharactersOneShot(ctx context.Context, 
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
+	responseFormat := parallelIdentityCorrectionResponseFormat()
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},

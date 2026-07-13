@@ -87,6 +87,23 @@ func TestExtractionOpenRouterResponseFormatRequiresStrictTerms(t *testing.T) {
 	}
 }
 
+func TestExtractionOpenRouterResponseFormatRestrictsEpisodeIndexesToCurrentBatch(t *testing.T) {
+	first := "16818093084122790426"
+	second := "16818093084191348892"
+	format := ExtractionOpenRouterResponseFormat(first, second, first, "")
+	jsonSchema := format["json_schema"].(map[string]any)
+	schema := jsonSchema["schema"].(map[string]any)
+	episodeIndexSchema := schema["$defs"].(map[string]any)["episodeIndex"].(map[string]any)
+	values := episodeIndexSchema["enum"].([]any)
+	if len(values) != 2 || values[0] != first || values[1] != second {
+		t.Fatalf("episode index schema must enumerate the current batch without duplicates: %+v", episodeIndexSchema)
+	}
+	processed := schema["properties"].(map[string]any)["processedUpToEpisodeIndex"].(map[string]any)
+	if processed["$ref"] != "#/$defs/episodeIndex" {
+		t.Fatalf("processed episode index must use the current-batch definition: %+v", processed)
+	}
+}
+
 func TestRuntimeGeneratedStateHelpers(t *testing.T) {
 	stateDir := t.TempDir()
 	runtime := NewRuntime(RuntimeDependencies{StateDir: stateDir})
