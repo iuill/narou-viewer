@@ -136,6 +136,75 @@ func TestGenerateOpenRouterBatchNormalizesFallbackCharacterShape(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenRouterBatchCompletesOmittedDeltaArrays(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t,
+		`{"newCharacters":[{"canonicalName":"アリス","aliases":[],"summaryHistory":["主人公"]}],"characterUpdates":null,"terms":[]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
+	if err != nil {
+		t.Fatalf("omitted empty delta arrays should be completed: %v", err)
+	}
+	if len(result.Delta.NewCharacters) != 1 || result.Delta.NewCharacters[0].CanonicalName != "アリス" {
+		t.Fatalf("unexpected normalized delta: %+v", result.Delta)
+	}
+}
+
+func TestNormalizeExtractionRootDeltaArraysPreservesInvalidTypes(t *testing.T) {
+	normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(`{"newCharacters":"invalid","terms":[]}`), "4")
+	if err != nil {
+		t.Fatalf("normalize JSON object: %v", err)
+	}
+	if err := validateExtractionOutputContract(normalized); err == nil {
+		t.Fatal("an explicitly invalid root delta type should still be rejected")
+	}
+}
+
+func TestNormalizeExtractionRootDeltaArraysPreservesLegacyResponse(t *testing.T) {
+	normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(`{"characters":[],"terms":[]}`), "4")
+	if err != nil {
+		t.Fatalf("normalize legacy response: %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(normalized, &root); err != nil {
+		t.Fatalf("decode legacy response: %v", err)
+	}
+	if _, exists := root["newCharacters"]; exists {
+		t.Fatalf("legacy response must not be converted into an empty delta response: %+v", root)
+	}
+	if err := validateExtractionOutputContract(normalized); err != nil {
+		t.Fatalf("legacy response should remain valid: %v", err)
+	}
+}
+
+func TestGenerateOpenRouterBatchRecoversNullableNamesAndLegacyCharacterFields(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t,
+		`{"newCharacters":[{"canonicalName":null,"fullName":null,"aliases":["アリス"],"summary":"主人公","appearance":"銀髪","personality":"慎重"},{"displayName":"ボブ","summary":"王国騎士"}],"terms":[{"term":null,"name":"魔導院","reading":"","category":"organization","description":"魔術を研究する組織"}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
+	if err != nil {
+		t.Fatalf("recoverable fallback values should be normalized: %v", err)
+	}
+	if len(result.Delta.NewCharacters) != 2 || result.Delta.NewCharacters[0].CanonicalName != "アリス" || len(result.Delta.NewCharacters[0].SummaryHistory) != 1 || len(result.Delta.NewCharacters[0].AppearanceHistory) != 1 || len(result.Delta.NewCharacters[0].PersonalityHistory) != 1 {
+		t.Fatalf("legacy character fields were not preserved: %+v", result.Delta.NewCharacters)
+	}
+	if result.Delta.NewCharacters[1].CanonicalName != "ボブ" || len(result.Delta.NewCharacters[1].SummaryHistory) != 1 {
+		t.Fatalf("displayName fallback was not preserved: %+v", result.Delta.NewCharacters[1])
+	}
+	if len(result.Delta.Terms) != 1 || result.Delta.Terms[0].Term != "魔導院" || len(result.Delta.Terms[0].ReadingHistory) != 0 {
+		t.Fatalf("nullable term fields were not recovered: %+v", result.Delta.Terms)
+	}
+}
+
 func TestNormalizeExtractionEpisodeIndexScalarsCoversFallbackVariants(t *testing.T) {
 	raw := []byte(`{
 		"processedUpToEpisodeIndex":null,

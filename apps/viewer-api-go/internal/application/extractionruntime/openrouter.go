@@ -184,10 +184,22 @@ func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeInde
 		// depend on the model echoing this value correctly.
 		processedUpToEpisodeIndex = strings.TrimSpace(processedUpToEpisodeIndex)
 		root["processedUpToEpisodeIndex"] = processedUpToEpisodeIndex
+		normalizeExtractionRootDeltaArrays(root)
 		normalizeExtractionCharacterObjects(root, processedUpToEpisodeIndex)
 		normalizeExtractionTermObjects(root, processedUpToEpisodeIndex)
 	}
 	return json.Marshal(decoded)
+}
+
+func normalizeExtractionRootDeltaArrays(root map[string]any) {
+	if legacyCharacters, exists := root["characters"]; exists && legacyCharacters != nil {
+		return
+	}
+	for _, field := range []string{"newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions"} {
+		if value, exists := root[field]; !exists || value == nil {
+			root[field] = []any{}
+		}
+	}
 }
 
 func normalizeExtractionTermObjects(root map[string]any, episodeIndex string) {
@@ -201,20 +213,18 @@ func normalizeExtractionTermObjects(root map[string]any, episodeIndex string) {
 		if !ok {
 			continue
 		}
-		if _, exists := item["term"]; !exists {
-			item["term"] = item["name"]
-		}
 		term, _ := item["term"].(string)
 		if strings.TrimSpace(term) == "" {
-			continue
-		}
-		if _, exists := item["reading"]; !exists {
-			item["reading"] = nil
-		}
-		if item["reading"] != nil {
-			if reading, valid := extractionTermVersionFallback(item["reading"], "text", episodeIndex); valid {
-				item["reading"] = reading
+			term, _ = item["name"].(string)
+			if strings.TrimSpace(term) == "" {
+				continue
 			}
+		}
+		item["term"] = term
+		if reading, valid := extractionTermVersionFallback(item["reading"], "text", episodeIndex); valid {
+			item["reading"] = reading
+		} else {
+			item["reading"] = nil
 		}
 		category, validCategory := extractionTermVersionFallback(item["category"], "value", episodeIndex)
 		if !validCategory {
@@ -295,7 +305,7 @@ func normalizeExtractionCharacterObjects(root map[string]any, processedUpToEpiso
 				continue
 			}
 			if !update {
-				if _, exists := item["canonicalName"]; !exists {
+				if _, valid := extractionTextVersionFallback(item["canonicalName"], processedUpToEpisodeIndex); !valid {
 					if canonicalName, found := extractionCanonicalNameFallback(item, processedUpToEpisodeIndex); found {
 						item["canonicalName"] = canonicalName
 					}
@@ -326,6 +336,15 @@ func normalizeExtractionCharacterObjects(root map[string]any, processedUpToEpiso
 						firstAppearance = processedUpToEpisodeIndex
 					}
 					item["firstAppearanceEpisodeIndex"] = firstAppearance
+				}
+			}
+			for _, fields := range [][2]string{{"appearance", "appearanceHistory"}, {"personality", "personalityHistory"}, {"summary", "summaryHistory"}} {
+				history, isArray := item[fields[1]].([]any)
+				if value, exists := item[fields[1]]; exists && value != nil && (!isArray || len(history) > 0) {
+					continue
+				}
+				if version, valid := extractionTextVersionFallback(item[fields[0]], processedUpToEpisodeIndex); valid {
+					item[fields[1]] = []any{version}
 				}
 			}
 			for _, field := range []string{"fullNameHistory", "genderHistory", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"} {
@@ -361,6 +380,9 @@ func normalizeExtractionCharacterObjects(root map[string]any, processedUpToEpiso
 }
 
 func extractionCanonicalNameFallback(item map[string]any, episodeIndex string) (map[string]any, bool) {
+	if version, ok := extractionTextVersionFallback(item["displayName"], episodeIndex); ok {
+		return version, true
+	}
 	if version, ok := extractionTextVersionFallback(item["fullName"], episodeIndex); ok {
 		return version, true
 	}
