@@ -397,7 +397,7 @@ func validateExtractionVersionObject(raw json.RawMessage) error {
 	}
 	var text string
 	var episodeIndex string
-	if isJSONNull(version["text"]) || isJSONNull(version["episodeIndex"]) || json.Unmarshal(version["text"], &text) != nil || json.Unmarshal(version["episodeIndex"], &episodeIndex) != nil || !isDigitsEpisodeIndex(episodeIndex) {
+	if isJSONNull(version["text"]) || isJSONNull(version["episodeIndex"]) || json.Unmarshal(version["text"], &text) != nil || strings.TrimSpace(text) == "" || json.Unmarshal(version["episodeIndex"], &episodeIndex) != nil || !isDigitsEpisodeIndex(episodeIndex) {
 		return errors.New("モデル出力の人物履歴値が不正です")
 	}
 	return nil
@@ -420,11 +420,20 @@ func validateExtractionSimpleObject(raw json.RawMessage, required []string) erro
 			continue
 		}
 		var value string
-		if json.Unmarshal(item[field], &value) != nil || (field == "episodeIndex" && !isDigitsEpisodeIndex(value)) {
+		if json.Unmarshal(item[field], &value) != nil || (field == "episodeIndex" && !isDigitsEpisodeIndex(value)) || (requiresNonBlankExtractionString(field) && strings.TrimSpace(value) == "") {
 			return errors.New("object string field invalid")
 		}
 	}
 	return nil
+}
+
+func requiresNonBlankExtractionString(field string) bool {
+	switch field {
+	case "sourceCharacterId", "targetCharacterId", "mention":
+		return true
+	default:
+		return false
+	}
 }
 
 func isJSONNull(raw json.RawMessage) bool {

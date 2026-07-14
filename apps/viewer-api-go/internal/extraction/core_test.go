@@ -325,7 +325,7 @@ func TestExtractionHistoryHelpers(t *testing.T) {
 		t.Fatalf("generated characters should sort by episode then name, got %s", got)
 	}
 	prompt := BuildDefaultSystemPrompt()
-	if !strings.Contains(prompt, "candidateCharacters が空") || !strings.Contains(prompt, "すべて newCharacters") || !strings.Contains(prompt, "役職・関係・説明だけの語") {
+	if !strings.Contains(prompt, "candidateCharacters が空") || !strings.Contains(prompt, "すべて newCharacters") || !strings.Contains(prompt, "役職・関係・説明だけの語") || !strings.Contains(prompt, "空文字や空白だけの値") {
 		t.Fatalf("default prompt should spell out initial extraction and alias constraints: %s", prompt)
 	}
 	_, userPrompt := BuildPrompt("novel-1", "1", nil, Batch{}, nil)

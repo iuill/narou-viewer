@@ -608,6 +608,7 @@ func BuildDefaultSystemPrompt() string {
 		"fullName や gender が話数により変化・判明する場合は、最新値だけでなく fullNameHistory / genderHistory に時点ごとの値を残してください。",
 		"summaryHistory には、その時点で新しく分かった人物像、立場、関係性、主要な行動を 1〜2 文で短く要約してください。",
 		"各履歴項目は episodeIndex と text を必ず持ちます。",
+		"履歴と用語versionの text、mergeProposals の sourceCharacterId / targetCharacterId、unresolvedMentions の mention には、空文字や空白だけの値を入れないでください。情報がなければその項目自体を配列へ追加しないでください。",
 		"同じ内容を重複して入れないでください。",
 		"terms には人物名を含めず、組織・場所・物品・技能・種族・出来事などの作品固有語だけを入れてください。",
 		"term の category は organization / place / item / skill / race / event / other のいずれかです。",
@@ -640,7 +641,7 @@ func BuildPromptWithContext(novelID string, upToEpisodeIndex string, knownCharac
 		"candidateCharacters": candidateCharacters,
 		"knownTerms":          candidateTerms,
 		"episodes":            chunkPromptPayload(batch.Chunks),
-		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions, terms. terms must always be present; use [] when there is no term delta. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
+		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions, terms. Required content strings must not be empty or whitespace-only. terms must always be present; use [] when there is no term delta. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
 	}
 	if len(candidateCharacters) == 0 {
 		payload["generationTask"] = "initialCharacterExtraction"
@@ -1096,7 +1097,7 @@ func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, categor
 	}
 	var value string
 	var episodeIndex string
-	if json.Unmarshal(item[valueKey], &value) != nil || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil || !isDigitsString(episodeIndex) {
+	if json.Unmarshal(item[valueKey], &value) != nil || strings.TrimSpace(value) == "" || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil || !isDigitsString(episodeIndex) {
 		return extractionTermContractError()
 	}
 	if category {

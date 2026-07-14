@@ -130,12 +130,16 @@ func TestGenerateOpenRouterBatchRetriesOutOfRangeMergeConfidence(t *testing.T) {
 	}
 }
 
-func TestGenerateOpenRouterBatchRetriesNullRequiredScalars(t *testing.T) {
+func TestGenerateOpenRouterBatchRetriesInvalidRequiredScalars(t *testing.T) {
 	invalidResponses := map[string]string{
-		"merge confidence":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char-a","targetCharacterId":"char-b","confidence":null,"reason":"同一人物"}],"unresolvedMentions":[],"terms":[]}`,
-		"character history":  `{"processedUpToEpisodeIndex":"ep1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"ep1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"ep1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":null,"episodeIndex":"ep1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
-		"unresolved mention": `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":null,"episodeIndex":"ep1","reason":"候補不明"}],"terms":[]}`,
-		"term description":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"ep1"},"descriptionHistory":[{"text":null,"episodeIndex":"ep1"}]}]}`,
+		"null merge confidence":    `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char-a","targetCharacterId":"char-b","confidence":null,"reason":"同一人物"}],"unresolvedMentions":[],"terms":[]}`,
+		"null character history":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"ep1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"ep1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":null,"episodeIndex":"ep1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		"null unresolved mention":  `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":null,"episodeIndex":"ep1","reason":"候補不明"}],"terms":[]}`,
+		"null term description":    `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"ep1"},"descriptionHistory":[{"text":null,"episodeIndex":"ep1"}]}]}`,
+		"blank merge source":       `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"   ","targetCharacterId":"char-b","confidence":0.95,"reason":"同一人物"}],"unresolvedMentions":[],"terms":[]}`,
+		"blank character history":  `{"processedUpToEpisodeIndex":"ep1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"ep1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"ep1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"   ","episodeIndex":"ep1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		"blank unresolved mention": `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":"   ","episodeIndex":"ep1","reason":"候補不明"}],"terms":[]}`,
+		"blank term description":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"ep1"},"descriptionHistory":[{"text":"   ","episodeIndex":"ep1"}]}]}`,
 	}
 	valid := `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`
 
@@ -149,10 +153,10 @@ func TestGenerateOpenRouterBatchRetriesNullRequiredScalars(t *testing.T) {
 
 			result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
 			if err != nil {
-				t.Fatalf("null scalar should be rejected and recovered by retry: %v", err)
+				t.Fatalf("invalid scalar should be rejected and recovered by retry: %v", err)
 			}
 			if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
-				t.Fatalf("null scalar should consume two attempts: %+v", result.Usage)
+				t.Fatalf("invalid scalar should consume two attempts: %+v", result.Usage)
 			}
 		})
 	}
@@ -334,7 +338,7 @@ func TestExtractionResponseValidationRejectsUnusableVariants(t *testing.T) {
 	if err := validateExtractionCharacterItem(json.RawMessage(`{}`), false); err == nil {
 		t.Fatal("missing character fields should be rejected")
 	}
-	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`, `{"text":null,"episodeIndex":"4"}`} {
+	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`, `{"text":null,"episodeIndex":"4"}`, `{"text":"   ","episodeIndex":"4"}`} {
 		if err := validateExtractionVersionObject(json.RawMessage(raw)); err == nil {
 			t.Fatalf("invalid version should be rejected: %s", raw)
 		}
@@ -353,6 +357,20 @@ func TestExtractionResponseValidationRejectsUnusableVariants(t *testing.T) {
 		if err := validateExtractionSimpleObject(encoded, []string{"mention", "episodeIndex", "reason"}); err == nil {
 			t.Fatalf("null %s should be rejected", field)
 		}
+	}
+	for name, test := range map[string]struct {
+		raw      string
+		required []string
+	}{
+		"merge source": {raw: `{"sourceCharacterId":"   ","targetCharacterId":"char-b","confidence":0.9,"reason":""}`, required: []string{"sourceCharacterId", "targetCharacterId", "confidence", "reason"}},
+		"merge target": {raw: `{"sourceCharacterId":"char-a","targetCharacterId":"","confidence":0.9,"reason":""}`, required: []string{"sourceCharacterId", "targetCharacterId", "confidence", "reason"}},
+		"mention":      {raw: `{"mention":"   ","episodeIndex":"4","reason":""}`, required: []string{"mention", "episodeIndex", "reason"}},
+	} {
+		t.Run("blank "+name, func(t *testing.T) {
+			if err := validateExtractionSimpleObject(json.RawMessage(test.raw), test.required); err == nil {
+				t.Fatalf("blank %s should be rejected", name)
+			}
+		})
 	}
 }
 
