@@ -101,6 +101,111 @@ func TestGenerateOpenRouterBatchNormalizesNumericEpisodeIndexesWithoutPrecisionL
 	}
 }
 
+func TestGenerateOpenRouterBatchUsesServerBatchFrontierForProcessedEpisodeIndex(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t,
+		`{"processedUpToEpisodeIndex":"episode 4","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
+
+	if _, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch); err != nil {
+		t.Fatalf("processed frontier should come from the server batch: %v", err)
+	}
+}
+
+func TestGenerateOpenRouterBatchNormalizesFallbackCharacterShape(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(t,
+		`{"processedUpToEpisodeIndex":"episode 4","newCharacters":[{"temporaryId":"person-1","fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":null,"aliases":["合成人物"],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":["合成説明"]},{"temporaryId":"unnamed-person","fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":null,"aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":["名前のない人物"]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"name":"合成用語","reading":"ごうせいようご","category":"organization","description":"合成説明"}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
+	if err != nil {
+		t.Fatalf("fallback character shape should be normalized: %v", err)
+	}
+	if len(result.Delta.NewCharacters) != 1 || result.Delta.NewCharacters[0].CanonicalName != "合成人物" || result.Delta.NewCharacters[0].FirstAppearanceEpisodeIndex != "4" || len(result.Delta.NewCharacters[0].SummaryHistory) != 1 {
+		t.Fatalf("unexpected normalized character: %+v", result.Delta.NewCharacters)
+	}
+	if len(result.Delta.Terms) != 1 || result.Delta.Terms[0].Term != "合成用語" || result.Delta.Terms[0].DescriptionHistory[0].EpisodeIndex != "4" {
+		t.Fatalf("unexpected normalized term: %+v", result.Delta.Terms)
+	}
+}
+
+func TestNormalizeExtractionEpisodeIndexScalarsCoversFallbackVariants(t *testing.T) {
+	raw := []byte(`{
+		"processedUpToEpisodeIndex":null,
+		"newCharacters":[null,{"canonicalName":"合成人物","firstAppearanceEpisodeIndex":"3","extra":"ignored"}],
+		"characterUpdates":[{"characterId":"char-1","extra":"ignored"}],
+		"terms":[null,{"term":"","description":"ignored"},{"term":"既存形式","category":{"value":"place","episodeIndex":"3"},"descriptionHistory":[{"text":"説明","episodeIndex":"3"}]},{"term":"説明なし","reading":{"text":"せつめいなし"}}]
+	}`)
+
+	normalized, err := normalizeExtractionEpisodeIndexScalars(raw, "4")
+	if err != nil {
+		t.Fatalf("normalize fallback variants: %v", err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(normalized, &root); err != nil {
+		t.Fatalf("decode normalized fallback variants: %v", err)
+	}
+	if root["processedUpToEpisodeIndex"] != "4" {
+		t.Fatalf("unexpected processed frontier: %+v", root)
+	}
+	newCharacters := root["newCharacters"].([]any)
+	if len(newCharacters) != 1 {
+		t.Fatalf("non-object character should be removed: %+v", newCharacters)
+	}
+	newCharacter := newCharacters[0].(map[string]any)
+	if newCharacter["firstAppearanceEpisodeIndex"] != "3" || newCharacter["extra"] != nil {
+		t.Fatalf("unexpected normalized new character: %+v", newCharacter)
+	}
+	updates := root["characterUpdates"].([]any)
+	update := updates[0].(map[string]any)
+	if update["canonicalName"] != nil || update["firstAppearanceEpisodeIndex"] != nil || update["extra"] != nil {
+		t.Fatalf("unexpected normalized character update: %+v", update)
+	}
+	normalizedTerms := root["terms"].([]any)
+	if len(normalizedTerms) != 1 {
+		t.Fatalf("invalid terms should be removed: %+v", normalizedTerms)
+	}
+	category := normalizedTerms[0].(map[string]any)["category"].(map[string]any)
+	if category["value"] != "place" || category["episodeIndex"] != "3" {
+		t.Fatalf("existing term version should be preserved: %+v", normalizedTerms[0])
+	}
+
+	if _, err := normalizeExtractionEpisodeIndexScalars([]byte(`[]`), "4"); err != nil {
+		t.Fatalf("non-object JSON should remain valid: %v", err)
+	}
+}
+
+func TestExtractionFallbackNormalizerRejectsUnusableVariants(t *testing.T) {
+	if _, err := normalizeExtractionEpisodeIndexScalars([]byte(`not-json`), "4"); err == nil {
+		t.Fatal("invalid JSON should be rejected")
+	}
+	if err := validateExtractionCharacterItem(json.RawMessage(`{}`), false); err == nil {
+		t.Fatal("missing character fields should be rejected")
+	}
+	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`} {
+		if err := validateExtractionVersionObject(json.RawMessage(raw)); err == nil {
+			t.Fatalf("invalid version should be rejected: %s", raw)
+		}
+	}
+	for _, value := range []any{"", map[string]any{"text": ""}, true} {
+		if _, ok := extractionTextVersionFallback(value, "4"); ok {
+			t.Fatalf("unusable text version should be rejected: %+v", value)
+		}
+	}
+	for _, value := range []any{"", map[string]any{"value": ""}, true} {
+		if _, ok := extractionTermVersionFallback(value, "value", "4"); ok {
+			t.Fatalf("unusable term version should be rejected: %+v", value)
+		}
+	}
+}
+
 func TestGenerateOpenRouterBatchRetriesInvalidTermEpisodeIndex(t *testing.T) {
 	invalid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"unknown"}]}]}`
 	valid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"20"}]}]}`

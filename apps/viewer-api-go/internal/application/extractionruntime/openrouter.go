@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,7 +117,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,
 	}, prepared.Messages, func(result ai.ChatResult) error {
-		normalizedAnswer, scalarErr := normalizeExtractionEpisodeIndexScalars([]byte(result.Answer))
+		normalizedAnswer, scalarErr := normalizeExtractionEpisodeIndexScalars([]byte(result.Answer), fallbackEpisodeIndex)
 		if scalarErr != nil {
 			return scalarErr
 		}
@@ -165,7 +166,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
 }
 
-func normalizeExtractionEpisodeIndexScalars(raw []byte) ([]byte, error) {
+func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeIndex string) ([]byte, error) {
 	if !json.Valid(raw) {
 		return nil, errors.New("OpenRouter response was not valid JSON.")
 	}
@@ -176,7 +177,228 @@ func normalizeExtractionEpisodeIndexScalars(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	normalizeExtractionEpisodeIndexValue(decoded)
+	if root, ok := decoded.(map[string]any); ok && isDigitsEpisodeIndex(processedUpToEpisodeIndex) {
+		// The processed frontier is batch metadata already known by the server,
+		// not an extracted fact. In json_object fallback mode some models omit it
+		// or render it as prose, so do not make successful entity extraction
+		// depend on the model echoing this value correctly.
+		processedUpToEpisodeIndex = strings.TrimSpace(processedUpToEpisodeIndex)
+		root["processedUpToEpisodeIndex"] = processedUpToEpisodeIndex
+		normalizeExtractionCharacterObjects(root, processedUpToEpisodeIndex)
+		normalizeExtractionTermObjects(root, processedUpToEpisodeIndex)
+	}
 	return json.Marshal(decoded)
+}
+
+func normalizeExtractionTermObjects(root map[string]any, episodeIndex string) {
+	items, ok := root["terms"].([]any)
+	if !ok {
+		return
+	}
+	normalizedItems := make([]any, 0, len(items))
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := item["term"]; !exists {
+			item["term"] = item["name"]
+		}
+		term, _ := item["term"].(string)
+		if strings.TrimSpace(term) == "" {
+			continue
+		}
+		if _, exists := item["reading"]; !exists {
+			item["reading"] = nil
+		}
+		if item["reading"] != nil {
+			if reading, valid := extractionTermVersionFallback(item["reading"], "text", episodeIndex); valid {
+				item["reading"] = reading
+			}
+		}
+		category, validCategory := extractionTermVersionFallback(item["category"], "value", episodeIndex)
+		if !validCategory {
+			category = map[string]any{"value": string(terms.CategoryOther), "episodeIndex": episodeIndex}
+		}
+		category["value"] = string(terms.NormalizeCategory(strings.TrimSpace(category["value"].(string))))
+		item["category"] = category
+
+		descriptions, _ := item["descriptionHistory"].([]any)
+		if len(descriptions) == 0 {
+			if description, exists := item["description"]; exists {
+				descriptions = []any{description}
+			}
+		}
+		normalizedDescriptions := make([]any, 0, len(descriptions))
+		for _, description := range descriptions {
+			if normalized, valid := extractionTermVersionFallback(description, "text", episodeIndex); valid {
+				normalizedDescriptions = append(normalizedDescriptions, normalized)
+			}
+		}
+		if len(normalizedDescriptions) == 0 {
+			continue
+		}
+		item["descriptionHistory"] = normalizedDescriptions
+		for field := range item {
+			switch field {
+			case "term", "reading", "category", "descriptionHistory":
+			default:
+				delete(item, field)
+			}
+		}
+		normalizedItems = append(normalizedItems, item)
+	}
+	root["terms"] = normalizedItems
+}
+
+func extractionTermVersionFallback(value any, valueKey string, episodeIndex string) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil, false
+		}
+		return map[string]any{valueKey: typed, "episodeIndex": episodeIndex}, true
+	case map[string]any:
+		text, _ := typed[valueKey].(string)
+		if strings.TrimSpace(text) == "" {
+			return nil, false
+		}
+		versionEpisodeIndex, _ := typed["episodeIndex"].(string)
+		if strings.TrimSpace(versionEpisodeIndex) == "" {
+			versionEpisodeIndex = episodeIndex
+		}
+		return map[string]any{valueKey: text, "episodeIndex": versionEpisodeIndex}, true
+	default:
+		return nil, false
+	}
+}
+
+func normalizeExtractionCharacterObjects(root map[string]any, processedUpToEpisodeIndex string) {
+	fields := []string{"canonicalName", "fullName", "fullNameHistory", "gender", "genderHistory", "firstAppearanceEpisodeIndex", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"}
+	for _, collection := range []string{"newCharacters", "characterUpdates"} {
+		items, ok := root[collection].([]any)
+		if !ok {
+			continue
+		}
+		update := collection == "characterUpdates"
+		allowed := make(map[string]bool, len(fields)+1)
+		for _, field := range fields {
+			allowed[field] = true
+		}
+		if update {
+			allowed["characterId"] = true
+		}
+		normalizedItems := make([]any, 0, len(items))
+		for _, rawItem := range items {
+			item, ok := rawItem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if !update {
+				if _, exists := item["canonicalName"]; !exists {
+					if canonicalName, found := extractionCanonicalNameFallback(item, processedUpToEpisodeIndex); found {
+						item["canonicalName"] = canonicalName
+					}
+				}
+			} else {
+				if _, exists := item["canonicalName"]; !exists {
+					item["canonicalName"] = nil
+				}
+				if _, exists := item["firstAppearanceEpisodeIndex"]; !exists {
+					item["firstAppearanceEpisodeIndex"] = nil
+				}
+			}
+			for _, field := range []string{"fullName", "gender"} {
+				if _, exists := item[field]; !exists {
+					item[field] = nil
+				}
+			}
+			for _, field := range []string{"canonicalName", "fullName", "gender"} {
+				if normalized, ok := extractionTextVersionFallback(item[field], processedUpToEpisodeIndex); ok {
+					item[field] = normalized
+				}
+			}
+			if !update {
+				firstAppearance, _ := item["firstAppearanceEpisodeIndex"].(string)
+				if !isDigitsEpisodeIndex(firstAppearance) {
+					firstAppearance = extractionTextVersionEpisodeIndex(item["canonicalName"])
+					if !isDigitsEpisodeIndex(firstAppearance) {
+						firstAppearance = processedUpToEpisodeIndex
+					}
+					item["firstAppearanceEpisodeIndex"] = firstAppearance
+				}
+			}
+			for _, field := range []string{"fullNameHistory", "genderHistory", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"} {
+				if _, exists := item[field]; !exists {
+					item[field] = []any{}
+				}
+				if versions, ok := item[field].([]any); ok {
+					normalized := make([]any, 0, len(versions))
+					for _, version := range versions {
+						if normalizedVersion, valid := extractionTextVersionFallback(version, processedUpToEpisodeIndex); valid {
+							normalized = append(normalized, normalizedVersion)
+						} else {
+							normalized = append(normalized, version)
+						}
+					}
+					item[field] = normalized
+				}
+			}
+			for field := range item {
+				if !allowed[field] {
+					delete(item, field)
+				}
+			}
+			if !update {
+				if _, valid := extractionTextVersionFallback(item["canonicalName"], processedUpToEpisodeIndex); !valid {
+					continue
+				}
+			}
+			normalizedItems = append(normalizedItems, item)
+		}
+		root[collection] = normalizedItems
+	}
+}
+
+func extractionCanonicalNameFallback(item map[string]any, episodeIndex string) (map[string]any, bool) {
+	if version, ok := extractionTextVersionFallback(item["fullName"], episodeIndex); ok {
+		return version, true
+	}
+	aliases, _ := item["aliases"].([]any)
+	for _, alias := range aliases {
+		if version, ok := extractionTextVersionFallback(alias, episodeIndex); ok {
+			return version, true
+		}
+	}
+	return nil, false
+}
+
+func extractionTextVersionFallback(value any, episodeIndex string) (map[string]any, bool) {
+	switch typed := value.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil, false
+		}
+		return map[string]any{"text": typed, "episodeIndex": episodeIndex}, true
+	case map[string]any:
+		text, _ := typed["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			return nil, false
+		}
+		versionEpisodeIndex, _ := typed["episodeIndex"].(string)
+		if strings.TrimSpace(versionEpisodeIndex) == "" {
+			versionEpisodeIndex = episodeIndex
+		}
+		return map[string]any{"text": text, "episodeIndex": versionEpisodeIndex}, true
+	default:
+		return nil, false
+	}
+}
+
+func extractionTextVersionEpisodeIndex(value any) string {
+	version, _ := value.(map[string]any)
+	episodeIndex, _ := version["episodeIndex"].(string)
+	return strings.TrimSpace(episodeIndex)
 }
 
 func normalizeExtractionEpisodeIndexValue(value any) {
@@ -261,7 +483,24 @@ func validateExtractionCharacterItem(raw json.RawMessage, update bool) error {
 		required = append(required, "characterId")
 	}
 	if len(item) != len(required) {
-		return errors.New("モデル出力の人物項目が抽出契約と一致しません")
+		requiredSet := make(map[string]bool, len(required))
+		for _, field := range required {
+			requiredSet[field] = true
+		}
+		missing := make([]string, 0)
+		for _, field := range required {
+			if item[field] == nil {
+				missing = append(missing, field)
+			}
+		}
+		extra := make([]string, 0)
+		for field := range item {
+			if !requiredSet[field] {
+				extra = append(extra, field)
+			}
+		}
+		sort.Strings(extra)
+		return fmt.Errorf("モデル出力の人物項目が抽出契約と一致しません (不足: %s, 契約外: %s)", strings.Join(missing, ","), strings.Join(extra, ","))
 	}
 	for _, field := range required {
 		if item[field] == nil {
@@ -308,8 +547,24 @@ func validateExtractionCharacterItem(raw json.RawMessage, update bool) error {
 
 func validateExtractionVersionObject(raw json.RawMessage) error {
 	var version map[string]json.RawMessage
-	if json.Unmarshal(raw, &version) != nil || len(version) != 2 || version["text"] == nil || version["episodeIndex"] == nil {
-		return errors.New("モデル出力の人物履歴項目が不正です")
+	if json.Unmarshal(raw, &version) != nil {
+		return errors.New("モデル出力の人物履歴項目がobjectではありません")
+	}
+	if len(version) != 2 || version["text"] == nil || version["episodeIndex"] == nil {
+		missing := make([]string, 0, 2)
+		for _, field := range []string{"text", "episodeIndex"} {
+			if version[field] == nil {
+				missing = append(missing, field)
+			}
+		}
+		extra := make([]string, 0)
+		for field := range version {
+			if field != "text" && field != "episodeIndex" {
+				extra = append(extra, field)
+			}
+		}
+		sort.Strings(extra)
+		return fmt.Errorf("モデル出力の人物履歴項目が不正です (不足: %s, 契約外: %s)", strings.Join(missing, ","), strings.Join(extra, ","))
 	}
 	var text string
 	var episodeIndex string
