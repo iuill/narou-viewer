@@ -70,6 +70,11 @@ func TestExtractionOpenRouterResponseFormatRequiresStrictTerms(t *testing.T) {
 		t.Fatalf("root response schema must require terms: %+v", required)
 	}
 	properties := schema["properties"].(map[string]any)
+	mergeProposal := properties["mergeProposals"].(map[string]any)["items"].(map[string]any)
+	confidence := mergeProposal["properties"].(map[string]any)["confidence"].(map[string]any)
+	if confidence["minimum"] != 0 || confidence["maximum"] != 1 {
+		t.Fatalf("merge proposal confidence must be constrained to a probability: %+v", confidence)
+	}
 	termItems := properties["terms"].(map[string]any)["items"].(map[string]any)
 	termProperties := termItems["properties"].(map[string]any)
 	reading := termProperties["reading"].(map[string]any)
@@ -84,6 +89,23 @@ func TestExtractionOpenRouterResponseFormatRequiresStrictTerms(t *testing.T) {
 	categoryValue := category["properties"].(map[string]any)["value"].(map[string]any)
 	if values := categoryValue["enum"].([]any); len(values) != 7 || values[6] != "other" {
 		t.Fatalf("term category enum is incomplete: %+v", values)
+	}
+}
+
+func TestExtractionOpenRouterResponseFormatRestrictsEpisodeIndexesToCurrentBatch(t *testing.T) {
+	first := "16818093084122790426"
+	second := "16818093084191348892"
+	format := ExtractionOpenRouterResponseFormat(first, second, first, "")
+	jsonSchema := format["json_schema"].(map[string]any)
+	schema := jsonSchema["schema"].(map[string]any)
+	episodeIndexSchema := schema["$defs"].(map[string]any)["episodeIndex"].(map[string]any)
+	values := episodeIndexSchema["enum"].([]any)
+	if len(values) != 2 || values[0] != first || values[1] != second {
+		t.Fatalf("episode index schema must enumerate the current batch without duplicates: %+v", episodeIndexSchema)
+	}
+	processed := schema["properties"].(map[string]any)["processedUpToEpisodeIndex"].(map[string]any)
+	if processed["$ref"] != "#/$defs/episodeIndex" {
+		t.Fatalf("processed episode index must use the current-batch definition: %+v", processed)
 	}
 }
 

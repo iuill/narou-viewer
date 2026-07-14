@@ -88,6 +88,17 @@ type OpenRouterModelInfo struct {
 	ID                  string
 	ContextLength       int
 	MaxCompletionTokens int
+	SupportedParameters []string
+}
+
+func (info OpenRouterModelInfo) SupportsParameter(name string) bool {
+	name = strings.TrimSpace(name)
+	for _, parameter := range info.SupportedParameters {
+		if strings.TrimSpace(parameter) == name {
+			return true
+		}
+	}
+	return false
 }
 
 type openRouterModelInfoCacheEntry struct {
@@ -102,6 +113,18 @@ type openRouterModelsHTTPError struct {
 
 func (e openRouterModelsHTTPError) Error() string {
 	return fmt.Sprintf("OpenRouter models endpoint responded with %d", e.statusCode)
+}
+
+type openRouterHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e openRouterHTTPError) Error() string {
+	if strings.TrimSpace(e.message) != "" {
+		return fmt.Sprintf("OpenRouter responded with %d: %s", e.statusCode, e.message)
+	}
+	return fmt.Sprintf("OpenRouter responded with %d", e.statusCode)
 }
 
 var openRouterModelInfoCache sync.Map
@@ -136,11 +159,12 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 	if err != nil {
 		return ChatResult{}, err
 	}
-	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || reasoningRequest.RequireParameters {
+	requireParameters := reasoningRequest.RequireParameters || openRouterResponseFormatRequiresParameters(config.ResponseFormat)
+	if len(config.ProviderOrder) > 0 || !config.AllowFallbacks || requireParameters {
 		body["provider"] = map[string]any{
 			"order":              config.ProviderOrder,
 			"allow_fallbacks":    config.AllowFallbacks,
-			"require_parameters": reasoningRequest.RequireParameters,
+			"require_parameters": requireParameters,
 		}
 	}
 	raw, err := json.Marshal(body)
@@ -155,6 +179,16 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		accumulated.InputTokens += result.InputTokens
 		accumulated.OutputTokens += result.OutputTokens
 		accumulated.TotalTokens += result.TotalTokens
+		if err != nil && openRouterResponseFormatRequiresParameters(config.ResponseFormat) && isOpenRouterUnsupportedParameterRoutingError(err) {
+			fallbackConfig := config
+			fallbackConfig.ResponseFormat = map[string]any{"type": "json_object"}
+			fallbackMessages := openRouterJSONSchemaFallbackMessages(messages, config.ResponseFormat)
+			fallbackResult, fallbackErr := GenerateOpenRouterChat(ctx, fallbackConfig, fallbackMessages)
+			fallbackResult.InputTokens += accumulated.InputTokens
+			fallbackResult.OutputTokens += accumulated.OutputTokens
+			fallbackResult.TotalTokens += accumulated.TotalTokens
+			return fallbackResult, fallbackErr
+		}
 		if !retry || err == nil {
 			result.InputTokens = accumulated.InputTokens
 			result.OutputTokens = accumulated.OutputTokens
@@ -172,6 +206,43 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		}
 	}
 	return accumulated, lastErr
+}
+
+func openRouterJSONSchemaFallbackMessages(messages []ChatMessage, responseFormat any) []ChatMessage {
+	format, ok := responseFormat.(map[string]any)
+	if !ok {
+		return messages
+	}
+	jsonSchema, ok := format["json_schema"].(map[string]any)
+	if !ok || jsonSchema["schema"] == nil {
+		return messages
+	}
+	schema, err := json.Marshal(jsonSchema["schema"])
+	if err != nil {
+		return messages
+	}
+	result := append([]ChatMessage{}, messages...)
+	result = append(result, ChatMessage{
+		Role:    "user",
+		Content: "このリクエストではproviderがJSON Schemaを直接強制できません。次のschemaを厳密に満たすJSON objectだけを返してください。必須fieldを省略せず、空の配列も[]として出力し、schema外のfieldを追加しないでください。schema: " + string(schema),
+	})
+	return result
+}
+
+func openRouterResponseFormatRequiresParameters(responseFormat any) bool {
+	format, ok := responseFormat.(map[string]any)
+	if !ok {
+		return false
+	}
+	responseType, _ := format["type"].(string)
+	return strings.TrimSpace(responseType) == "json_schema"
+}
+
+func isOpenRouterUnsupportedParameterRoutingError(err error) bool {
+	var httpErr openRouterHTTPError
+	return errors.As(err, &httpErr) &&
+		httpErr.statusCode == http.StatusNotFound &&
+		strings.Contains(strings.ToLower(httpErr.message), "no endpoints found that can handle the requested parameters")
 }
 
 func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, messages []ChatMessage, tools []ToolDefinition) (ChatResult, error) {
@@ -312,7 +383,7 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
+			return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode}
 		}
 		return ChatResult{}, false, err
 	}
@@ -323,9 +394,9 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
-			return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d: %s", response.StatusCode, decoded.Error.Message)
+			return result, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode, message: decoded.Error.Message}
 		}
-		return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
+		return result, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode}
 	}
 	if len(decoded.Choices) == 0 || (strings.TrimSpace(decoded.Choices[0].Message.Content) == "" && len(decoded.Choices[0].Message.ToolCalls) == 0) {
 		return result, false, ErrOpenRouterEmptyResponse
@@ -518,10 +589,11 @@ func fetchOpenRouterModelInfo(ctx context.Context, apiKey string, modelID string
 	}
 	var decoded struct {
 		Data []struct {
-			ID            string `json:"id"`
-			CanonicalSlug string `json:"canonical_slug"`
-			ContextLength int    `json:"context_length"`
-			TopProvider   struct {
+			ID                  string   `json:"id"`
+			CanonicalSlug       string   `json:"canonical_slug"`
+			ContextLength       int      `json:"context_length"`
+			SupportedParameters []string `json:"supported_parameters"`
+			TopProvider         struct {
 				ContextLength       int `json:"context_length"`
 				MaxCompletionTokens int `json:"max_completion_tokens"`
 			} `json:"top_provider"`
@@ -550,6 +622,7 @@ func fetchOpenRouterModelInfo(ctx context.Context, apiKey string, modelID string
 			ID:                  model.ID,
 			ContextLength:       contextLength,
 			MaxCompletionTokens: maxCompletionTokens,
+			SupportedParameters: append([]string{}, model.SupportedParameters...),
 		}, true, nil
 	}
 	return OpenRouterModelInfo{}, false, nil

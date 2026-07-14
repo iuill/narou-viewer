@@ -2907,7 +2907,7 @@ func TestAIGenerationEnabledRoutesUseSettingsEndpointAndFakeOpenRouter(t *testin
 		promptTokens := 13
 		completionTokens := 5
 		if strings.Contains(string(raw), `"response_format"`) {
-			content = `{"terms":[],"characters":[{"canonicalName":"ミラ","summary":"mock OpenRouter summary"}]}`
+			content = `{"processedUpToEpisodeIndex":"ep1","newCharacters":[{"canonicalName":{"text":"ミラ","episodeIndex":"ep1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"ep1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"mock OpenRouter summary","episodeIndex":"ep1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`
 			promptTokens = 29
 			completionTokens = 11
 		}
@@ -3165,10 +3165,10 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 		if r.Header.Get("authorization") != "Bearer sk-summary-secret" {
 			t.Fatalf("unexpected authorization: %q", r.Header.Get("authorization"))
 		}
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"OpenRouter summary\"}]}"}}],
-			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("アリス", "OpenRouter summary")}}},
+			"usage":   map[string]any{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -3244,10 +3244,10 @@ func TestPlaygroundExtractionUsesConfiguredOpenRouterProvider(t *testing.T) {
 func TestGenerateAndSaveExtractionPreservesOpenRouterTokenUsage(t *testing.T) {
 	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "test-passphrase")
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"OpenRouter summary\"}]}"}}],
-			"usage": {"prompt_tokens": 21, "completion_tokens": 8, "total_tokens": 29}
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("アリス", "OpenRouter summary")}}},
+			"usage":   map[string]any{"prompt_tokens": 21, "completion_tokens": 8, "total_tokens": 29},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -3352,7 +3352,7 @@ func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusServiceUnavailable)
-	if !strings.Contains(response["error"].(string), "OpenRouter response did not match the expected extraction schema.") {
+	if !strings.Contains(response["error"].(string), "モデル出力のrootに契約外field notCharacters があります") {
 		t.Fatalf("unexpected schema mismatch response: %+v", response)
 	}
 	server := handler.(*Server)
@@ -3361,7 +3361,7 @@ func TestPlaygroundExtractionReportsOpenRouterSchemaMismatch(t *testing.T) {
 		t.Fatalf("failed playground preview usage run should be saved: ok=%v usage=%+v err=%v", ok, usage, err)
 	}
 	run := usage.Runs[0]
-	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "OpenRouter response did not match the expected extraction schema.") {
+	if run.Status != "failed" || run.ErrorMessage == nil || !strings.Contains(*run.ErrorMessage, "モデル出力のrootに契約外field notCharacters があります") {
 		t.Fatalf("failed playground preview usage should preserve the generation error: %+v", run)
 	}
 }
@@ -3395,9 +3395,9 @@ func TestPlaygroundExtractionUsesTransientOverrides(t *testing.T) {
 		if messages[0].(map[string]any)["content"] != "一時システムプロンプト" {
 			t.Fatalf("systemPromptOverride should be forwarded: %+v", messages)
 		}
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"fullName\":null,\"gender\":null,\"appearance\":null,\"personality\":null,\"summary\":\"一時設定で生成\"}]}"}}]
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("セシル", "一時設定で生成")}}},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -3465,10 +3465,10 @@ func TestPlaygroundExtractionStreamUsesTransientPromptPreviewAndBatchProgress(t 
 		if body["reasoning"].(map[string]any)["effort"] != "high" || body["provider"].(map[string]any)["require_parameters"] != true {
 			t.Fatalf("environment reasoning should require provider support: %+v", body)
 		}
-		_, _ = w.Write([]byte(`{
-			"choices": [{"finish_reason": "stop", "message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"セシル\",\"summary\":\"stream生成\"}]}"}}],
-			"usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"finish_reason": "stop", "message": map[string]any{"content": testExtractionResponseContent("セシル", "stream生成")}}},
+			"usage":   map[string]any{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -3965,7 +3965,7 @@ func TestNextExtractionRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *tes
 		EpisodeIndexes: []string{"1", "2"},
 		Chunks: []extractionChunk{
 			{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("前半", 80)},
-			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 80)},
+			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 1000)},
 		},
 	}
 	single := extractionRuntimeBatch(batch, []extractionChunk{batch.Chunks[0]})
@@ -3975,7 +3975,7 @@ func TestNextExtractionRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *tes
 		{Role: "user", Content: userPrompt},
 	}, nil, extractionOpenRouterResponseFormat())
 	modelID := "openrouter/next-runtime-context"
-	contextLength := singleTokens + extractionMinimumCompletionTokens + 320
+	contextLength := singleTokens + extractionMinimumCompletionTokens + 1000
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": [{
@@ -4189,7 +4189,7 @@ func TestOpenRouterExtractionUsesModelMaxCompletionTokens(t *testing.T) {
 				t.Fatalf("character summary should use model max completion tokens: %+v", body)
 			}
 			_, _ = w.Write([]byte(`{
-				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"人物\"}]}"}}],
+				"choices": [{"message": {"content": "{\"processedUpToEpisodeIndex\":\"1\",\"newCharacters\":[{\"canonicalName\":{\"text\":\"アリス\",\"episodeIndex\":\"1\"},\"fullName\":null,\"fullNameHistory\":[],\"gender\":null,\"genderHistory\":[],\"firstAppearanceEpisodeIndex\":\"1\",\"aliases\":[],\"appearanceHistory\":[],\"personalityHistory\":[],\"summaryHistory\":[{\"text\":\"人物\",\"episodeIndex\":\"1\"}]}],\"characterUpdates\":[],\"mergeProposals\":[],\"unresolvedMentions\":[],\"terms\":[]}"}}],
 				"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
 			}`))
 		default:
@@ -4247,7 +4247,7 @@ func TestOpenRouterExtractionUsesDeltaCandidatesAndStableIDMerges(t *testing.T) 
 				t.Fatalf("delta prompt should not send full knownCharacters payload: %+v", prompt)
 			}
 			episodes := prompt["episodes"].([]any)
-			if len(episodes) != 1 || episodes[0].(map[string]any)["episodeIndex"] != "2" {
+			if len(episodes) != 1 || episodes[0].(map[string]any)["episodeIndex"] != "ep1" {
 				t.Fatalf("prompt should contain only the requested runtime episode: %+v", episodes)
 			}
 			candidates := prompt["candidateCharacters"].([]any)
@@ -4428,10 +4428,13 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 			t.Fatalf("decode prompt JSON: %v", err)
 		}
 		promptEpisodes := prompt["episodes"].([]any)
-		episodeIndex := promptEpisodes[0].(map[string]any)["episodeIndex"].(string)
-		if episodeIndex == "1" {
+		episodeTitle := promptEpisodes[0].(map[string]any)["title"].(string)
+		if episodeTitle == "一話" {
 			requestedEpisodes = append(requestedEpisodes, "1")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("アリス", "一話の人物")}}},
+				"usage":   map[string]any{"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+			})
 			return
 		}
 		requestedEpisodes = append(requestedEpisodes, "2")
@@ -4440,7 +4443,10 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"temporary failure"}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"ボブ\",\"summary\":\"二話の人物\"}]}"}}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("ボブ", "二話の人物")}}},
+			"usage":   map[string]any{"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -4540,10 +4546,10 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 	requests := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新モデル\",\"summary\":\"新しい設定で生成\"}]}"}}],
-			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("新モデル", "新しい設定で生成")}}},
+			"usage":   map[string]any{"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -4588,10 +4594,10 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 	providerCalls := 0
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalls++
-		_, _ = w.Write([]byte(`{
-			"choices": [{"message": {"content": "{\"terms\":[],\"characters\":[{\"canonicalName\":\"新本文\",\"summary\":\"現在の本文で生成\"}]}"}}],
-			"usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14}
-		}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": testExtractionResponseContent("新本文", "現在の本文で生成")}}},
+			"usage":   map[string]any{"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
+		})
 	}))
 	defer provider.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", provider.URL)
@@ -5565,6 +5571,30 @@ func waitForCharacterJobStatus(t *testing.T, handler http.Handler, novelID strin
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func testExtractionResponseContent(name string, summary string) string {
+	payload := map[string]any{
+		"processedUpToEpisodeIndex": "ep1",
+		"newCharacters": []any{map[string]any{
+			"canonicalName":               map[string]any{"text": name, "episodeIndex": "ep1"},
+			"fullName":                    nil,
+			"fullNameHistory":             []any{},
+			"gender":                      nil,
+			"genderHistory":               []any{},
+			"firstAppearanceEpisodeIndex": "ep1",
+			"aliases":                     []any{},
+			"appearanceHistory":           []any{},
+			"personalityHistory":          []any{},
+			"summaryHistory":              []any{map[string]any{"text": summary, "episodeIndex": "ep1"}},
+		}},
+		"characterUpdates":   []any{},
+		"mergeProposals":     []any{},
+		"unresolvedMentions": []any{},
+		"terms":              []any{},
+	}
+	raw, _ := json.Marshal(payload)
+	return string(raw)
 }
 
 func testStringPtr(value string) *string {

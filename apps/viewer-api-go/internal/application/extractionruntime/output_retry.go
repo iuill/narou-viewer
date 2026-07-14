@@ -28,7 +28,14 @@ func generateOpenRouterChatWithOutputRetry(
 	var lastValidationErr error
 	reachedAttempts := 0
 	for attempt := 1; attempt <= extractionOutputAttempts; attempt++ {
-		result, err := ai.GenerateOpenRouterChat(ctx, config, messages)
+		requestMessages := messages
+		if lastValidationErr != nil {
+			requestMessages = append(append([]ai.ChatMessage{}, messages...), ai.ChatMessage{
+				Role:    "user",
+				Content: "直前の応答は抽出契約に適合しませんでした。元の指示とresponse formatに厳密に従って、JSON全体を最初から再生成してください。必須fieldと空配列を省略せず、episodeIndexは入力に記載された現在の抽出バッチの短い参照値だけを、そのまま使用してください。",
+			})
+		}
+		result, err := ai.GenerateOpenRouterChat(ctx, config, requestMessages)
 		reachedAttempts++
 		accumulated.Answer = result.Answer
 		accumulated.FinishReason = result.FinishReason
@@ -95,4 +102,92 @@ func validateRequiredJSONArrayItems(answer string, field string, requiredFields 
 		}
 	}
 	return nil
+}
+
+func parallelIdentityArrayResponseFormat(name string, field string, itemSchema map[string]any) map[string]any {
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   name,
+			"strict": true,
+			"schema": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []any{field},
+				"properties": map[string]any{
+					field: map[string]any{
+						"type":  "array",
+						"items": itemSchema,
+					},
+				},
+			},
+		},
+	}
+}
+
+func parallelIdentityClusterResponseFormat() map[string]any {
+	return parallelIdentityArrayResponseFormat("parallel_identity_clusters", "clusters", map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"localIds", "canonicalName", "confidence", "reason"},
+		"properties": map[string]any{
+			"localIds": map[string]any{
+				"type":     "array",
+				"minItems": 2,
+				"items":    map[string]any{"type": "string"},
+			},
+			"canonicalName": map[string]any{"type": "string"},
+			"confidence":    map[string]any{"type": "number", "minimum": 0, "maximum": 1},
+			"reason":        map[string]any{"type": "string"},
+		},
+	})
+}
+
+func parallelIdentityDiscoveryResponseFormat(allowedEpisodeIndexes ...string) map[string]any {
+	episodeIndexSchema := map[string]any{"type": "string", "pattern": "^\\d+$"}
+	episodeIndexValues := make([]any, 0, len(allowedEpisodeIndexes))
+	seenEpisodeIndexes := map[string]bool{}
+	for _, value := range allowedEpisodeIndexes {
+		value = strings.TrimSpace(value)
+		if value == "" || seenEpisodeIndexes[value] {
+			continue
+		}
+		seenEpisodeIndexes[value] = true
+		episodeIndexValues = append(episodeIndexValues, value)
+	}
+	if len(episodeIndexValues) > 0 {
+		episodeIndexSchema = map[string]any{"type": "string", "enum": episodeIndexValues}
+	}
+	return parallelIdentityArrayResponseFormat("parallel_identity_discovery", "characters", map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"name", "aliases", "episodeIndex", "reason"},
+		"properties": map[string]any{
+			"name": map[string]any{"type": "string"},
+			"aliases": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"episodeIndex": episodeIndexSchema,
+			"reason":       map[string]any{"type": "string"},
+		},
+	})
+}
+
+func parallelIdentityCorrectionResponseFormat() map[string]any {
+	return parallelIdentityArrayResponseFormat("parallel_identity_correction", "characters", map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"characterId", "canonicalName", "aliases", "keep", "reason"},
+		"properties": map[string]any{
+			"characterId":   map[string]any{"type": "string"},
+			"canonicalName": map[string]any{"type": "string"},
+			"aliases": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"keep":   map[string]any{"type": "boolean"},
+			"reason": map[string]any{"type": "string"},
+		},
+	})
 }

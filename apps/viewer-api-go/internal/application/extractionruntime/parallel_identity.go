@@ -533,7 +533,7 @@ func filterGeneratedUnresolvedAtBoundary(values []characters.GeneratedUnresolved
 func parallelIdentityCandidatesFromDeltaWithKnown(novelID string, requestIndex int, batch extractionBatch, delta extractionDelta, knownCharacters []characters.GeneratedCharacter) []parallelIdentityCandidate {
 	_ = novelID
 	knownByID := generatedCharacterMapByID(knownCharacters)
-	candidates := make([]parallelIdentityCandidate, 0, len(delta.LegacyCharacters)+len(delta.NewCharacters)+len(delta.CharacterUpdates))
+	candidates := make([]parallelIdentityCandidate, 0, len(delta.NewCharacters)+len(delta.CharacterUpdates))
 	appendCandidate := func(character characters.GeneratedCharacter, persistence characters.GeneratedCharacter) {
 		candidates = append(candidates, parallelIdentityCandidate{
 			LocalID:                 fmt.Sprintf("b%d-c%d", requestIndex+1, len(candidates)+1),
@@ -543,9 +543,6 @@ func parallelIdentityCandidatesFromDeltaWithKnown(novelID string, requestIndex i
 			PersistenceCharacter:    persistence,
 			HasPersistenceCharacter: true,
 		})
-	}
-	for _, character := range delta.LegacyCharacters {
-		appendCandidate(character, character)
 	}
 	for _, character := range delta.NewCharacters {
 		appendCandidate(character, character)
@@ -632,7 +629,7 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
+	responseFormat := parallelIdentityClusterResponseFormat()
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -673,7 +670,7 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 			return decodeErr
 		}
 		for _, cluster := range decoded.Clusters {
-			if len(cluster.LocalIDs) < 2 || strings.TrimSpace(cluster.CanonicalName) == "" {
+			if len(cluster.LocalIDs) < 2 || strings.TrimSpace(cluster.CanonicalName) == "" || !(cluster.Confidence >= 0 && cluster.Confidence <= 1) {
 				return errors.New("モデル出力の clusters に不正な項目があります")
 			}
 		}
@@ -694,13 +691,8 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 func filterAutoApplicableParallelIdentityClusters(values []parallelIdentityCluster) []parallelIdentityCluster {
 	result := make([]parallelIdentityCluster, 0, len(values))
 	for _, value := range values {
-		if value.Confidence < 0 {
-			value.Confidence = 0
-		} else if value.Confidence > 1 {
-			value.Confidence = 1
-		}
 		value.LocalIDs = normalizeParallelIdentityLocalIDs(value.LocalIDs)
-		if value.Confidence < core.MergeAutoApplyConfidence || len(value.LocalIDs) < 2 {
+		if !core.IsAutoApplicableMergeConfidence(value.Confidence) || len(value.LocalIDs) < 2 {
 			continue
 		}
 		result = append(result, value)
@@ -806,21 +798,27 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 
 func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, requestIndex int, batch extractionBatch) ([]parallelIdentityDiscoveredName, ai.UsageRequest, error) {
 	startedAt := time.Now()
+	modelBatch, modelUpToEpisodeIndex, modelToActualEpisodeIndex := extractionBatchWithModelEpisodeReferences(batch, upToEpisodeIndex)
+	strictResponseFormat := parallelIdentityDiscoveryResponseFormat(modelBatch.EpisodeIndexes...)
+	responseFormat := resolveParallelIdentityDiscoveryResponseFormat(ctx, config, modelBatch.EpisodeIndexes)
 	systemPrompt := strings.Join([]string{
 		"あなたは日本語小説の登場人物名候補を発見するアシスタントです。",
 		"本文に登場する人物名、通称、役職名つきの人物呼称だけを抽出してください。",
 		"地名、組織名、種族名、一般名詞、説明だけの語は除外してください。",
+		"episodeIndexにはbatch内の短い参照値（ep1、ep2など）だけを使用し、元の長いIDや推測した値は出力しないでください。",
 		"出力は JSON のみです。",
 	}, " ")
 	payload := map[string]any{
 		"novelId":          novelID,
-		"upToEpisodeIndex": upToEpisodeIndex,
-		"batch":            extractionBatchPromptPayload(batch),
+		"upToEpisodeIndex": modelUpToEpisodeIndex,
+		"batch":            extractionBatchPromptPayload(modelBatch),
 		"outputContract":   "Return {\"characters\":[{\"name\":\"...\",\"aliases\":[\"...\"],\"episodeIndex\":\"...\",\"reason\":\"...\"}]}.",
+	}
+	if responseFormat["type"] == "json_object" {
+		payload["expectedJSONSchema"] = strictResponseFormat["json_schema"].(map[string]any)["schema"]
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -852,7 +850,11 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		if decodeErr := decodeRequiredJSONArray(result.Answer, "characters", &decoded); decodeErr != nil {
 			return decodeErr
 		}
-		for _, character := range decoded {
+		for index := range decoded {
+			if actualEpisodeIndex, ok := modelToActualEpisodeIndex[strings.TrimSpace(decoded[index].EpisodeIndex)]; ok {
+				decoded[index].EpisodeIndex = actualEpisodeIndex
+			}
+			character := decoded[index]
 			if strings.TrimSpace(character.Name) == "" || character.Aliases == nil {
 				return errors.New("モデル出力の characters に不正な名前発見項目があります")
 			}
@@ -886,6 +888,20 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		return nil, usage, err
 	}
 	return normalized, usage, nil
+}
+
+func resolveParallelIdentityDiscoveryResponseFormat(ctx context.Context, config *store.ResolvedAIGenerationConfig, episodeIndexes []string) map[string]any {
+	jsonObject := map[string]any{"type": "json_object"}
+	if config == nil || !core.FitsStructuredOutputEpisodeIndexEnum(episodeIndexes) {
+		return jsonObject
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	info, ok := ai.LookupOpenRouterModelInfo(lookupCtx, config.APIKey, config.ModelID, config.ProviderOrder)
+	cancel()
+	if !ok || !info.SupportsParameter("structured_outputs") {
+		return jsonObject
+	}
+	return parallelIdentityDiscoveryResponseFormat(episodeIndexes...)
 }
 
 func normalizeDiscoveredNamesForBatch(values []parallelIdentityDiscoveredName, batch extractionBatch, upToEpisodeIndex string) ([]parallelIdentityDiscoveredName, error) {
@@ -1010,7 +1026,7 @@ func (r *Runtime) correctParallelIdentityCharactersOneShot(ctx context.Context, 
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := map[string]any{"type": "json_object"}
+	responseFormat := parallelIdentityCorrectionResponseFormat()
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},

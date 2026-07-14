@@ -11,6 +11,30 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
+func TestStructuredOutputEpisodeIndexEnumLimits(t *testing.T) {
+	values := make([]string, 993)
+	for index := range values {
+		values[index] = strconv.Itoa(index)
+	}
+	if !FitsStructuredOutputEpisodeIndexEnum(values) {
+		t.Fatal("993 unique episode references should fit with the schema's reserved enum values")
+	}
+	values = append(values, strconv.Itoa(len(values)))
+	if FitsStructuredOutputEpisodeIndexEnum(values) {
+		t.Fatal("994 unique episode references must exceed the schema-wide enum value limit")
+	}
+	chunks := make([]Chunk, len(values))
+	for index, value := range values {
+		chunks[index] = Chunk{EpisodeIndex: value, Text: "x"}
+	}
+	batches, err := PlanRuntimeBatches(RuntimeBatch(Batch{}, chunks), func(batch Batch) (bool, error) {
+		return FitsStructuredOutputEpisodeIndexEnum(batch.EpisodeIndexes), nil
+	})
+	if err != nil || len(batches) != 2 || len(batches[0].EpisodeIndexes) != 993 || len(batches[1].EpisodeIndexes) != 1 {
+		t.Fatalf("enum overflow should split at the provider boundary: batches=%d err=%v", len(batches), err)
+	}
+}
+
 func TestExtractionLimitsPreferNewEnvironmentAndFallbackToLegacy(t *testing.T) {
 	t.Setenv("EXTRACTION_MAX_CHUNK_CHARS", "20")
 	t.Setenv("EXTRACTION_MAX_BATCH_CHARS", "40")
@@ -301,7 +325,7 @@ func TestExtractionHistoryHelpers(t *testing.T) {
 		t.Fatalf("generated characters should sort by episode then name, got %s", got)
 	}
 	prompt := BuildDefaultSystemPrompt()
-	if !strings.Contains(prompt, "candidateCharacters が空") || !strings.Contains(prompt, "すべて newCharacters") || !strings.Contains(prompt, "役職・関係・説明だけの語") {
+	if !strings.Contains(prompt, "candidateCharacters が空") || !strings.Contains(prompt, "すべて newCharacters") || !strings.Contains(prompt, "役職・関係・説明だけの語") || !strings.Contains(prompt, "空文字や空白だけの値") {
 		t.Fatalf("default prompt should spell out initial extraction and alias constraints: %s", prompt)
 	}
 	_, userPrompt := BuildPrompt("novel-1", "1", nil, Batch{}, nil)
@@ -314,7 +338,7 @@ func TestExtractionHistoryHelpers(t *testing.T) {
 	}
 }
 
-func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
+func TestExtractionEngineNormalizesDeltaResponses(t *testing.T) {
 	delta := []byte(`{
 	  "processedUpToEpisodeIndex":"5",
 	"newCharacters":[{
@@ -369,48 +393,17 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 		t.Fatalf("generic aliases should be filtered during normalization: %+v", normalized.NewCharacters[0].Aliases)
 	}
 
-	rich := []byte(`{
-	  "processedUpToEpisodeIndex":"3",
-	"characters":[{
-	    "canonicalName":{"text":" アリス ","episodeIndex":"1"},
-	    "fullName":{"text":"アリス・スミス","episodeIndex":"2"},
-	    "fullNameHistory":[{"text":"アリス旧姓","episodeIndex":"1"},{"text":"アリス・スミス","episodeIndex":"2"}],
-	    "gender":{"text":"女性","episodeIndex":"1"},
-	    "genderHistory":[{"text":"女性","episodeIndex":"1"}],
-	    "firstAppearanceEpisodeIndex":"1",
-	    "aliases":[{"text":"アリス","episodeIndex":"1"},{"text":"アリス","episodeIndex":"1"}],
-	    "appearanceHistory":[{"episodeIndex":"1","text":"銀髪"}],
-	    "personalityHistory":[{"episodeIndex":"2","text":"冷静"}],
-	    "summaryHistory":[{"episodeIndex":"3","text":"仲間。"}]
-	  }],
-	  "terms":[]
-	}`)
-	normalized, err = NormalizeOpenRouterResponse(rich, "novel-1", "3")
-	if err != nil {
-		t.Fatalf("rich response should normalize: %v", err)
-	}
-	if len(normalized.LegacyCharacters) != 1 || normalized.LegacyCharacters[0].CanonicalName != "アリス" || normalized.LegacyCharacters[0].FullName == nil || len(normalized.LegacyCharacters[0].FullNameHistory) != 2 || len(normalized.LegacyCharacters[0].Aliases) != 1 {
-		t.Fatalf("unexpected rich normalization: %+v", normalized)
-	}
-
 	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}],"terms":[]}`)
-	normalized, err = NormalizeOpenRouterResponse(legacy, "novel-1", "4")
-	if err != nil {
-		t.Fatalf("legacy response should normalize: %v", err)
-	}
-	if len(normalized.LegacyCharacters) != 1 || normalized.LegacyCharacters[0].CanonicalEpisodeIndex != "4" || len(normalized.LegacyCharacters[0].SummaryHistory) != 1 {
-		t.Fatalf("unexpected legacy normalization: %+v", normalized)
-	}
-	if _, err := NormalizeOpenRouterResponse([]byte(`{"characters":{}}`), "novel-1", "4"); err == nil {
-		t.Fatal("malformed characters payload should fail")
+	if _, err := NormalizeOpenRouterResponse(legacy, "novel-1", "4"); err == nil {
+		t.Fatal("legacy characters response should be rejected")
 	}
 	withInvalidMerge, err := NormalizeOpenRouterResponse([]byte(`{
 		"processedUpToEpisodeIndex":"7",
 		"newCharacters":[{"canonicalName":"有効人物"}],
 		"characterUpdates":[],
 		"mergeProposals":[
-			{"sourceCharacterId":"char_b","targetCharacterId":"char_a","confidence":2,"reason":" clamp "},
-			{"sourceCharacterId":"char_b","targetCharacterId":"char_a","confidence":0.5},
+			{"sourceCharacterId":"char_b","targetCharacterId":"char_a","confidence":2,"reason":"範囲外"},
+			{"sourceCharacterId":"char_b","targetCharacterId":"char_a","confidence":0.5,"reason":" valid "},
 			{"sourceCharacterId":"char_a","targetCharacterId":"char_a","confidence":1},
 			{"sourceCharacterId":"","targetCharacterId":"char_a","confidence":1}
 		],
@@ -423,8 +416,8 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("response with normalized merge proposal should parse: %v", err)
 	}
-	if len(withInvalidMerge.MergeProposals) != 1 || withInvalidMerge.MergeProposals[0].Confidence != 1 || withInvalidMerge.MergeProposals[0].Reason != "clamp" {
-		t.Fatalf("merge proposals should be deduped and clamped: %+v", withInvalidMerge.MergeProposals)
+	if len(withInvalidMerge.MergeProposals) != 1 || withInvalidMerge.MergeProposals[0].Confidence != 0.5 || withInvalidMerge.MergeProposals[0].Reason != "valid" {
+		t.Fatalf("merge proposals should reject out-of-range confidence before deduplication: %+v", withInvalidMerge.MergeProposals)
 	}
 	if len(withInvalidMerge.UnresolvedMentions) != 1 || withInvalidMerge.UnresolvedMentions[0].EpisodeIndex != "7" {
 		t.Fatalf("unresolved mentions should fall back to processed episode: %+v", withInvalidMerge.UnresolvedMentions)
@@ -433,22 +426,25 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 
 func TestExtractionTermsContractAndNormalization(t *testing.T) {
 	for _, raw := range []string{
-		`{"characters":[]}`,
-		`{"characters":[],"terms":null}`,
-		`{"characters":[],"terms":{}}`,
-		`{"characters":[],"terms":[{"term":"聖剣","reading":42,"category":{"value":"item","episodeIndex":"1"},"descriptionHistory":[{"text":"剣。","episodeIndex":"1"}]}]}`,
+		`{"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[]}`,
+		`{"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":null}`,
+		`{"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":{}}`,
+		`{"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"聖剣","reading":42,"category":{"value":"item","episodeIndex":"1"},"descriptionHistory":[{"text":"剣。","episodeIndex":"1"}]}]}`,
 	} {
 		if _, err := NormalizeOpenRouterResponse([]byte(raw), "novel-1", "1"); err == nil {
 			t.Fatalf("malformed terms payload should fail: %s", raw)
 		}
 	}
-	if delta, err := NormalizeOpenRouterResponse([]byte(`{"characters":[],"terms":[]}`), "novel-1", "1"); err != nil || delta.Terms == nil || len(delta.Terms) != 0 {
+	if delta, err := NormalizeOpenRouterResponse([]byte(`{"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`), "novel-1", "1"); err != nil || delta.Terms == nil || len(delta.Terms) != 0 {
 		t.Fatalf("empty terms must be valid and normalized to an empty slice: delta=%+v err=%v", delta, err)
 	}
 
 	delta, err := NormalizeOpenRouterResponse([]byte(`{
 		"processedUpToEpisodeIndex":"3",
-		"characters":[],
+		"newCharacters":[],
+		"characterUpdates":[],
+		"mergeProposals":[],
+		"unresolvedMentions":[],
 		"terms":[{
 			"term":" 聖剣 ",
 			"reading":{"text":"せいけん","episodeIndex":"3"},
@@ -469,17 +465,18 @@ func TestExtractionResponseRejectsEpisodeIndexesOutsideCurrentBatch(t *testing.T
 	for label, raw := range map[string]string{
 		"term": `{
 			"processedUpToEpisodeIndex":"20",
-			"characters":[],
+			"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],
 			"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"正体。","episodeIndex":"1"}]}]
 		}`,
 		"character": `{
 			"processedUpToEpisodeIndex":"20",
-			"characters":[{"canonicalName":{"text":"黒騎士","episodeIndex":"1"},"firstAppearanceEpisodeIndex":"20","summaryHistory":[{"text":"人物。","episodeIndex":"20"}]}],
+			"newCharacters":[{"canonicalName":{"text":"黒騎士","episodeIndex":"1"},"firstAppearanceEpisodeIndex":"20","summaryHistory":[{"text":"人物。","episodeIndex":"20"}]}],
+			"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],
 			"terms":[]
 		}`,
 		"unresolved": `{
 			"processedUpToEpisodeIndex":"20",
-			"characters":[],
+			"newCharacters":[],"characterUpdates":[],"mergeProposals":[],
 			"unresolvedMentions":[{"mention":"謎の声","episodeIndex":"1"}],
 			"terms":[]
 		}`,
@@ -507,7 +504,7 @@ func TestExtractionResponseRejectsInvalidTermEpisodeIndexesBeforeFallback(t *tes
 				case "description":
 					descriptionEpisode = episodeIndex
 				}
-				raw := []byte(`{"processedUpToEpisodeIndex":"20","characters":[],"terms":[{"term":"帝国評議会","reading":` + reading + `,"category":{"value":"organization","episodeIndex":"` + categoryEpisode + `"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"` + descriptionEpisode + `"}]}]}`)
+				raw := []byte(`{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":` + reading + `,"category":{"value":"organization","episodeIndex":"` + categoryEpisode + `"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"` + descriptionEpisode + `"}]}]}`)
 				if _, err := NormalizeOpenRouterResponseForEpisodes(raw, "novel-1", "20", []string{"20"}); err == nil || !strings.Contains(err.Error(), "term schema") {
 					t.Fatalf("invalid raw term episodeIndex should fail closed: %v", err)
 				}
@@ -533,7 +530,6 @@ func TestValidateDeltaEpisodeIndexesAcceptsCompleteInBatchDelta(t *testing.T) {
 		SummaryHistory:              historyVersions,
 	}
 	delta := Delta{
-		LegacyCharacters:   []characters.GeneratedCharacter{character},
 		NewCharacters:      []characters.GeneratedCharacter{character},
 		CharacterUpdates:   []characters.GeneratedCharacter{character},
 		UnresolvedMentions: []UnresolvedMention{{Mention: "影", EpisodeIndex: "5"}},
@@ -596,7 +592,10 @@ func TestCharacterUpdateAcceptsPersistedFirstAppearanceOutsideBatch(t *testing.T
 func TestParallelTermFactsSurviveNormalizationAndProjection(t *testing.T) {
 	raw := []byte(`{
 		"processedUpToEpisodeIndex":"5",
-		"characters":[],
+		"newCharacters":[],
+		"characterUpdates":[],
+		"mergeProposals":[],
+		"unresolvedMentions":[],
 		"terms":[{
 			"term":"魔導院",
 			"reading":null,
@@ -871,12 +870,6 @@ func TestExtractionApplyDeltaMergesByStableIDOnly(t *testing.T) {
 		t.Fatalf("explicit merge proposal should merge only the referenced IDs: changed=%d merged=%+v", changed, merged)
 	}
 
-	legacy, changed := ApplyDelta("novel-1", nil, Delta{
-		LegacyCharacters: []characters.GeneratedCharacter{{CanonicalName: "レガシー", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},
-	}, nil)
-	if changed != 1 || len(legacy) != 1 || legacy[0].CharacterID == "" {
-		t.Fatalf("legacy delta should assign stable IDs and replace generated list: changed=%d legacy=%+v", changed, legacy)
-	}
 	allocator := characters.NewGeneratedCharacterIDAllocator("novel-allocator", nil)
 	allocated, changed := ApplyDelta("novel-allocator", nil, Delta{
 		NewCharacters: []characters.GeneratedCharacter{{CanonicalName: "採番対象", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}},

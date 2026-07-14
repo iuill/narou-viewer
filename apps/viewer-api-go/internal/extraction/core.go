@@ -1,6 +1,7 @@
 package extraction
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -59,7 +60,6 @@ type Delta struct {
 	CharacterUpdates   []characters.GeneratedCharacter
 	MergeProposals     []MergeProposal
 	UnresolvedMentions []UnresolvedMention
-	LegacyCharacters   []characters.GeneratedCharacter
 	Terms              []terms.GeneratedTerm
 }
 
@@ -88,6 +88,10 @@ type GenerationState struct {
 }
 
 const MergeAutoApplyConfidence = 0.75
+
+func IsAutoApplicableMergeConfidence(confidence float64) bool {
+	return confidence >= MergeAutoApplyConfidence && confidence <= 1
+}
 
 var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
 var htmlScriptPattern = regexp.MustCompile(`(?is)<script[\s\S]*?</script>`)
@@ -386,6 +390,25 @@ func UniqueChunkEpisodeIndexes(chunks []Chunk) []string {
 	return result
 }
 
+const (
+	structuredOutputMaxEnumValues      = 1000
+	extractionSchemaReservedEnumValues = 7
+)
+
+func FitsStructuredOutputEpisodeIndexEnum(values []string) bool {
+	seen := map[string]bool{}
+	count := 0
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		count++
+	}
+	return count+extractionSchemaReservedEnumValues <= structuredOutputMaxEnumValues
+}
+
 type BatchFitFunc func(Batch) (bool, error)
 
 func PlanRuntimeBatch(template Batch, chunks []Chunk, fits BatchFitFunc) (Batch, []Chunk, error) {
@@ -585,6 +608,7 @@ func BuildDefaultSystemPrompt() string {
 		"fullName や gender が話数により変化・判明する場合は、最新値だけでなく fullNameHistory / genderHistory に時点ごとの値を残してください。",
 		"summaryHistory には、その時点で新しく分かった人物像、立場、関係性、主要な行動を 1〜2 文で短く要約してください。",
 		"各履歴項目は episodeIndex と text を必ず持ちます。",
+		"履歴と用語versionの text、mergeProposals の sourceCharacterId / targetCharacterId、unresolvedMentions の mention には、空文字や空白だけの値を入れないでください。情報がなければその項目自体を配列へ追加しないでください。",
 		"同じ内容を重複して入れないでください。",
 		"terms には人物名を含めず、組織・場所・物品・技能・種族・出来事などの作品固有語だけを入れてください。",
 		"term の category は organization / place / item / skill / race / event / other のいずれかです。",
@@ -617,7 +641,7 @@ func BuildPromptWithContext(novelID string, upToEpisodeIndex string, knownCharac
 		"candidateCharacters": candidateCharacters,
 		"knownTerms":          candidateTerms,
 		"episodes":            chunkPromptPayload(batch.Chunks),
-		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions, terms. terms must always be present; use [] when there is no term delta. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
+		"outputContract":      "Return only delta fields: newCharacters, characterUpdates, mergeProposals, unresolvedMentions, terms. Required content strings must not be empty or whitespace-only. terms must always be present; use [] when there is no term delta. If candidateCharacters is empty, put every explicitly appearing person in newCharacters.",
 	}
 	if len(candidateCharacters) == 0 {
 		payload["generationTask"] = "initialCharacterExtraction"
@@ -948,7 +972,6 @@ func FirstNonEmptyString(values ...string) string {
 func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeIndex string) (Delta, error) {
 	var payload struct {
 		ProcessedUpToEpisodeIndex string              `json:"processedUpToEpisodeIndex"`
-		Characters                []json.RawMessage   `json:"characters"`
 		NewCharacters             []json.RawMessage   `json:"newCharacters"`
 		CharacterUpdates          []json.RawMessage   `json:"characterUpdates"`
 		MergeProposals            []MergeProposal     `json:"mergeProposals"`
@@ -958,7 +981,7 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Delta{}, errors.New("OpenRouter response was not valid JSON.")
 	}
-	if payload.Characters == nil && payload.NewCharacters == nil && payload.CharacterUpdates == nil {
+	if payload.NewCharacters == nil || payload.CharacterUpdates == nil || payload.MergeProposals == nil || payload.UnresolvedMentions == nil {
 		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema.")
 	}
 	if payload.Terms == nil || string(payload.Terms) == "null" {
@@ -985,22 +1008,6 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		}
 	}
 	delta.Terms = terms.CombineTermFacts(delta.Terms)
-	seenIDs := map[string]bool{}
-	for _, rawItem := range payload.Characters {
-		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
-		if !ok {
-			return Delta{}, errors.New("OpenRouter response did not match the expected extraction character schema.")
-		}
-		id := strings.TrimSpace(character.CharacterID)
-		if id == "" {
-			id = GeneratedCharacterID(novelID, character.CanonicalName)
-		}
-		if seenIDs[id] {
-			continue
-		}
-		seenIDs[id] = true
-		delta.LegacyCharacters = append(delta.LegacyCharacters, character)
-	}
 	for _, rawItem := range payload.NewCharacters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
 		if !ok {
@@ -1018,7 +1025,6 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		character.FirstAppearanceEpisodeIndex = ""
 		delta.CharacterUpdates = append(delta.CharacterUpdates, character)
 	}
-	SortGeneratedCharacters(delta.LegacyCharacters)
 	SortGeneratedCharacters(delta.NewCharacters)
 	SortGeneratedCharacters(delta.CharacterUpdates)
 	return delta, nil
@@ -1086,12 +1092,12 @@ func validateOpenRouterTermContract(raw []byte) error {
 
 func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, category bool) error {
 	var item map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil {
+	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil || isJSONNull(item[valueKey]) || isJSONNull(item["episodeIndex"]) {
 		return extractionTermContractError()
 	}
 	var value string
 	var episodeIndex string
-	if json.Unmarshal(item[valueKey], &value) != nil || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil || !isDigitsString(episodeIndex) {
+	if json.Unmarshal(item[valueKey], &value) != nil || strings.TrimSpace(value) == "" || json.Unmarshal(item["episodeIndex"], &episodeIndex) != nil || !isDigitsString(episodeIndex) {
 		return extractionTermContractError()
 	}
 	if category {
@@ -1102,6 +1108,10 @@ func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, categor
 		}
 	}
 	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) error {
@@ -1115,9 +1125,14 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 	if len(allowed) == 0 {
 		return nil
 	}
+	invalidEpisodeIndex := ""
 	validate := func(episodeIndex string) bool {
 		episodeIndex = strings.TrimSpace(episodeIndex)
-		return episodeIndex == "" || allowed[episodeIndex]
+		valid := episodeIndex == "" || allowed[episodeIndex]
+		if !valid && invalidEpisodeIndex == "" {
+			invalidEpisodeIndex = episodeIndex
+		}
+		return valid
 	}
 	validateTextVersions := func(values []characters.GeneratedTextVersion) bool {
 		for _, value := range values {
@@ -1161,45 +1176,43 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 		}
 		return true
 	}
-	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters} {
-		for _, character := range values {
-			if !validateCharacter(character) {
-				return extractionEpisodeBoundaryError()
-			}
+	for _, character := range delta.NewCharacters {
+		if !validateCharacter(character) {
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, character := range delta.CharacterUpdates {
 		if !validateCharacter(character) {
-			return extractionEpisodeBoundaryError()
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, mention := range delta.UnresolvedMentions {
 		if !validate(mention.EpisodeIndex) {
-			return extractionEpisodeBoundaryError()
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, term := range delta.Terms {
 		for _, value := range term.ReadingHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 		for _, value := range term.CategoryHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 		for _, value := range term.DescriptionHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 	}
 	return nil
 }
 
-func extractionEpisodeBoundaryError() error {
-	return errors.New("OpenRouter response contained an episodeIndex outside the current extraction batch.")
+func extractionEpisodeBoundaryError(episodeIndex string) error {
+	return fmt.Errorf("OpenRouter response contained episodeIndex %q outside the current extraction batch.", strings.TrimSpace(episodeIndex))
 }
 
 func normalizeOpenRouterTerm(raw json.RawMessage, episodeIndexes ...string) (terms.GeneratedTerm, bool, error) {
@@ -1291,13 +1304,11 @@ func normalizeMergeProposals(values []MergeProposal) []MergeProposal {
 		if seen[key] {
 			continue
 		}
-		seen[key] = true
 		confidence := value.Confidence
-		if confidence < 0 {
-			confidence = 0
-		} else if confidence > 1 {
-			confidence = 1
+		if !(confidence >= 0 && confidence <= 1) {
+			continue
 		}
+		seen[key] = true
 		result = append(result, MergeProposal{
 			SourceCharacterID:     source,
 			TargetCharacterID:     target,
@@ -1718,11 +1729,6 @@ func NormalizeGeneratedRetiredCharacterIDs(values []characters.GeneratedRetiredC
 func ApplyDelta(novelID string, existing []characters.GeneratedCharacter, delta Delta, allocator *characters.GeneratedCharacterIDAllocator) ([]characters.GeneratedCharacter, int) {
 	generated := append([]characters.GeneratedCharacter{}, existing...)
 	changed := 0
-	if len(delta.LegacyCharacters) > 0 {
-		next := assignGeneratedCharactersForDelta(novelID, generated, MergeGeneratedCharacters(nil, delta.LegacyCharacters), allocator)
-		generated = MergeGeneratedCharacters(generated, next)
-		return generated, len(next)
-	}
 	if len(delta.NewCharacters) > 0 {
 		next := assignGeneratedCharactersForDelta(novelID, generated, MergeGeneratedCharacters(nil, delta.NewCharacters), allocator)
 		for _, item := range next {
@@ -1766,7 +1772,7 @@ func IdentityMergeEventsFromProposals(proposals []MergeProposal, effectiveEpisod
 		sourceID := strings.TrimSpace(proposal.SourceCharacterID)
 		targetID := strings.TrimSpace(proposal.TargetCharacterID)
 		episodeIndex := FirstNonEmptyString(proposal.EffectiveEpisodeIndex, effectiveEpisodeIndex)
-		if proposal.Confidence < MergeAutoApplyConfidence || sourceID == "" || targetID == "" || sourceID == targetID || episodeIndex == "" || !knownIDs[sourceID] || !knownIDs[targetID] {
+		if !IsAutoApplicableMergeConfidence(proposal.Confidence) || sourceID == "" || targetID == "" || sourceID == targetID || episodeIndex == "" || !knownIDs[sourceID] || !knownIDs[targetID] {
 			continue
 		}
 		result = append(result, characters.GeneratedIdentityMergeEvent{SourceCharacterID: sourceID, TargetCharacterID: targetID, EffectiveEpisodeIndex: episodeIndex})
@@ -1976,7 +1982,7 @@ func ApplyMergeProposals(generated []characters.GeneratedCharacter, proposals []
 		}
 	}
 	for _, proposal := range proposals {
-		if proposal.Confidence < MergeAutoApplyConfidence {
+		if !IsAutoApplicableMergeConfidence(proposal.Confidence) {
 			continue
 		}
 		source := strings.TrimSpace(proposal.SourceCharacterID)
