@@ -397,7 +397,7 @@ func validateExtractionVersionObject(raw json.RawMessage) error {
 	}
 	var text string
 	var episodeIndex string
-	if json.Unmarshal(version["text"], &text) != nil || json.Unmarshal(version["episodeIndex"], &episodeIndex) != nil || !isDigitsEpisodeIndex(episodeIndex) {
+	if isJSONNull(version["text"]) || isJSONNull(version["episodeIndex"]) || json.Unmarshal(version["text"], &text) != nil || json.Unmarshal(version["episodeIndex"], &episodeIndex) != nil || !isDigitsEpisodeIndex(episodeIndex) {
 		return errors.New("モデル出力の人物履歴値が不正です")
 	}
 	return nil
@@ -409,8 +409,8 @@ func validateExtractionSimpleObject(raw json.RawMessage, required []string) erro
 		return errors.New("object contract mismatch")
 	}
 	for _, field := range required {
-		if item[field] == nil {
-			return errors.New("object field missing")
+		if item[field] == nil || isJSONNull(item[field]) {
+			return errors.New("object field missing or null")
 		}
 		if field == "confidence" {
 			var value float64
@@ -425,6 +425,10 @@ func validateExtractionSimpleObject(raw json.RawMessage, required []string) erro
 		}
 	}
 	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 type preparedExtractionRequest struct {

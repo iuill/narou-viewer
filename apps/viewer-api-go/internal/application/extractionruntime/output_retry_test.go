@@ -130,6 +130,34 @@ func TestGenerateOpenRouterBatchRetriesOutOfRangeMergeConfidence(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenRouterBatchRetriesNullRequiredScalars(t *testing.T) {
+	invalidResponses := map[string]string{
+		"merge confidence":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char-a","targetCharacterId":"char-b","confidence":null,"reason":"同一人物"}],"unresolvedMentions":[],"terms":[]}`,
+		"character history":  `{"processedUpToEpisodeIndex":"ep1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"ep1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"ep1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":null,"episodeIndex":"ep1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+		"unresolved mention": `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":null,"episodeIndex":"ep1","reason":"候補不明"}],"terms":[]}`,
+		"term description":   `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"ep1"},"descriptionHistory":[{"text":null,"episodeIndex":"ep1"}]}]}`,
+	}
+	valid := `{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`
+
+	for name, invalid := range invalidResponses {
+		t.Run(name, func(t *testing.T) {
+			openrouter := newExtractionOpenRouterTestServer(t, invalid, valid)
+			defer openrouter.Close()
+			t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+			batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "合成本文"}}}
+
+			result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+			if err != nil {
+				t.Fatalf("null scalar should be rejected and recovered by retry: %v", err)
+			}
+			if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
+				t.Fatalf("null scalar should consume two attempts: %+v", result.Usage)
+			}
+		})
+	}
+}
+
 func TestGenerateOpenRouterBatchAddsContractCorrectionOnRetry(t *testing.T) {
 	requests := 0
 	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -306,9 +334,24 @@ func TestExtractionResponseValidationRejectsUnusableVariants(t *testing.T) {
 	if err := validateExtractionCharacterItem(json.RawMessage(`{}`), false); err == nil {
 		t.Fatal("missing character fields should be rejected")
 	}
-	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`} {
+	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`, `{"text":null,"episodeIndex":"4"}`} {
 		if err := validateExtractionVersionObject(json.RawMessage(raw)); err == nil {
 			t.Fatalf("invalid version should be rejected: %s", raw)
+		}
+	}
+	for _, field := range []string{"mention", "episodeIndex", "reason"} {
+		item := map[string]json.RawMessage{
+			"mention":      json.RawMessage(`"影"`),
+			"episodeIndex": json.RawMessage(`"4"`),
+			"reason":       json.RawMessage(`"候補不明"`),
+		}
+		item[field] = json.RawMessage("null")
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatalf("encode null scalar fixture: %v", err)
+		}
+		if err := validateExtractionSimpleObject(encoded, []string{"mention", "episodeIndex", "reason"}); err == nil {
+			t.Fatalf("null %s should be rejected", field)
 		}
 	}
 }

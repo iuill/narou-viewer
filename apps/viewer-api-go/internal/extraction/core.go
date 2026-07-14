@@ -1,6 +1,7 @@
 package extraction
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -1090,7 +1091,7 @@ func validateOpenRouterTermContract(raw []byte) error {
 
 func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, category bool) error {
 	var item map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil {
+	if err := json.Unmarshal(raw, &item); err != nil || len(item) != 2 || item[valueKey] == nil || item["episodeIndex"] == nil || isJSONNull(item[valueKey]) || isJSONNull(item["episodeIndex"]) {
 		return extractionTermContractError()
 	}
 	var value string
@@ -1106,6 +1107,10 @@ func validateOpenRouterTermVersion(raw json.RawMessage, valueKey string, categor
 		}
 	}
 	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) error {
