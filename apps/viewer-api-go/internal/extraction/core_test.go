@@ -2,7 +2,6 @@ package extraction
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,16 +12,16 @@ import (
 )
 
 func TestStructuredOutputEpisodeIndexEnumLimits(t *testing.T) {
-	values := make([]string, 750)
+	values := make([]string, 993)
 	for index := range values {
-		values[index] = fmt.Sprintf("%020d", index)
+		values[index] = strconv.Itoa(index)
 	}
 	if !FitsStructuredOutputEpisodeIndexEnum(values) {
-		t.Fatal("750 unique 20-character episode IDs should fit the structured output enum limit")
+		t.Fatal("993 unique episode references should fit with the schema's reserved enum values")
 	}
-	values = append(values, fmt.Sprintf("%020d", len(values)))
+	values = append(values, strconv.Itoa(len(values)))
 	if FitsStructuredOutputEpisodeIndexEnum(values) {
-		t.Fatal("751 unique 20-character episode IDs must exceed the structured output enum string limit")
+		t.Fatal("994 unique episode references must exceed the schema-wide enum value limit")
 	}
 	chunks := make([]Chunk, len(values))
 	for index, value := range values {
@@ -31,7 +30,7 @@ func TestStructuredOutputEpisodeIndexEnumLimits(t *testing.T) {
 	batches, err := PlanRuntimeBatches(RuntimeBatch(Batch{}, chunks), func(batch Batch) (bool, error) {
 		return FitsStructuredOutputEpisodeIndexEnum(batch.EpisodeIndexes), nil
 	})
-	if err != nil || len(batches) != 2 || len(batches[0].EpisodeIndexes) != 750 || len(batches[1].EpisodeIndexes) != 1 {
+	if err != nil || len(batches) != 2 || len(batches[0].EpisodeIndexes) != 993 || len(batches[1].EpisodeIndexes) != 1 {
 		t.Fatalf("enum overflow should split at the provider boundary: batches=%d err=%v", len(batches), err)
 	}
 }

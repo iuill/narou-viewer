@@ -28,7 +28,14 @@ func generateOpenRouterChatWithOutputRetry(
 	var lastValidationErr error
 	reachedAttempts := 0
 	for attempt := 1; attempt <= extractionOutputAttempts; attempt++ {
-		result, err := ai.GenerateOpenRouterChat(ctx, config, messages)
+		requestMessages := messages
+		if lastValidationErr != nil {
+			requestMessages = append(append([]ai.ChatMessage{}, messages...), ai.ChatMessage{
+				Role:    "user",
+				Content: "直前の応答は抽出契約に適合しませんでした。元の指示とresponse formatに厳密に従って、JSON全体を最初から再生成してください。必須fieldと空配列を省略せず、episodeIndexは入力に記載された現在の抽出バッチの短い参照値だけを、そのまま使用してください。",
+			})
+		}
+		result, err := ai.GenerateOpenRouterChat(ctx, config, requestMessages)
 		reachedAttempts++
 		accumulated.Answer = result.Answer
 		accumulated.FinishReason = result.FinishReason

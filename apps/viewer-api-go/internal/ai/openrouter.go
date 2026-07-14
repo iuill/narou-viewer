@@ -182,7 +182,8 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		if err != nil && openRouterResponseFormatRequiresParameters(config.ResponseFormat) && isOpenRouterUnsupportedParameterRoutingError(err) {
 			fallbackConfig := config
 			fallbackConfig.ResponseFormat = map[string]any{"type": "json_object"}
-			fallbackResult, fallbackErr := GenerateOpenRouterChat(ctx, fallbackConfig, messages)
+			fallbackMessages := openRouterJSONSchemaFallbackMessages(messages, config.ResponseFormat)
+			fallbackResult, fallbackErr := GenerateOpenRouterChat(ctx, fallbackConfig, fallbackMessages)
 			fallbackResult.InputTokens += accumulated.InputTokens
 			fallbackResult.OutputTokens += accumulated.OutputTokens
 			fallbackResult.TotalTokens += accumulated.TotalTokens
@@ -205,6 +206,27 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		}
 	}
 	return accumulated, lastErr
+}
+
+func openRouterJSONSchemaFallbackMessages(messages []ChatMessage, responseFormat any) []ChatMessage {
+	format, ok := responseFormat.(map[string]any)
+	if !ok {
+		return messages
+	}
+	jsonSchema, ok := format["json_schema"].(map[string]any)
+	if !ok || jsonSchema["schema"] == nil {
+		return messages
+	}
+	schema, err := json.Marshal(jsonSchema["schema"])
+	if err != nil {
+		return messages
+	}
+	result := append([]ChatMessage{}, messages...)
+	result = append(result, ChatMessage{
+		Role:    "user",
+		Content: "このリクエストではproviderがJSON Schemaを直接強制できません。次のschemaを厳密に満たすJSON objectだけを返してください。必須fieldを省略せず、空の配列も[]として出力し、schema外のfieldを追加しないでください。schema: " + string(schema),
+	})
+	return result
 }
 
 func openRouterResponseFormatRequiresParameters(responseFormat any) bool {

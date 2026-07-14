@@ -177,6 +177,11 @@ func TestGenerateOpenRouterChatFallsBackWhenNoStrictSchemaEndpointExists(t *test
 		if requestCount != 2 || responseFormat["type"] != "json_object" {
 			t.Fatalf("fallback request must use json_object: count=%d body=%+v", requestCount, body)
 		}
+		messages := body["messages"].([]any)
+		fallbackInstruction := messages[len(messages)-1].(map[string]any)["content"].(string)
+		if !strings.Contains(fallbackInstruction, `"required":["characters"]`) {
+			t.Fatalf("fallback request must include the strict schema in its prompt: %+v", messages)
+		}
 		if _, ok := body["provider"]; ok {
 			t.Fatalf("fallback should preserve disabled parameter requirement: %+v", body)
 		}
@@ -191,7 +196,16 @@ func TestGenerateOpenRouterChatFallsBackWhenNoStrictSchemaEndpointExists(t *test
 		ModelID:           "openrouter/auto",
 		AllowFallbacks:    true,
 		RequireParameters: false,
-		ResponseFormat:    map[string]any{"type": "json_schema"},
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"schema": map[string]any{
+					"type":       "object",
+					"required":   []any{"characters"},
+					"properties": map[string]any{"characters": map[string]any{"type": "array"}},
+				},
+			},
+		},
 	}, []ChatMessage{{Role: "user", Content: "JSON"}})
 	if err != nil || result.Answer != `{"characters":[]}` || requestCount != 2 {
 		t.Fatalf("strict endpoint fallback failed: count=%d result=%+v err=%v", requestCount, result, err)

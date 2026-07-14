@@ -3965,7 +3965,7 @@ func TestNextExtractionRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *tes
 		EpisodeIndexes: []string{"1", "2"},
 		Chunks: []extractionChunk{
 			{EpisodeIndex: "1", Title: "第一話", Text: strings.Repeat("前半", 80)},
-			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 80)},
+			{EpisodeIndex: "2", Title: "第二話", Text: strings.Repeat("後半", 1000)},
 		},
 	}
 	single := extractionRuntimeBatch(batch, []extractionChunk{batch.Chunks[0]})
@@ -3975,7 +3975,7 @@ func TestNextExtractionRuntimeBatchReturnsRemainingWhenCandidateOverflows(t *tes
 		{Role: "user", Content: userPrompt},
 	}, nil, extractionOpenRouterResponseFormat())
 	modelID := "openrouter/next-runtime-context"
-	contextLength := singleTokens + extractionMinimumCompletionTokens + 320
+	contextLength := singleTokens + extractionMinimumCompletionTokens + 1000
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": [{
@@ -4247,7 +4247,7 @@ func TestOpenRouterExtractionUsesDeltaCandidatesAndStableIDMerges(t *testing.T) 
 				t.Fatalf("delta prompt should not send full knownCharacters payload: %+v", prompt)
 			}
 			episodes := prompt["episodes"].([]any)
-			if len(episodes) != 1 || episodes[0].(map[string]any)["episodeIndex"] != "2" {
+			if len(episodes) != 1 || episodes[0].(map[string]any)["episodeIndex"] != "ep1" {
 				t.Fatalf("prompt should contain only the requested runtime episode: %+v", episodes)
 			}
 			candidates := prompt["candidateCharacters"].([]any)
@@ -4428,8 +4428,8 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 			t.Fatalf("decode prompt JSON: %v", err)
 		}
 		promptEpisodes := prompt["episodes"].([]any)
-		episodeIndex := promptEpisodes[0].(map[string]any)["episodeIndex"].(string)
-		if episodeIndex == "1" {
+		episodeTitle := promptEpisodes[0].(map[string]any)["title"].(string)
+		if episodeTitle == "一話" {
 			requestedEpisodes = append(requestedEpisodes, "1")
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"terms\":[],\"characters\":[{\"canonicalName\":\"アリス\",\"summary\":\"一話の人物\"}]}"}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
 			return

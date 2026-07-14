@@ -806,21 +806,27 @@ func (r *Runtime) discoverParallelIdentityNames(ctx context.Context, config *sto
 
 func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, requestIndex int, batch extractionBatch) ([]parallelIdentityDiscoveredName, ai.UsageRequest, error) {
 	startedAt := time.Now()
+	modelBatch, modelUpToEpisodeIndex, modelToActualEpisodeIndex := extractionBatchWithModelEpisodeReferences(batch, upToEpisodeIndex)
+	strictResponseFormat := parallelIdentityDiscoveryResponseFormat(modelBatch.EpisodeIndexes...)
+	responseFormat := resolveParallelIdentityDiscoveryResponseFormat(ctx, config, modelBatch.EpisodeIndexes)
 	systemPrompt := strings.Join([]string{
 		"あなたは日本語小説の登場人物名候補を発見するアシスタントです。",
 		"本文に登場する人物名、通称、役職名つきの人物呼称だけを抽出してください。",
 		"地名、組織名、種族名、一般名詞、説明だけの語は除外してください。",
+		"episodeIndexにはbatch内の短い参照値（ep1、ep2など）だけを使用し、元の長いIDや推測した値は出力しないでください。",
 		"出力は JSON のみです。",
 	}, " ")
 	payload := map[string]any{
 		"novelId":          novelID,
-		"upToEpisodeIndex": upToEpisodeIndex,
-		"batch":            extractionBatchPromptPayload(batch),
+		"upToEpisodeIndex": modelUpToEpisodeIndex,
+		"batch":            extractionBatchPromptPayload(modelBatch),
 		"outputContract":   "Return {\"characters\":[{\"name\":\"...\",\"aliases\":[\"...\"],\"episodeIndex\":\"...\",\"reason\":\"...\"}]}.",
+	}
+	if responseFormat["type"] == "json_object" {
+		payload["expectedJSONSchema"] = strictResponseFormat["json_schema"].(map[string]any)["schema"]
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
 	userPrompt := string(raw)
-	responseFormat := resolveParallelIdentityDiscoveryResponseFormat(ctx, config, batch.EpisodeIndexes)
 	promptTokens := estimateOpenRouterChatRequestTokens([]ai.ChatMessage{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
@@ -852,7 +858,11 @@ func (r *Runtime) discoverParallelIdentityNamesForBatch(ctx context.Context, con
 		if decodeErr := decodeRequiredJSONArray(result.Answer, "characters", &decoded); decodeErr != nil {
 			return decodeErr
 		}
-		for _, character := range decoded {
+		for index := range decoded {
+			if actualEpisodeIndex, ok := modelToActualEpisodeIndex[strings.TrimSpace(decoded[index].EpisodeIndex)]; ok {
+				decoded[index].EpisodeIndex = actualEpisodeIndex
+			}
+			character := decoded[index]
 			if strings.TrimSpace(character.Name) == "" || character.Aliases == nil {
 				return errors.New("モデル出力の characters に不正な名前発見項目があります")
 			}

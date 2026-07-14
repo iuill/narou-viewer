@@ -387,16 +387,13 @@ func UniqueChunkEpisodeIndexes(chunks []Chunk) []string {
 }
 
 const (
-	structuredOutputMaxEnumValues          = 1000
-	structuredOutputLongEnumThreshold      = 250
-	structuredOutputMaxLongEnumStringRunes = 15000
-	extractionSchemaReservedEnumValues     = 7
+	structuredOutputMaxEnumValues      = 1000
+	extractionSchemaReservedEnumValues = 7
 )
 
 func FitsStructuredOutputEpisodeIndexEnum(values []string) bool {
 	seen := map[string]bool{}
 	count := 0
-	totalRunes := 0
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" || seen[value] {
@@ -404,12 +401,8 @@ func FitsStructuredOutputEpisodeIndexEnum(values []string) bool {
 		}
 		seen[value] = true
 		count++
-		totalRunes += len([]rune(value))
 	}
-	if count+extractionSchemaReservedEnumValues > structuredOutputMaxEnumValues {
-		return false
-	}
-	return count <= structuredOutputLongEnumThreshold || totalRunes <= structuredOutputMaxLongEnumStringRunes
+	return count+extractionSchemaReservedEnumValues <= structuredOutputMaxEnumValues
 }
 
 type BatchFitFunc func(Batch) (bool, error)
@@ -1141,9 +1134,14 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 	if len(allowed) == 0 {
 		return nil
 	}
+	invalidEpisodeIndex := ""
 	validate := func(episodeIndex string) bool {
 		episodeIndex = strings.TrimSpace(episodeIndex)
-		return episodeIndex == "" || allowed[episodeIndex]
+		valid := episodeIndex == "" || allowed[episodeIndex]
+		if !valid && invalidEpisodeIndex == "" {
+			invalidEpisodeIndex = episodeIndex
+		}
+		return valid
 	}
 	validateTextVersions := func(values []characters.GeneratedTextVersion) bool {
 		for _, value := range values {
@@ -1190,42 +1188,42 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters} {
 		for _, character := range values {
 			if !validateCharacter(character) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 	}
 	for _, character := range delta.CharacterUpdates {
 		if !validateCharacter(character) {
-			return extractionEpisodeBoundaryError()
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, mention := range delta.UnresolvedMentions {
 		if !validate(mention.EpisodeIndex) {
-			return extractionEpisodeBoundaryError()
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, term := range delta.Terms {
 		for _, value := range term.ReadingHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 		for _, value := range term.CategoryHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 		for _, value := range term.DescriptionHistory {
 			if !validate(value.EpisodeIndex) {
-				return extractionEpisodeBoundaryError()
+				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 			}
 		}
 	}
 	return nil
 }
 
-func extractionEpisodeBoundaryError() error {
-	return errors.New("OpenRouter response contained an episodeIndex outside the current extraction batch.")
+func extractionEpisodeBoundaryError(episodeIndex string) error {
+	return fmt.Errorf("OpenRouter response contained episodeIndex %q outside the current extraction batch.", strings.TrimSpace(episodeIndex))
 }
 
 func normalizeOpenRouterTerm(raw json.RawMessage, episodeIndexes ...string) (terms.GeneratedTerm, bool, error) {

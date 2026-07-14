@@ -117,7 +117,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,
 	}, prepared.Messages, func(result ai.ChatResult) error {
-		normalizedAnswer, scalarErr := normalizeExtractionEpisodeIndexScalars([]byte(result.Answer), fallbackEpisodeIndex)
+		normalizedAnswer, scalarErr := normalizeExtractionEpisodeIndexScalars([]byte(result.Answer), fallbackEpisodeIndex, prepared.ModelToActualEpisodeIndex)
 		if scalarErr != nil {
 			return scalarErr
 		}
@@ -166,7 +166,7 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
 }
 
-func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeIndex string) ([]byte, error) {
+func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeIndex string, modelToActualEpisodeIndex ...map[string]string) ([]byte, error) {
 	if !json.Valid(raw) {
 		return nil, errors.New("OpenRouter response was not valid JSON.")
 	}
@@ -177,6 +177,9 @@ func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeInde
 		return nil, err
 	}
 	normalizeExtractionEpisodeIndexValue(decoded)
+	if len(modelToActualEpisodeIndex) > 0 {
+		expandExtractionEpisodeIndexReferences(decoded, modelToActualEpisodeIndex[0])
+	}
 	if root, ok := decoded.(map[string]any); ok && isDigitsEpisodeIndex(processedUpToEpisodeIndex) {
 		// The processed frontier is batch metadata already known by the server,
 		// not an extracted fact. In json_object fallback mode some models omit it
@@ -184,243 +187,29 @@ func normalizeExtractionEpisodeIndexScalars(raw []byte, processedUpToEpisodeInde
 		// depend on the model echoing this value correctly.
 		processedUpToEpisodeIndex = strings.TrimSpace(processedUpToEpisodeIndex)
 		root["processedUpToEpisodeIndex"] = processedUpToEpisodeIndex
-		normalizeExtractionRootDeltaArrays(root)
-		normalizeExtractionCharacterObjects(root, processedUpToEpisodeIndex)
-		normalizeExtractionTermObjects(root, processedUpToEpisodeIndex)
 	}
 	return json.Marshal(decoded)
 }
 
-func normalizeExtractionRootDeltaArrays(root map[string]any) {
-	if legacyCharacters, exists := root["characters"]; exists && legacyCharacters != nil {
-		return
-	}
-	for _, field := range []string{"newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions"} {
-		if value, exists := root[field]; !exists || value == nil {
-			root[field] = []any{}
-		}
-	}
-}
-
-func normalizeExtractionTermObjects(root map[string]any, episodeIndex string) {
-	items, ok := root["terms"].([]any)
-	if !ok {
-		return
-	}
-	normalizedItems := make([]any, 0, len(items))
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			continue
-		}
-		term, _ := item["term"].(string)
-		if strings.TrimSpace(term) == "" {
-			term, _ = item["name"].(string)
-			if strings.TrimSpace(term) == "" {
-				continue
-			}
-		}
-		item["term"] = term
-		if reading, valid := extractionTermVersionFallback(item["reading"], "text", episodeIndex); valid {
-			item["reading"] = reading
-		} else {
-			item["reading"] = nil
-		}
-		category, validCategory := extractionTermVersionFallback(item["category"], "value", episodeIndex)
-		if !validCategory {
-			category = map[string]any{"value": string(terms.CategoryOther), "episodeIndex": episodeIndex}
-		}
-		category["value"] = string(terms.NormalizeCategory(strings.TrimSpace(category["value"].(string))))
-		item["category"] = category
-
-		descriptions, _ := item["descriptionHistory"].([]any)
-		if len(descriptions) == 0 {
-			if description, exists := item["description"]; exists {
-				descriptions = []any{description}
-			}
-		}
-		normalizedDescriptions := make([]any, 0, len(descriptions))
-		for _, description := range descriptions {
-			if normalized, valid := extractionTermVersionFallback(description, "text", episodeIndex); valid {
-				normalizedDescriptions = append(normalizedDescriptions, normalized)
-			}
-		}
-		if len(normalizedDescriptions) == 0 {
-			continue
-		}
-		item["descriptionHistory"] = normalizedDescriptions
-		for field := range item {
-			switch field {
-			case "term", "reading", "category", "descriptionHistory":
-			default:
-				delete(item, field)
-			}
-		}
-		normalizedItems = append(normalizedItems, item)
-	}
-	root["terms"] = normalizedItems
-}
-
-func extractionTermVersionFallback(value any, valueKey string, episodeIndex string) (map[string]any, bool) {
+func expandExtractionEpisodeIndexReferences(value any, modelToActual map[string]string) {
 	switch typed := value.(type) {
-	case string:
-		if strings.TrimSpace(typed) == "" {
-			return nil, false
-		}
-		return map[string]any{valueKey: typed, "episodeIndex": episodeIndex}, true
 	case map[string]any:
-		text, _ := typed[valueKey].(string)
-		if strings.TrimSpace(text) == "" {
-			return nil, false
-		}
-		versionEpisodeIndex, _ := typed["episodeIndex"].(string)
-		if strings.TrimSpace(versionEpisodeIndex) == "" {
-			versionEpisodeIndex = episodeIndex
-		}
-		return map[string]any{valueKey: text, "episodeIndex": versionEpisodeIndex}, true
-	default:
-		return nil, false
-	}
-}
-
-func normalizeExtractionCharacterObjects(root map[string]any, processedUpToEpisodeIndex string) {
-	fields := []string{"canonicalName", "fullName", "fullNameHistory", "gender", "genderHistory", "firstAppearanceEpisodeIndex", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"}
-	for _, collection := range []string{"newCharacters", "characterUpdates"} {
-		items, ok := root[collection].([]any)
-		if !ok {
-			continue
-		}
-		update := collection == "characterUpdates"
-		allowed := make(map[string]bool, len(fields)+1)
-		for _, field := range fields {
-			allowed[field] = true
-		}
-		if update {
-			allowed["characterId"] = true
-		}
-		normalizedItems := make([]any, 0, len(items))
-		for _, rawItem := range items {
-			item, ok := rawItem.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !update {
-				if _, valid := extractionTextVersionFallback(item["canonicalName"], processedUpToEpisodeIndex); !valid {
-					if canonicalName, found := extractionCanonicalNameFallback(item, processedUpToEpisodeIndex); found {
-						item["canonicalName"] = canonicalName
+		for key, item := range typed {
+			if key == "episodeIndex" || strings.HasSuffix(key, "EpisodeIndex") {
+				if modelEpisodeIndex, ok := item.(string); ok {
+					if actualEpisodeIndex, found := modelToActual[strings.TrimSpace(modelEpisodeIndex)]; found {
+						typed[key] = actualEpisodeIndex
+						continue
 					}
 				}
-			} else {
-				if _, exists := item["canonicalName"]; !exists {
-					item["canonicalName"] = nil
-				}
-				if _, exists := item["firstAppearanceEpisodeIndex"]; !exists {
-					item["firstAppearanceEpisodeIndex"] = nil
-				}
 			}
-			for _, field := range []string{"fullName", "gender"} {
-				if _, exists := item[field]; !exists {
-					item[field] = nil
-				}
-			}
-			for _, field := range []string{"canonicalName", "fullName", "gender"} {
-				if normalized, ok := extractionTextVersionFallback(item[field], processedUpToEpisodeIndex); ok {
-					item[field] = normalized
-				}
-			}
-			if !update {
-				firstAppearance, _ := item["firstAppearanceEpisodeIndex"].(string)
-				if !isDigitsEpisodeIndex(firstAppearance) {
-					firstAppearance = extractionTextVersionEpisodeIndex(item["canonicalName"])
-					if !isDigitsEpisodeIndex(firstAppearance) {
-						firstAppearance = processedUpToEpisodeIndex
-					}
-					item["firstAppearanceEpisodeIndex"] = firstAppearance
-				}
-			}
-			for _, fields := range [][2]string{{"appearance", "appearanceHistory"}, {"personality", "personalityHistory"}, {"summary", "summaryHistory"}} {
-				history, isArray := item[fields[1]].([]any)
-				if value, exists := item[fields[1]]; exists && value != nil && (!isArray || len(history) > 0) {
-					continue
-				}
-				if version, valid := extractionTextVersionFallback(item[fields[0]], processedUpToEpisodeIndex); valid {
-					item[fields[1]] = []any{version}
-				}
-			}
-			for _, field := range []string{"fullNameHistory", "genderHistory", "aliases", "appearanceHistory", "personalityHistory", "summaryHistory"} {
-				if _, exists := item[field]; !exists {
-					item[field] = []any{}
-				}
-				if versions, ok := item[field].([]any); ok {
-					normalized := make([]any, 0, len(versions))
-					for _, version := range versions {
-						if normalizedVersion, valid := extractionTextVersionFallback(version, processedUpToEpisodeIndex); valid {
-							normalized = append(normalized, normalizedVersion)
-						} else {
-							normalized = append(normalized, version)
-						}
-					}
-					item[field] = normalized
-				}
-			}
-			for field := range item {
-				if !allowed[field] {
-					delete(item, field)
-				}
-			}
-			if !update {
-				if _, valid := extractionTextVersionFallback(item["canonicalName"], processedUpToEpisodeIndex); !valid {
-					continue
-				}
-			}
-			normalizedItems = append(normalizedItems, item)
+			expandExtractionEpisodeIndexReferences(item, modelToActual)
 		}
-		root[collection] = normalizedItems
-	}
-}
-
-func extractionCanonicalNameFallback(item map[string]any, episodeIndex string) (map[string]any, bool) {
-	if version, ok := extractionTextVersionFallback(item["displayName"], episodeIndex); ok {
-		return version, true
-	}
-	if version, ok := extractionTextVersionFallback(item["fullName"], episodeIndex); ok {
-		return version, true
-	}
-	aliases, _ := item["aliases"].([]any)
-	for _, alias := range aliases {
-		if version, ok := extractionTextVersionFallback(alias, episodeIndex); ok {
-			return version, true
+	case []any:
+		for _, item := range typed {
+			expandExtractionEpisodeIndexReferences(item, modelToActual)
 		}
 	}
-	return nil, false
-}
-
-func extractionTextVersionFallback(value any, episodeIndex string) (map[string]any, bool) {
-	switch typed := value.(type) {
-	case string:
-		if strings.TrimSpace(typed) == "" {
-			return nil, false
-		}
-		return map[string]any{"text": typed, "episodeIndex": episodeIndex}, true
-	case map[string]any:
-		text, _ := typed["text"].(string)
-		if strings.TrimSpace(text) == "" {
-			return nil, false
-		}
-		versionEpisodeIndex, _ := typed["episodeIndex"].(string)
-		if strings.TrimSpace(versionEpisodeIndex) == "" {
-			versionEpisodeIndex = episodeIndex
-		}
-		return map[string]any{"text": text, "episodeIndex": versionEpisodeIndex}, true
-	default:
-		return nil, false
-	}
-}
-
-func extractionTextVersionEpisodeIndex(value any) string {
-	version, _ := value.(map[string]any)
-	episodeIndex, _ := version["episodeIndex"].(string)
-	return strings.TrimSpace(episodeIndex)
 }
 
 func normalizeExtractionEpisodeIndexValue(value any) {
@@ -621,9 +410,10 @@ func validateExtractionSimpleObject(raw json.RawMessage, required []string) erro
 }
 
 type preparedExtractionRequest struct {
-	Messages       []ai.ChatMessage
-	ResponseFormat map[string]any
-	PromptTokens   int
+	Messages                  []ai.ChatMessage
+	ResponseFormat            map[string]any
+	PromptTokens              int
+	ModelToActualEpisodeIndex map[string]string
 }
 
 func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batch extractionBatch, unresolved []characters.GeneratedUnresolvedMention, focus ...string) preparedExtractionRequest {
@@ -631,17 +421,86 @@ func prepareExtractionRequest(config *store.ResolvedAIGenerationConfig, novelID 
 	if config != nil {
 		systemPromptOverride = config.SystemPrompt
 	}
-	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, upToEpisodeIndex, knownCharacters, knownTerms, batch, unresolved, systemPromptOverride)
+	modelBatch, modelUpToEpisodeIndex, modelToActualEpisodeIndex := extractionBatchWithModelEpisodeReferences(batch, upToEpisodeIndex)
+	systemPrompt, userPrompt := buildExtractionPromptWithUnresolved(novelID, modelUpToEpisodeIndex, knownCharacters, knownTerms, modelBatch, unresolved, systemPromptOverride)
+	var promptPayload map[string]any
+	if json.Unmarshal([]byte(userPrompt), &promptPayload) == nil {
+		removeOpaqueEpisodeMetadataFromExtractionPrompt(promptPayload)
+		promptPayload["episodeIndexContract"] = "episodeIndexにはepisodes内の短い参照値（ep1、ep2など）だけを使用してください。元の長いIDや推測した値は出力しないでください。"
+		if encoded, err := json.MarshalIndent(promptPayload, "", "  "); err == nil {
+			userPrompt = string(encoded)
+		}
+	}
 	if len(focus) > 0 && focus[0] == "parallel_entities" {
 		systemPrompt += "\n並列抽出では人物と用語を同じレスポンスで必ず抽出してください。この場合だけ、term の descriptionHistory は累積 snapshot ではなく、今回の episodes で新しく明示された事実だけを書いてください。過去や未来の本文から補完しないでください。"
 	}
 	messages := []ai.ChatMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}}
-	responseFormat := extractionOpenRouterResponseFormat(batch.EpisodeIndexes...)
+	responseFormat := extractionOpenRouterResponseFormat(modelBatch.EpisodeIndexes...)
 	return preparedExtractionRequest{
-		Messages:       messages,
-		ResponseFormat: responseFormat,
-		PromptTokens:   estimateOpenRouterChatRequestTokens(messages, nil, responseFormat),
+		Messages:                  messages,
+		ResponseFormat:            responseFormat,
+		PromptTokens:              estimateOpenRouterChatRequestTokens(messages, nil, responseFormat),
+		ModelToActualEpisodeIndex: modelToActualEpisodeIndex,
 	}
+}
+
+func removeOpaqueEpisodeMetadataFromExtractionPrompt(payload map[string]any) {
+	for _, field := range []string{"candidateCharacters", "knownTerms", "unresolvedMentions"} {
+		items, _ := payload[field].([]any)
+		for _, rawItem := range items {
+			item, _ := rawItem.(map[string]any)
+			switch field {
+			case "candidateCharacters":
+				removeOpaqueEpisodeMetadataField(item, "firstAppearance")
+			case "knownTerms":
+				removeOpaqueEpisodeMetadataField(item, "latestEpisodeIndex")
+			case "unresolvedMentions":
+				removeOpaqueEpisodeMetadataField(item, "episodeIndex")
+			}
+		}
+	}
+}
+
+func removeOpaqueEpisodeMetadataField(item map[string]any, field string) {
+	value, _ := item[field].(string)
+	value = strings.TrimSpace(value)
+	if len(value) >= 16 && isDigitsEpisodeIndex(value) {
+		delete(item, field)
+	}
+}
+
+func extractionBatchWithModelEpisodeReferences(batch extractionBatch, upToEpisodeIndex string) (extractionBatch, string, map[string]string) {
+	actualToModel := map[string]string{}
+	modelToActual := map[string]string{}
+	add := func(actual string) string {
+		actual = strings.TrimSpace(actual)
+		if actual == "" {
+			return ""
+		}
+		if model, ok := actualToModel[actual]; ok {
+			return model
+		}
+		model := fmt.Sprintf("ep%d", len(actualToModel)+1)
+		actualToModel[actual] = model
+		modelToActual[model] = actual
+		return model
+	}
+	modelBatch := batch
+	modelBatch.EpisodeIndexes = make([]string, 0, len(batch.EpisodeIndexes))
+	for _, actual := range batch.EpisodeIndexes {
+		if strings.TrimSpace(actual) != "" {
+			modelBatch.EpisodeIndexes = append(modelBatch.EpisodeIndexes, add(actual))
+		}
+	}
+	modelBatch.Chunks = append([]extractionChunk{}, batch.Chunks...)
+	for index := range modelBatch.Chunks {
+		modelBatch.Chunks[index].EpisodeIndex = add(modelBatch.Chunks[index].EpisodeIndex)
+	}
+	modelUpToEpisodeIndex := actualToModel[strings.TrimSpace(upToEpisodeIndex)]
+	if modelUpToEpisodeIndex == "" && len(modelBatch.EpisodeIndexes) > 0 {
+		modelUpToEpisodeIndex = modelBatch.EpisodeIndexes[len(modelBatch.EpisodeIndexes)-1]
+	}
+	return modelBatch, modelUpToEpisodeIndex, modelToActual
 }
 
 func extractionUsageRequestForBatch(index int, batch extractionBatch) ai.UsageRequest {

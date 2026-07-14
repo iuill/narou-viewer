@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,6 +84,45 @@ func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenRouterBatchAddsContractCorrectionOnRetry(t *testing.T) {
+	requests := 0
+	openrouter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []ai.ChatMessage `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode OpenRouter request: %v", err)
+		}
+		requests++
+		content := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":"合成人物","episodeIndex":"1","reason":"候補不明"}],"terms":[]}`
+		if requests == 2 {
+			if len(request.Messages) < 2 {
+				t.Fatalf("retry should append a correction message: %+v", request.Messages)
+			}
+			correction, ok := request.Messages[len(request.Messages)-1].Content.(string)
+			if !ok || !strings.Contains(correction, "必須fieldと空配列") || !strings.Contains(correction, "現在の抽出バッチ") {
+				t.Fatalf("retry correction should identify the contract failure: %#v", request.Messages[len(request.Messages)-1].Content)
+			}
+			content = `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":"合成人物","episodeIndex":"20","reason":"候補不明"}],"terms":[]}`
+		}
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": content}}},
+			"usage":   map[string]any{"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+		}); err != nil {
+			t.Fatalf("encode OpenRouter response: %v", err)
+		}
+	}))
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+	if err != nil || len(result.Delta.UnresolvedMentions) != 1 {
+		t.Fatalf("corrected retry should succeed: result=%+v err=%v", result, err)
+	}
+}
+
 func TestGenerateOpenRouterBatchNormalizesNumericEpisodeIndexesWithoutPrecisionLoss(t *testing.T) {
 	const episodeIndex = "16818093084191348892"
 	openrouter := newExtractionOpenRouterTestServer(t,
@@ -115,46 +156,77 @@ func TestGenerateOpenRouterBatchUsesServerBatchFrontierForProcessedEpisodeIndex(
 	}
 }
 
-func TestGenerateOpenRouterBatchNormalizesFallbackCharacterShape(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t,
-		`{"processedUpToEpisodeIndex":"episode 4","newCharacters":[{"temporaryId":"person-1","fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":null,"aliases":["合成人物"],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":["合成説明"]},{"temporaryId":"unnamed-person","fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":null,"aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":["名前のない人物"]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"name":"合成用語","reading":"ごうせいようご","category":"organization","description":"合成説明"}]}`,
-	)
+func TestGenerateOpenRouterBatchUsesShortModelEpisodeReferences(t *testing.T) {
+	const episodeIndex = "16818093083280979446"
+	openrouter := newExtractionOpenRouterTestServer(t, `{"processedUpToEpisodeIndex":"ep2","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[{"mention":"合成人物","episodeIndex":"ep2","reason":"候補不明"}],"terms":[]}`)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{
+		"16818093082855575914",
+		episodeIndex,
+	}, Chunks: []extractionChunk{{EpisodeIndex: episodeIndex, Text: "合成本文"}}}
 
-	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
-	if err != nil {
-		t.Fatalf("fallback character shape should be normalized: %v", err)
-	}
-	if len(result.Delta.NewCharacters) != 1 || result.Delta.NewCharacters[0].CanonicalName != "合成人物" || result.Delta.NewCharacters[0].FirstAppearanceEpisodeIndex != "4" || len(result.Delta.NewCharacters[0].SummaryHistory) != 1 {
-		t.Fatalf("unexpected normalized character: %+v", result.Delta.NewCharacters)
-	}
-	if len(result.Delta.Terms) != 1 || result.Delta.Terms[0].Term != "合成用語" || result.Delta.Terms[0].DescriptionHistory[0].EpisodeIndex != "4" {
-		t.Fatalf("unexpected normalized term: %+v", result.Delta.Terms)
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", episodeIndex, nil, nil, batch)
+	if err != nil || len(result.Delta.UnresolvedMentions) != 1 || result.Delta.UnresolvedMentions[0].EpisodeIndex != episodeIndex {
+		t.Fatalf("short model reference should be restored to the real episode index: result=%+v err=%v", result, err)
 	}
 }
 
-func TestGenerateOpenRouterBatchCompletesOmittedDeltaArrays(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t,
-		`{"newCharacters":[{"canonicalName":"アリス","aliases":[],"summaryHistory":["主人公"]}],"characterUpdates":null,"terms":[]}`,
+func TestPrepareExtractionRequestHidesLongEpisodeIndexesFromOutputContract(t *testing.T) {
+	const firstEpisodeIndex = "16818093082855575914"
+	const secondEpisodeIndex = "16818093083280979446"
+	prepared := prepareExtractionRequest(
+		&store.ResolvedAIGenerationConfig{},
+		"novel-1",
+		secondEpisodeIndex,
+		nil,
+		nil,
+		extractionBatch{
+			EpisodeIndexes: []string{firstEpisodeIndex, secondEpisodeIndex},
+			Chunks: []extractionChunk{
+				{EpisodeIndex: firstEpisodeIndex, Text: "合成本文1"},
+				{EpisodeIndex: secondEpisodeIndex, Text: "合成本文2"},
+			},
+		},
+		nil,
 	)
-	defer openrouter.Close()
-	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
-
-	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
-	if err != nil {
-		t.Fatalf("omitted empty delta arrays should be completed: %v", err)
+	userPrompt, _ := prepared.Messages[1].Content.(string)
+	if strings.Contains(userPrompt, firstEpisodeIndex) || strings.Contains(userPrompt, secondEpisodeIndex) || !strings.Contains(userPrompt, `"episodeIndex": "ep1"`) || !strings.Contains(userPrompt, `"episodeIndex": "ep2"`) {
+		t.Fatalf("episode payload should use only short model references: %s", userPrompt)
 	}
-	if len(result.Delta.NewCharacters) != 1 || result.Delta.NewCharacters[0].CanonicalName != "アリス" {
-		t.Fatalf("unexpected normalized delta: %+v", result.Delta)
+	definitions := prepared.ResponseFormat["json_schema"].(map[string]any)["schema"].(map[string]any)["$defs"].(map[string]any)
+	values := definitions["episodeIndex"].(map[string]any)["enum"].([]any)
+	if !reflect.DeepEqual(values, []any{"ep1", "ep2"}) {
+		t.Fatalf("response schema should enumerate short model references: %+v", values)
+	}
+	if prepared.ModelToActualEpisodeIndex["ep1"] != firstEpisodeIndex || prepared.ModelToActualEpisodeIndex["ep2"] != secondEpisodeIndex {
+		t.Fatalf("model references should map back to real IDs: %+v", prepared.ModelToActualEpisodeIndex)
 	}
 }
 
-func TestNormalizeExtractionRootDeltaArraysPreservesInvalidTypes(t *testing.T) {
+func TestRemoveOpaqueEpisodeMetadataFromExtractionPrompt(t *testing.T) {
+	payload := map[string]any{
+		"candidateCharacters": []any{map[string]any{"characterId": "char-1", "firstAppearance": "16818093082855575914"}},
+		"knownTerms": []any{
+			map[string]any{"term": "合成用語", "latestEpisodeIndex": "16818093082855575914"},
+			map[string]any{"term": "短い話数", "latestEpisodeIndex": "12"},
+		},
+		"unresolvedMentions": []any{map[string]any{"mention": "先生", "episodeIndex": "16818093082855575914"}},
+		"episodes":           []any{map[string]any{"episodeIndex": "ep1"}},
+	}
+
+	removeOpaqueEpisodeMetadataFromExtractionPrompt(payload)
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("encode prompt payload: %v", err)
+	}
+	if strings.Contains(string(encoded), "16818093082855575914") || !strings.Contains(string(encoded), `"episodeIndex":"ep1"`) || !strings.Contains(string(encoded), `"latestEpisodeIndex":"12"`) {
+		t.Fatalf("prompt should retain only current-batch short references: %s", encoded)
+	}
+}
+
+func TestNormalizeExtractionEpisodeIndexesPreservesInvalidRootTypes(t *testing.T) {
 	normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(`{"newCharacters":"invalid","terms":[]}`), "4")
 	if err != nil {
 		t.Fatalf("normalize JSON object: %v", err)
@@ -164,7 +236,7 @@ func TestNormalizeExtractionRootDeltaArraysPreservesInvalidTypes(t *testing.T) {
 	}
 }
 
-func TestNormalizeExtractionRootDeltaArraysPreservesLegacyResponse(t *testing.T) {
+func TestNormalizeExtractionEpisodeIndexesPreservesLegacyResponse(t *testing.T) {
 	normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(`{"characters":[],"terms":[]}`), "4")
 	if err != nil {
 		t.Fatalf("normalize legacy response: %v", err)
@@ -181,77 +253,7 @@ func TestNormalizeExtractionRootDeltaArraysPreservesLegacyResponse(t *testing.T)
 	}
 }
 
-func TestGenerateOpenRouterBatchRecoversNullableNamesAndLegacyCharacterFields(t *testing.T) {
-	openrouter := newExtractionOpenRouterTestServer(t,
-		`{"newCharacters":[{"canonicalName":null,"fullName":null,"aliases":["アリス"],"summary":"主人公","appearance":"銀髪","personality":"慎重"},{"displayName":"ボブ","summary":"王国騎士"}],"terms":[{"term":null,"name":"魔導院","reading":"","category":"organization","description":"魔術を研究する組織"}]}`,
-	)
-	defer openrouter.Close()
-	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
-	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"4"}, Chunks: []extractionChunk{{EpisodeIndex: "4", Text: "合成本文"}}}
-
-	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "4", nil, nil, batch)
-	if err != nil {
-		t.Fatalf("recoverable fallback values should be normalized: %v", err)
-	}
-	if len(result.Delta.NewCharacters) != 2 || result.Delta.NewCharacters[0].CanonicalName != "アリス" || len(result.Delta.NewCharacters[0].SummaryHistory) != 1 || len(result.Delta.NewCharacters[0].AppearanceHistory) != 1 || len(result.Delta.NewCharacters[0].PersonalityHistory) != 1 {
-		t.Fatalf("legacy character fields were not preserved: %+v", result.Delta.NewCharacters)
-	}
-	if result.Delta.NewCharacters[1].CanonicalName != "ボブ" || len(result.Delta.NewCharacters[1].SummaryHistory) != 1 {
-		t.Fatalf("displayName fallback was not preserved: %+v", result.Delta.NewCharacters[1])
-	}
-	if len(result.Delta.Terms) != 1 || result.Delta.Terms[0].Term != "魔導院" || len(result.Delta.Terms[0].ReadingHistory) != 0 {
-		t.Fatalf("nullable term fields were not recovered: %+v", result.Delta.Terms)
-	}
-}
-
-func TestNormalizeExtractionEpisodeIndexScalarsCoversFallbackVariants(t *testing.T) {
-	raw := []byte(`{
-		"processedUpToEpisodeIndex":null,
-		"newCharacters":[null,{"canonicalName":"合成人物","firstAppearanceEpisodeIndex":"3","extra":"ignored"}],
-		"characterUpdates":[{"characterId":"char-1","extra":"ignored"}],
-		"terms":[null,{"term":"","description":"ignored"},{"term":"既存形式","category":{"value":"place","episodeIndex":"3"},"descriptionHistory":[{"text":"説明","episodeIndex":"3"}]},{"term":"説明なし","reading":{"text":"せつめいなし"}}]
-	}`)
-
-	normalized, err := normalizeExtractionEpisodeIndexScalars(raw, "4")
-	if err != nil {
-		t.Fatalf("normalize fallback variants: %v", err)
-	}
-	var root map[string]any
-	if err := json.Unmarshal(normalized, &root); err != nil {
-		t.Fatalf("decode normalized fallback variants: %v", err)
-	}
-	if root["processedUpToEpisodeIndex"] != "4" {
-		t.Fatalf("unexpected processed frontier: %+v", root)
-	}
-	newCharacters := root["newCharacters"].([]any)
-	if len(newCharacters) != 1 {
-		t.Fatalf("non-object character should be removed: %+v", newCharacters)
-	}
-	newCharacter := newCharacters[0].(map[string]any)
-	if newCharacter["firstAppearanceEpisodeIndex"] != "3" || newCharacter["extra"] != nil {
-		t.Fatalf("unexpected normalized new character: %+v", newCharacter)
-	}
-	updates := root["characterUpdates"].([]any)
-	update := updates[0].(map[string]any)
-	if update["canonicalName"] != nil || update["firstAppearanceEpisodeIndex"] != nil || update["extra"] != nil {
-		t.Fatalf("unexpected normalized character update: %+v", update)
-	}
-	normalizedTerms := root["terms"].([]any)
-	if len(normalizedTerms) != 1 {
-		t.Fatalf("invalid terms should be removed: %+v", normalizedTerms)
-	}
-	category := normalizedTerms[0].(map[string]any)["category"].(map[string]any)
-	if category["value"] != "place" || category["episodeIndex"] != "3" {
-		t.Fatalf("existing term version should be preserved: %+v", normalizedTerms[0])
-	}
-
-	if _, err := normalizeExtractionEpisodeIndexScalars([]byte(`[]`), "4"); err != nil {
-		t.Fatalf("non-object JSON should remain valid: %v", err)
-	}
-}
-
-func TestExtractionFallbackNormalizerRejectsUnusableVariants(t *testing.T) {
+func TestExtractionResponseValidationRejectsUnusableVariants(t *testing.T) {
 	if _, err := normalizeExtractionEpisodeIndexScalars([]byte(`not-json`), "4"); err == nil {
 		t.Fatal("invalid JSON should be rejected")
 	}
@@ -261,16 +263,6 @@ func TestExtractionFallbackNormalizerRejectsUnusableVariants(t *testing.T) {
 	for _, raw := range []string{`[]`, `{"text":"説明","extra":true}`, `{"text":1,"episodeIndex":"4"}`} {
 		if err := validateExtractionVersionObject(json.RawMessage(raw)); err == nil {
 			t.Fatalf("invalid version should be rejected: %s", raw)
-		}
-	}
-	for _, value := range []any{"", map[string]any{"text": ""}, true} {
-		if _, ok := extractionTextVersionFallback(value, "4"); ok {
-			t.Fatalf("unusable text version should be rejected: %+v", value)
-		}
-	}
-	for _, value := range []any{"", map[string]any{"value": ""}, true} {
-		if _, ok := extractionTermVersionFallback(value, "value", "4"); ok {
-			t.Fatalf("unusable term version should be rejected: %+v", value)
 		}
 	}
 }
@@ -334,7 +326,7 @@ func TestDiscoverParallelIdentityNamesRetriesBoundaryViolation(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
 		`{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"1","reason":"誤った話数"}]}`,
-		`{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"20","reason":"第20話で登場"}]}`,
+		`{"characters":[{"name":"王女セリア","aliases":[],"episodeIndex":"ep1","reason":"第20話で登場"}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
