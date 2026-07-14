@@ -490,7 +490,7 @@ func TestExtractionMergeProposalsAreOrderIndependent(t *testing.T) {
 	}
 }
 
-func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
+func TestExtractionEngineNormalizesDeltaResponses(t *testing.T) {
 	delta := []byte(`{
 	  "processedUpToEpisodeIndex":"5",
 	"newCharacters":[{
@@ -542,40 +542,9 @@ func TestExtractionEngineNormalizesRichAndLegacyResponses(t *testing.T) {
 		t.Fatalf("unexpected delta normalization: %+v", normalized)
 	}
 
-	rich := []byte(`{
-	  "processedUpToEpisodeIndex":"3",
-	"characters":[{
-	    "canonicalName":{"text":" アリス ","episodeIndex":"1"},
-	    "fullName":{"text":"アリス・スミス","episodeIndex":"2"},
-	    "fullNameHistory":[{"text":"アリス旧姓","episodeIndex":"1"},{"text":"アリス・スミス","episodeIndex":"2"}],
-	    "gender":{"text":"女性","episodeIndex":"1"},
-	    "genderHistory":[{"text":"女性","episodeIndex":"1"}],
-	    "firstAppearanceEpisodeIndex":"1",
-	    "aliases":[{"text":"アリス","episodeIndex":"1"},{"text":"アリス","episodeIndex":"1"}],
-	    "appearanceHistory":[{"episodeIndex":"1","text":"銀髪"}],
-	    "personalityHistory":[{"episodeIndex":"2","text":"冷静"}],
-	    "summaryHistory":[{"episodeIndex":"3","text":"仲間。"}]
-	  }],
-	  "terms":[]
-	}`)
-	normalized, err = normalizeExtractionOpenRouterResponse(rich, "novel-1", "3")
-	if err != nil {
-		t.Fatalf("rich response should normalize: %v", err)
-	}
-	if len(normalized.LegacyCharacters) != 1 || normalized.LegacyCharacters[0].CanonicalName != "アリス" || normalized.LegacyCharacters[0].FullName == nil || len(normalized.LegacyCharacters[0].FullNameHistory) != 2 || len(normalized.LegacyCharacters[0].Aliases) != 1 {
-		t.Fatalf("unexpected rich normalization: %+v", normalized)
-	}
-
 	legacy := []byte(`{"characters":[{"canonicalName":"ボブ","summary":"騎士。","appearance":null,"personality":"忠実"}],"terms":[]}`)
-	normalized, err = normalizeExtractionOpenRouterResponse(legacy, "novel-1", "4")
-	if err != nil {
-		t.Fatalf("legacy response should normalize: %v", err)
-	}
-	if len(normalized.LegacyCharacters) != 1 || normalized.LegacyCharacters[0].CanonicalEpisodeIndex != "4" || len(normalized.LegacyCharacters[0].SummaryHistory) != 1 {
-		t.Fatalf("unexpected legacy normalization: %+v", normalized)
-	}
-	if _, err := normalizeExtractionOpenRouterResponse([]byte(`{"characters":{}}`), "novel-1", "4"); err == nil {
-		t.Fatal("malformed characters payload should fail")
+	if _, err := normalizeExtractionOpenRouterResponse(legacy, "novel-1", "4"); err == nil {
+		t.Fatal("legacy characters response should be rejected")
 	}
 }
 

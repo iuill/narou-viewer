@@ -159,8 +159,8 @@ func TestExtractParallelIdentityCandidatesReturnsFirstBatchError(t *testing.T) {
 func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
-		`{"processedUpToEpisodeIndex":"1","terms":[{"term":"魔導院","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都にある。","episodeIndex":"1"}]}],"characters":[{"canonicalName":"アリス","summary":"廊下に立っていた人物。"}]}`,
-		`{"processedUpToEpisodeIndex":"2","terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"村へ派遣された。","episodeIndex":"2"}]}],"characters":[{"canonicalName":"ボブ","summary":"庭にいた人物。"}]}`,
+		`{"processedUpToEpisodeIndex":"1","newCharacters":[{"canonicalName":{"text":"アリス","episodeIndex":"1"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"1","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"廊下に立っていた人物。","episodeIndex":"1"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"魔導院","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都にある。","episodeIndex":"1"}]}]}`,
+		`{"processedUpToEpisodeIndex":"2","newCharacters":[{"canonicalName":{"text":"ボブ","episodeIndex":"2"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"2","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"庭にいた人物。","episodeIndex":"2"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"村へ派遣された。","episodeIndex":"2"}]}]}`,
 	)
 	defer openrouter.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
@@ -323,8 +323,8 @@ func TestParallelIdentityExtractsCharactersAndTermsInOnePass(t *testing.T) {
 			t.Fatalf("parallel request must extract both entity types: %s", raw)
 		}
 		responses := []string{
-			`{"processedUpToEpisodeIndex":"1","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都直属の騎士団。","episodeIndex":"1"}]}]}`,
-			`{"processedUpToEpisodeIndex":"2","characters":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"辺境の村へ派遣された。","episodeIndex":"2"}]}]}`,
+			`{"processedUpToEpisodeIndex":"1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"1"},"descriptionHistory":[{"text":"王都直属の騎士団。","episodeIndex":"1"}]}]}`,
+			`{"processedUpToEpisodeIndex":"2","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"白銀騎士団","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"辺境の村へ派遣された。","episodeIndex":"2"}]}]}`,
 		}
 		content := responses[requestIndex]
 		requestIndex++
@@ -874,6 +874,29 @@ func TestResolveParallelIdentityClustersRetriesInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestResolveParallelIdentityClustersRetriesOutOfRangeConfidence(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"clusters":[{"localIds":["b1-c1","b2-c1"],"canonicalName":"アリス","confidence":95,"reason":"百分率"}]}`,
+		`{"clusters":[{"localIds":["b1-c1","b2-c1"],"canonicalName":"アリス","confidence":0.95,"reason":"確率"}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	candidates := []parallelIdentityCandidate{
+		{LocalID: "b1-c1", Character: characters.GeneratedCharacter{CanonicalName: "アリス"}},
+		{LocalID: "b2-c1", Character: characters.GeneratedCharacter{CanonicalName: "アリス"}},
+	}
+
+	clusters, usage, err := runtime.resolveParallelIdentityClustersOneShot(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "1", candidates)
+	if err != nil || len(clusters) != 1 || clusters[0].Confidence != 0.95 {
+		t.Fatalf("out-of-range confidence should be rejected and recovered by retry: clusters=%+v err=%v", clusters, err)
+	}
+	if usage.InputTokens != 22 || usage.OutputTokens != 14 || usage.TotalTokens != 36 {
+		t.Fatalf("identity confidence retry should include both responses: %+v", usage)
+	}
+}
+
 func TestResolveParallelIdentityClustersFallbackKeepsSeedIdentityAcrossSplitNameGroup(t *testing.T) {
 	openrouter := newExtractionOpenRouterTestServer(
 		t,
@@ -952,11 +975,11 @@ func TestFilterAutoApplicableParallelIdentityClustersConfidenceBoundaryAndBridge
 		{LocalIDs: []string{"c", "e"}, Confidence: 1.2},
 		{LocalIDs: []string{"singleton"}, Confidence: 1},
 	})
-	if len(filtered) != 2 || filtered[0].Confidence != 0.75 || filtered[1].Confidence != 1 {
+	if len(filtered) != 1 || filtered[0].Confidence != 0.75 {
 		t.Fatalf("filtered = %+v", filtered)
 	}
 	merged := mergeOverlappingParallelIdentityClusters(filtered)
-	if len(merged) != 2 {
+	if len(merged) != 1 {
 		t.Fatalf("low-confidence bridge merged trusted clusters: %+v", merged)
 	}
 }

@@ -234,16 +234,8 @@ func validateExtractionOutputContract(raw []byte) error {
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return err
 	}
-	if root["terms"] == nil || string(root["terms"]) == "null" {
-		return errors.New("OpenRouter response did not match the expected extraction schema.")
-	}
-	if root["newCharacters"] == nil {
-		var legacyCharacters []json.RawMessage
-		var legacyTerms []json.RawMessage
-		if root["characters"] == nil || json.Unmarshal(root["characters"], &legacyCharacters) != nil || legacyCharacters == nil || root["terms"] == nil || json.Unmarshal(root["terms"], &legacyTerms) != nil || legacyTerms == nil {
-			return errors.New("モデル出力が抽出契約のroot fieldsと一致しません")
-		}
-		return nil
+	if err := validateExtractionRootFields(root, []string{"processedUpToEpisodeIndex", "newCharacters", "characterUpdates", "mergeProposals", "unresolvedMentions", "terms"}); err != nil {
+		return err
 	}
 	var processed string
 	if json.Unmarshal(root["processedUpToEpisodeIndex"], &processed) != nil || !isDigitsEpisodeIndex(processed) {
@@ -269,7 +261,7 @@ func validateExtractionOutputContract(raw []byte) error {
 			}
 		case "mergeProposals":
 			for _, item := range items {
-				if err := validateExtractionSimpleObject(item, []string{"sourceCharacterId", "targetCharacterId", "confidence", "reason"}); err != nil {
+				if err := validateExtractionMergeProposalItem(item); err != nil {
 					return errors.New("モデル出力の mergeProposals に不正な項目があります")
 				}
 			}
@@ -280,6 +272,32 @@ func validateExtractionOutputContract(raw []byte) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateExtractionRootFields(root map[string]json.RawMessage, allowedFields []string) error {
+	allowed := make(map[string]bool, len(allowedFields))
+	for _, field := range allowedFields {
+		allowed[field] = true
+	}
+	for field := range root {
+		if !allowed[field] {
+			return fmt.Errorf("モデル出力のrootに契約外field %s があります", field)
+		}
+	}
+	return nil
+}
+
+func validateExtractionMergeProposalItem(raw json.RawMessage) error {
+	if err := validateExtractionSimpleObject(raw, []string{"sourceCharacterId", "targetCharacterId", "confidence", "reason"}); err != nil {
+		return err
+	}
+	var item struct {
+		Confidence float64 `json:"confidence"`
+	}
+	if json.Unmarshal(raw, &item) != nil || !(item.Confidence >= 0 && item.Confidence <= 1) {
+		return errors.New("merge proposal confidence out of range")
 	}
 	return nil
 }
@@ -675,7 +693,7 @@ func extractionOpenRouterResponseFormat(allowedEpisodeIndexes ...string) map[str
 							"properties": map[string]any{
 								"sourceCharacterId": map[string]any{"type": "string"},
 								"targetCharacterId": map[string]any{"type": "string"},
-								"confidence":        map[string]any{"type": "number"},
+								"confidence":        map[string]any{"type": "number", "minimum": 0, "maximum": 1},
 								"reason":            map[string]any{"type": "string"},
 							},
 						},

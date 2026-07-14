@@ -60,6 +60,12 @@ func TestParallelIdentityResponseFormatsUseStrictJSONSchema(t *testing.T) {
 					t.Fatalf("discovery schema must restrict episodeIndex to the current batch: %+v", episodeIndex)
 				}
 			}
+			if test.name == "clusters" {
+				confidence := items["properties"].(map[string]any)["confidence"].(map[string]any)
+				if confidence["minimum"] != 0 || confidence["maximum"] != 1 {
+					t.Fatalf("cluster confidence must be constrained to a probability: %+v", confidence)
+				}
+			}
 		})
 	}
 }
@@ -81,6 +87,46 @@ func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
 		t.Fatalf("retry usage should include both provider responses: %+v", result.Usage)
+	}
+}
+
+func TestGenerateOpenRouterBatchRetriesLegacyRoot(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"ep1","characters":[],"terms":[]}`,
+		`{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+	if err != nil {
+		t.Fatalf("legacy root should be rejected and recovered by retry: %v", err)
+	}
+	if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
+		t.Fatalf("legacy root should consume two attempts: %+v", result.Usage)
+	}
+}
+
+func TestGenerateOpenRouterBatchRetriesOutOfRangeMergeConfidence(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char-a","targetCharacterId":"char-b","confidence":95,"reason":"百分率"}],"unresolvedMentions":[],"terms":[]}`,
+		`{"processedUpToEpisodeIndex":"ep1","newCharacters":[],"characterUpdates":[],"mergeProposals":[{"sourceCharacterId":"char-a","targetCharacterId":"char-b","confidence":0.95,"reason":"確率"}],"unresolvedMentions":[],"terms":[]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"20"}, Chunks: []extractionChunk{{EpisodeIndex: "20", Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", "20", nil, nil, batch)
+	if err != nil || len(result.Delta.MergeProposals) != 1 || result.Delta.MergeProposals[0].Confidence != 0.95 {
+		t.Fatalf("out-of-range confidence should be rejected and recovered by retry: result=%+v err=%v", result, err)
+	}
+	if result.Usage.InputTokens != 22 || result.Usage.OutputTokens != 14 || result.Usage.TotalTokens != 36 {
+		t.Fatalf("out-of-range confidence should consume two attempts: %+v", result.Usage)
 	}
 }
 
@@ -236,20 +282,20 @@ func TestNormalizeExtractionEpisodeIndexesPreservesInvalidRootTypes(t *testing.T
 	}
 }
 
-func TestNormalizeExtractionEpisodeIndexesPreservesLegacyResponse(t *testing.T) {
-	normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(`{"characters":[],"terms":[]}`), "4")
-	if err != nil {
-		t.Fatalf("normalize legacy response: %v", err)
-	}
-	var root map[string]any
-	if err := json.Unmarshal(normalized, &root); err != nil {
-		t.Fatalf("decode legacy response: %v", err)
-	}
-	if _, exists := root["newCharacters"]; exists {
-		t.Fatalf("legacy response must not be converted into an empty delta response: %+v", root)
-	}
-	if err := validateExtractionOutputContract(normalized); err != nil {
-		t.Fatalf("legacy response should remain valid: %v", err)
+func TestNormalizeExtractionEpisodeIndexesRejectsLegacyResponse(t *testing.T) {
+	for name, raw := range map[string]string{
+		"legacy": `{"characters":[],"terms":[]}`,
+		"mixed":  `{"processedUpToEpisodeIndex":"4","characters":[],"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			normalized, err := normalizeExtractionEpisodeIndexScalars([]byte(raw), "4")
+			if err != nil {
+				t.Fatalf("normalize response: %v", err)
+			}
+			if err := validateExtractionOutputContract(normalized); err == nil {
+				t.Fatalf("%s response should be rejected", name)
+			}
+		})
 	}
 }
 

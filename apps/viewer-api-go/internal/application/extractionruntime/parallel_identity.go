@@ -533,7 +533,7 @@ func filterGeneratedUnresolvedAtBoundary(values []characters.GeneratedUnresolved
 func parallelIdentityCandidatesFromDeltaWithKnown(novelID string, requestIndex int, batch extractionBatch, delta extractionDelta, knownCharacters []characters.GeneratedCharacter) []parallelIdentityCandidate {
 	_ = novelID
 	knownByID := generatedCharacterMapByID(knownCharacters)
-	candidates := make([]parallelIdentityCandidate, 0, len(delta.LegacyCharacters)+len(delta.NewCharacters)+len(delta.CharacterUpdates))
+	candidates := make([]parallelIdentityCandidate, 0, len(delta.NewCharacters)+len(delta.CharacterUpdates))
 	appendCandidate := func(character characters.GeneratedCharacter, persistence characters.GeneratedCharacter) {
 		candidates = append(candidates, parallelIdentityCandidate{
 			LocalID:                 fmt.Sprintf("b%d-c%d", requestIndex+1, len(candidates)+1),
@@ -543,9 +543,6 @@ func parallelIdentityCandidatesFromDeltaWithKnown(novelID string, requestIndex i
 			PersistenceCharacter:    persistence,
 			HasPersistenceCharacter: true,
 		})
-	}
-	for _, character := range delta.LegacyCharacters {
-		appendCandidate(character, character)
 	}
 	for _, character := range delta.NewCharacters {
 		appendCandidate(character, character)
@@ -673,7 +670,7 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 			return decodeErr
 		}
 		for _, cluster := range decoded.Clusters {
-			if len(cluster.LocalIDs) < 2 || strings.TrimSpace(cluster.CanonicalName) == "" {
+			if len(cluster.LocalIDs) < 2 || strings.TrimSpace(cluster.CanonicalName) == "" || !(cluster.Confidence >= 0 && cluster.Confidence <= 1) {
 				return errors.New("モデル出力の clusters に不正な項目があります")
 			}
 		}
@@ -694,13 +691,8 @@ func (r *Runtime) resolveParallelIdentityClustersOneShot(ctx context.Context, co
 func filterAutoApplicableParallelIdentityClusters(values []parallelIdentityCluster) []parallelIdentityCluster {
 	result := make([]parallelIdentityCluster, 0, len(values))
 	for _, value := range values {
-		if value.Confidence < 0 {
-			value.Confidence = 0
-		} else if value.Confidence > 1 {
-			value.Confidence = 1
-		}
 		value.LocalIDs = normalizeParallelIdentityLocalIDs(value.LocalIDs)
-		if value.Confidence < core.MergeAutoApplyConfidence || len(value.LocalIDs) < 2 {
+		if !core.IsAutoApplicableMergeConfidence(value.Confidence) || len(value.LocalIDs) < 2 {
 			continue
 		}
 		result = append(result, value)

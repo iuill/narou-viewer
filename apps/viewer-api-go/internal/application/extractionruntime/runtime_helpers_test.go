@@ -70,6 +70,11 @@ func TestExtractionOpenRouterResponseFormatRequiresStrictTerms(t *testing.T) {
 		t.Fatalf("root response schema must require terms: %+v", required)
 	}
 	properties := schema["properties"].(map[string]any)
+	mergeProposal := properties["mergeProposals"].(map[string]any)["items"].(map[string]any)
+	confidence := mergeProposal["properties"].(map[string]any)["confidence"].(map[string]any)
+	if confidence["minimum"] != 0 || confidence["maximum"] != 1 {
+		t.Fatalf("merge proposal confidence must be constrained to a probability: %+v", confidence)
+	}
 	termItems := properties["terms"].(map[string]any)["items"].(map[string]any)
 	termProperties := termItems["properties"].(map[string]any)
 	reading := termProperties["reading"].(map[string]any)

@@ -59,7 +59,6 @@ type Delta struct {
 	CharacterUpdates   []characters.GeneratedCharacter
 	MergeProposals     []MergeProposal
 	UnresolvedMentions []UnresolvedMention
-	LegacyCharacters   []characters.GeneratedCharacter
 	Terms              []terms.GeneratedTerm
 }
 
@@ -88,6 +87,10 @@ type GenerationState struct {
 }
 
 const MergeAutoApplyConfidence = 0.75
+
+func IsAutoApplicableMergeConfidence(confidence float64) bool {
+	return confidence >= MergeAutoApplyConfidence && confidence <= 1
+}
 
 var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
 var htmlScriptPattern = regexp.MustCompile(`(?is)<script[\s\S]*?</script>`)
@@ -967,7 +970,6 @@ func FirstNonEmptyString(values ...string) string {
 func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeIndex string) (Delta, error) {
 	var payload struct {
 		ProcessedUpToEpisodeIndex string              `json:"processedUpToEpisodeIndex"`
-		Characters                []json.RawMessage   `json:"characters"`
 		NewCharacters             []json.RawMessage   `json:"newCharacters"`
 		CharacterUpdates          []json.RawMessage   `json:"characterUpdates"`
 		MergeProposals            []MergeProposal     `json:"mergeProposals"`
@@ -977,7 +979,7 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return Delta{}, errors.New("OpenRouter response was not valid JSON.")
 	}
-	if payload.Characters == nil && payload.NewCharacters == nil && payload.CharacterUpdates == nil {
+	if payload.NewCharacters == nil || payload.CharacterUpdates == nil || payload.MergeProposals == nil || payload.UnresolvedMentions == nil {
 		return Delta{}, errors.New("OpenRouter response did not match the expected extraction schema.")
 	}
 	if payload.Terms == nil || string(payload.Terms) == "null" {
@@ -1004,22 +1006,6 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		}
 	}
 	delta.Terms = terms.CombineTermFacts(delta.Terms)
-	seenIDs := map[string]bool{}
-	for _, rawItem := range payload.Characters {
-		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
-		if !ok {
-			return Delta{}, errors.New("OpenRouter response did not match the expected extraction character schema.")
-		}
-		id := strings.TrimSpace(character.CharacterID)
-		if id == "" {
-			id = GeneratedCharacterID(novelID, character.CanonicalName)
-		}
-		if seenIDs[id] {
-			continue
-		}
-		seenIDs[id] = true
-		delta.LegacyCharacters = append(delta.LegacyCharacters, character)
-	}
 	for _, rawItem := range payload.NewCharacters {
 		character, ok := normalizeOpenRouterCharacter(rawItem, payload.ProcessedUpToEpisodeIndex, fallbackEpisodeIndex)
 		if !ok {
@@ -1037,7 +1023,6 @@ func NormalizeOpenRouterResponse(raw []byte, novelID string, fallbackEpisodeInde
 		character.FirstAppearanceEpisodeIndex = ""
 		delta.CharacterUpdates = append(delta.CharacterUpdates, character)
 	}
-	SortGeneratedCharacters(delta.LegacyCharacters)
 	SortGeneratedCharacters(delta.NewCharacters)
 	SortGeneratedCharacters(delta.CharacterUpdates)
 	return delta, nil
@@ -1185,11 +1170,9 @@ func ValidateDeltaEpisodeIndexes(delta Delta, allowedEpisodeIndexes []string) er
 		}
 		return true
 	}
-	for _, values := range [][]characters.GeneratedCharacter{delta.LegacyCharacters, delta.NewCharacters} {
-		for _, character := range values {
-			if !validateCharacter(character) {
-				return extractionEpisodeBoundaryError(invalidEpisodeIndex)
-			}
+	for _, character := range delta.NewCharacters {
+		if !validateCharacter(character) {
+			return extractionEpisodeBoundaryError(invalidEpisodeIndex)
 		}
 	}
 	for _, character := range delta.CharacterUpdates {
@@ -1315,13 +1298,11 @@ func normalizeMergeProposals(values []MergeProposal) []MergeProposal {
 		if seen[key] {
 			continue
 		}
-		seen[key] = true
 		confidence := value.Confidence
-		if confidence < 0 {
-			confidence = 0
-		} else if confidence > 1 {
-			confidence = 1
+		if !(confidence >= 0 && confidence <= 1) {
+			continue
 		}
+		seen[key] = true
 		result = append(result, MergeProposal{
 			SourceCharacterID:     source,
 			TargetCharacterID:     target,
@@ -1742,11 +1723,6 @@ func NormalizeGeneratedRetiredCharacterIDs(values []characters.GeneratedRetiredC
 func ApplyDelta(novelID string, existing []characters.GeneratedCharacter, delta Delta, allocator *characters.GeneratedCharacterIDAllocator) ([]characters.GeneratedCharacter, int) {
 	generated := append([]characters.GeneratedCharacter{}, existing...)
 	changed := 0
-	if len(delta.LegacyCharacters) > 0 {
-		next := assignGeneratedCharactersForDelta(novelID, generated, MergeGeneratedCharacters(nil, delta.LegacyCharacters), allocator)
-		generated = MergeGeneratedCharacters(generated, next)
-		return generated, len(next)
-	}
 	if len(delta.NewCharacters) > 0 {
 		next := assignGeneratedCharactersForDelta(novelID, generated, MergeGeneratedCharacters(nil, delta.NewCharacters), allocator)
 		for _, item := range next {
@@ -1790,7 +1766,7 @@ func IdentityMergeEventsFromProposals(proposals []MergeProposal, effectiveEpisod
 		sourceID := strings.TrimSpace(proposal.SourceCharacterID)
 		targetID := strings.TrimSpace(proposal.TargetCharacterID)
 		episodeIndex := FirstNonEmptyString(proposal.EffectiveEpisodeIndex, effectiveEpisodeIndex)
-		if proposal.Confidence < MergeAutoApplyConfidence || sourceID == "" || targetID == "" || sourceID == targetID || episodeIndex == "" || !knownIDs[sourceID] || !knownIDs[targetID] {
+		if !IsAutoApplicableMergeConfidence(proposal.Confidence) || sourceID == "" || targetID == "" || sourceID == targetID || episodeIndex == "" || !knownIDs[sourceID] || !knownIDs[targetID] {
 			continue
 		}
 		result = append(result, characters.GeneratedIdentityMergeEvent{SourceCharacterID: sourceID, TargetCharacterID: targetID, EffectiveEpisodeIndex: episodeIndex})
@@ -2000,7 +1976,7 @@ func ApplyMergeProposals(generated []characters.GeneratedCharacter, proposals []
 		}
 	}
 	for _, proposal := range proposals {
-		if proposal.Confidence < MergeAutoApplyConfidence {
+		if !IsAutoApplicableMergeConfidence(proposal.Confidence) {
 			continue
 		}
 		source := strings.TrimSpace(proposal.SourceCharacterID)
