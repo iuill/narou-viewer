@@ -82,6 +82,25 @@ func TestGenerateOpenRouterBatchRetriesInvalidModelOutput(t *testing.T) {
 	}
 }
 
+func TestGenerateOpenRouterBatchNormalizesNumericEpisodeIndexesWithoutPrecisionLoss(t *testing.T) {
+	const episodeIndex = "16818093084191348892"
+	openrouter := newExtractionOpenRouterTestServer(t,
+		`{"processedUpToEpisodeIndex":16818093084191348892,"newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"合成用語","reading":null,"category":{"value":"other","episodeIndex":16818093084191348892},"descriptionHistory":[{"text":"合成説明。","episodeIndex":16818093084191348892}]}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	batch := extractionBatch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{episodeIndex}, Chunks: []extractionChunk{{EpisodeIndex: episodeIndex, Text: "合成本文"}}}
+
+	result, err := runtime.generateOpenRouterBatch(context.Background(), &store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "model"}, "novel-1", episodeIndex, nil, nil, batch)
+	if err != nil {
+		t.Fatalf("numeric episode indexes should be normalized: %v", err)
+	}
+	if len(result.Delta.Terms) != 1 || result.Delta.Terms[0].CategoryHistory[0].EpisodeIndex != episodeIndex || result.Delta.Terms[0].DescriptionHistory[0].EpisodeIndex != episodeIndex {
+		t.Fatalf("numeric episode index precision was lost: %+v", result.Delta.Terms)
+	}
+}
+
 func TestGenerateOpenRouterBatchRetriesInvalidTermEpisodeIndex(t *testing.T) {
 	invalid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"unknown"}]}]}`
 	valid := `{"processedUpToEpisodeIndex":"20","newCharacters":[],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"帝国評議会","reading":null,"category":{"value":"organization","episodeIndex":"20"},"descriptionHistory":[{"text":"評議会。","episodeIndex":"20"}]}]}`

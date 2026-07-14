@@ -1,6 +1,7 @@
 package extractionruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,10 +116,14 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		MaxTokens:         maxTokens,
 		ResponseFormat:    prepared.ResponseFormat,
 	}, prepared.Messages, func(result ai.ChatResult) error {
-		if contractErr := validateExtractionOutputContract([]byte(result.Answer)); contractErr != nil {
+		normalizedAnswer, scalarErr := normalizeExtractionEpisodeIndexScalars([]byte(result.Answer))
+		if scalarErr != nil {
+			return scalarErr
+		}
+		if contractErr := validateExtractionOutputContract(normalizedAnswer); contractErr != nil {
 			return contractErr
 		}
-		normalized, normalizeErr := normalizeExtractionOpenRouterResponseForEpisodes([]byte(result.Answer), novelID, fallbackEpisodeIndex, batch.EpisodeIndexes)
+		normalized, normalizeErr := normalizeExtractionOpenRouterResponseForEpisodes(normalizedAnswer, novelID, fallbackEpisodeIndex, batch.EpisodeIndexes)
 		if normalizeErr == nil {
 			delta = normalized
 		}
@@ -158,6 +163,37 @@ func (r *Runtime) generateOpenRouterBatchForFocus(ctx context.Context, config *s
 		return extractionBatchResult{Usage: usage}, err
 	}
 	return extractionBatchResult{Delta: delta, Usage: usage}, nil
+}
+
+func normalizeExtractionEpisodeIndexScalars(raw []byte) ([]byte, error) {
+	if !json.Valid(raw) {
+		return nil, errors.New("OpenRouter response was not valid JSON.")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	normalizeExtractionEpisodeIndexValue(decoded)
+	return json.Marshal(decoded)
+}
+
+func normalizeExtractionEpisodeIndexValue(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if number, ok := item.(json.Number); ok && (key == "episodeIndex" || strings.HasSuffix(key, "EpisodeIndex")) && isDigitsEpisodeIndex(string(number)) {
+				typed[key] = string(number)
+				continue
+			}
+			normalizeExtractionEpisodeIndexValue(item)
+		}
+	case []any:
+		for _, item := range typed {
+			normalizeExtractionEpisodeIndexValue(item)
+		}
+	}
 }
 
 func validateExtractionOutputContract(raw []byte) error {
