@@ -1,6 +1,6 @@
 ---
 name: pr-merge
-description: Use when the user explicitly asks to merge a narou-viewer Pull Request, or asks to finish cleanup after a confirmed merge. Verify merge readiness, use a merge commit, update the local base branch to the remote HEAD, and safely remove merged remote and local work branches.
+description: Use when the user explicitly asks to merge a narou-viewer Pull Request, or asks to finish cleanup after a confirmed merge. Verify merge readiness, use squash merge, update the local base branch to the remote HEAD, and safely remove merged remote and local work branches.
 ---
 
 # PR Merge
@@ -10,7 +10,8 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 ## 安全条件
 
 - ユーザーが明示的に依頼した場合だけ merge を実行する。PR 作成、レビュー、CI 完了だけから merge の許可を推測しない。
-- merge commit を使用し、squash merge と rebase merge は選ばない。
+- squash merge を使用し、merge commit と rebase merge は選ばない。
+- GitHub repository settings で squash merge が許可されていなければ停止する。merge commit または rebase merge が許可されている場合は、repository rule と settings の不一致として報告する。
 - merge 前に PR URL、base / head repository、base / head branch、head SHA を記録する。
 - draft、merge conflict、未完了または失敗中の required check、未対応の requested changes があれば merge しない。
 - merge 直前に PR 状態と check / review を再取得する。古い取得結果だけで判断しない。
@@ -22,23 +23,24 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 ## 1. merge 前確認
 
 1. GitHub App または `gh` で PR metadata、check、review、review thread を確認する。
-2. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
-3. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認する。
-4. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
-5. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
-6. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
+2. `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed` で merge method の repository settings を確認する。
+3. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
+4. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認する。
+5. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
+6. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
+7. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
 
 ## 2. merge
 
 - 記録済み head SHA との一致を merge 条件にでき、head branch を残せる GitHub App を使用してよい。それ以外では次の CLI を使う。
 
 ```bash
-gh pr merge "$pr_url" --merge --match-head-commit "$head_sha"
+gh pr merge "$pr_url" --squash --match-head-commit "$head_sha"
 ```
 
 - merge と branch 削除を同じ操作で行わない。head SHA 不一致なら PR 状態を再取得し、merge せず停止する。
-- コマンドの終了だけで成功と判断せず、PR を再取得して `merged`、merge commit SHA、base / head、merged time を確認する。
-- 実際の merge commit が複数 parent を持つことを確認する。単一 parent なら squash または rebase 相当として報告し、後処理では下記の強制削除条件を適用する。
+- コマンドの終了だけで成功と判断せず、PR を再取得して `merged`、squash commit SHA（GitHub API では `mergeCommitSha` / `merge_commit_sha`）、base / head、merged time を確認する。
+- squash commit が単一 parent を持ち、最新の base branch の ancestor であることを確認する。複数 parent なら merge commit 相当として報告し、後処理を止める。
 
 ## 3. base branch を最新化
 
@@ -53,7 +55,7 @@ git merge --ff-only "refs/remotes/$base_remote/$base_branch"
 
 - base branch が別 worktree で checkout 済みなら、その worktree が clean な場合だけそこで `git merge --ff-only` する。dirty または利用中なら勝手に変更せず報告する。
 - `git rev-parse "refs/heads/$base_branch"` と `git rev-parse "refs/remotes/$base_remote/$base_branch"` が一致することを確認する。
-- `git merge-base --is-ancestor "$merge_commit_sha" "refs/remotes/$base_remote/$base_branch"` が成功することを確認する。
+- `git merge-base --is-ancestor "$squash_commit_sha" "refs/remotes/$base_remote/$base_branch"` が成功することを確認する。
 
 ## 4. branch cleanup
 
@@ -75,13 +77,13 @@ git update-ref -d \
   "$head_sha"
 ```
 
-- local head branch は別 worktree で未使用であり、local tip が記録済み PR head SHA と一致することを確認してから、まず次を実行する。
+- local head branch は別 worktree で未使用であり、local tip が記録済み PR head SHA と一致することを確認する。squash 後の head commit は base branch の ancestor にならないため、通常の `git branch -d` は使わない。
 
 ```bash
-git branch -d "$head_branch"
+git branch -D "$head_branch"
 ```
 
-- squash / rebase 済みの既存 PR では `-d` が失敗し得る。PR が merged、merge commit が最新 `refs/remotes/$base_remote/$base_branch` の ancestor、`refs/heads/$head_branch` が記録済み PR head SHA と一致する、別 worktree で未使用、という全条件を満たす場合だけ `git branch -D "$head_branch"` を許可する。
+- `git branch -D` は、PR が squash merge 済み、squash commit が最新 `refs/remotes/$base_remote/$base_branch` の ancestor、`refs/heads/$head_branch` が記録済み PR head SHA と一致する、別 worktree で未使用、という全条件を満たす場合だけ許可する。
 - SHA 不一致、dirty worktree、別 worktree での使用、権限不足などで削除できない場合は、その状態を残して理由を報告する。
 
 ## 5. 完了報告
@@ -89,7 +91,7 @@ git branch -d "$head_branch"
 次をまとめて報告する。
 
 - merged PR 番号と URL
-- merge method と merge commit SHA
+- merge method と squash commit SHA
 - base branch の local / remote HEAD 一致
 - remote / remote-tracking / local head branch の削除結果
 - 安全上残した branch や worktree と、その理由
