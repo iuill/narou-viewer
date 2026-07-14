@@ -115,6 +115,18 @@ func (e openRouterModelsHTTPError) Error() string {
 	return fmt.Sprintf("OpenRouter models endpoint responded with %d", e.statusCode)
 }
 
+type openRouterHTTPError struct {
+	statusCode int
+	message    string
+}
+
+func (e openRouterHTTPError) Error() string {
+	if strings.TrimSpace(e.message) != "" {
+		return fmt.Sprintf("OpenRouter responded with %d: %s", e.statusCode, e.message)
+	}
+	return fmt.Sprintf("OpenRouter responded with %d", e.statusCode)
+}
+
 var openRouterModelInfoCache sync.Map
 
 var (
@@ -167,6 +179,15 @@ func GenerateOpenRouterChat(ctx context.Context, config OpenRouterConfig, messag
 		accumulated.InputTokens += result.InputTokens
 		accumulated.OutputTokens += result.OutputTokens
 		accumulated.TotalTokens += result.TotalTokens
+		if err != nil && openRouterResponseFormatRequiresParameters(config.ResponseFormat) && isOpenRouterUnsupportedParameterRoutingError(err) {
+			fallbackConfig := config
+			fallbackConfig.ResponseFormat = map[string]any{"type": "json_object"}
+			fallbackResult, fallbackErr := GenerateOpenRouterChat(ctx, fallbackConfig, messages)
+			fallbackResult.InputTokens += accumulated.InputTokens
+			fallbackResult.OutputTokens += accumulated.OutputTokens
+			fallbackResult.TotalTokens += accumulated.TotalTokens
+			return fallbackResult, fallbackErr
+		}
 		if !retry || err == nil {
 			result.InputTokens = accumulated.InputTokens
 			result.OutputTokens = accumulated.OutputTokens
@@ -193,6 +214,13 @@ func openRouterResponseFormatRequiresParameters(responseFormat any) bool {
 	}
 	responseType, _ := format["type"].(string)
 	return strings.TrimSpace(responseType) == "json_schema"
+}
+
+func isOpenRouterUnsupportedParameterRoutingError(err error) bool {
+	var httpErr openRouterHTTPError
+	return errors.As(err, &httpErr) &&
+		httpErr.statusCode == http.StatusNotFound &&
+		strings.Contains(strings.ToLower(httpErr.message), "no endpoints found that can handle the requested parameters")
 }
 
 func GenerateOpenRouterToolChat(ctx context.Context, config OpenRouterConfig, messages []ChatMessage, tools []ToolDefinition) (ChatResult, error) {
@@ -333,7 +361,7 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	}
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
+			return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode}
 		}
 		return ChatResult{}, false, err
 	}
@@ -344,9 +372,9 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
-			return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d: %s", response.StatusCode, decoded.Error.Message)
+			return result, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode, message: decoded.Error.Message}
 		}
-		return result, isRetryableOpenRouterStatus(response.StatusCode), fmt.Errorf("OpenRouter responded with %d", response.StatusCode)
+		return result, isRetryableOpenRouterStatus(response.StatusCode), openRouterHTTPError{statusCode: response.StatusCode}
 	}
 	if len(decoded.Choices) == 0 || (strings.TrimSpace(decoded.Choices[0].Message.Content) == "" && len(decoded.Choices[0].Message.ToolCalls) == 0) {
 		return result, false, ErrOpenRouterEmptyResponse

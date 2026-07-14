@@ -154,6 +154,50 @@ func TestGenerateOpenRouterChatStrictJSONSchemaRequiresSupportedProvider(t *test
 	}
 }
 
+func TestGenerateOpenRouterChatFallsBackWhenNoStrictSchemaEndpointExists(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		responseFormat := body["response_format"].(map[string]any)
+		if requestCount == 1 {
+			provider := body["provider"].(map[string]any)
+			if responseFormat["type"] != "json_schema" || provider["require_parameters"] != true {
+				t.Fatalf("first request must require strict schema support: %+v", body)
+			}
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]any{"message": "No endpoints found that can handle the requested parameters."},
+			})
+			return
+		}
+		if requestCount != 2 || responseFormat["type"] != "json_object" {
+			t.Fatalf("fallback request must use json_object: count=%d body=%+v", requestCount, body)
+		}
+		if _, ok := body["provider"]; ok {
+			t.Fatalf("fallback should preserve disabled parameter requirement: %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"characters\":[]}"}}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+	t.Setenv("OPENROUTER_REASONING_EFFORT", "")
+
+	result, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+		APIKey:            "sk-test",
+		ModelID:           "openrouter/auto",
+		AllowFallbacks:    true,
+		RequireParameters: false,
+		ResponseFormat:    map[string]any{"type": "json_schema"},
+	}, []ChatMessage{{Role: "user", Content: "JSON"}})
+	if err != nil || result.Answer != `{"characters":[]}` || requestCount != 2 {
+		t.Fatalf("strict endpoint fallback failed: count=%d result=%+v err=%v", requestCount, result, err)
+	}
+}
+
 func TestApplyOpenRouterReasoningUsesEnvironmentFallback(t *testing.T) {
 	t.Setenv("OPENROUTER_REASONING_EFFORT", "high")
 	body := map[string]any{}
