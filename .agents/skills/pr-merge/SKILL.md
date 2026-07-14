@@ -23,11 +23,12 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 ## 1. merge 前確認
 
 1. GitHub App または `gh` で PR metadata、check、review、review thread を確認する。
-2. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
-3. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認する。
-4. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
-5. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
-6. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
+2. `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed` で merge method の repository settings を確認する。
+3. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
+4. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認する。
+5. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
+6. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
+7. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
 
 ## 2. merge
 
@@ -38,7 +39,7 @@ gh pr merge "$pr_url" --squash --match-head-commit "$head_sha"
 ```
 
 - merge と branch 削除を同じ操作で行わない。head SHA 不一致なら PR 状態を再取得し、merge せず停止する。
-- コマンドの終了だけで成功と判断せず、PR を再取得して `merged`、squash commit SHA、base / head、merged time を確認する。
+- コマンドの終了だけで成功と判断せず、PR を再取得して `merged`、squash commit SHA（GitHub API では `mergeCommitSha` / `merge_commit_sha`）、base / head、merged time を確認する。
 - squash commit が単一 parent を持ち、最新の base branch の ancestor であることを確認する。複数 parent なら merge commit 相当として報告し、後処理を止める。
 
 ## 3. base branch を最新化
