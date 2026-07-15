@@ -1,0 +1,13 @@
+{
+  "schema_version": 99,
+  "episode_id": "synthetic-99",
+  "site_episode_id": "synthetic-99",
+  "sort_order": 0,
+  "display_index": "99",
+  "title": "Synthetic future episode",
+  "future_field": {
+    "must_be_preserved": true
+  },
+  "blocks": [],
+  "fetched_at": "2026-01-01T00:00:00Z"
+}

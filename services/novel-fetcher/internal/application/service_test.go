@@ -1,8 +1,12 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -26,6 +30,8 @@ type fakeStore struct {
 	updateResumeID     string
 	updateErrorMessage string
 	saveErr            error
+	preflightErr       error
+	preflightCalls     int
 }
 
 type fakeFetcher struct {
@@ -73,6 +79,11 @@ func (s *fakeStore) FindPotentialDuplicateWorks(work model.Work) ([]model.Stored
 
 func (s *fakeStore) ListEpisodes(int) ([]model.StoredEpisode, error) {
 	return s.episodes, nil
+}
+
+func (s *fakeStore) PreflightWorkMutation(_ model.StoredWork, _ model.Work) error {
+	s.preflightCalls++
+	return s.preflightErr
 }
 
 func (s *fakeStore) UpsertWorkToc(_ context.Context, work model.Work, status string) (model.StoredWork, error) {
@@ -324,6 +335,118 @@ func TestRunTaskUpdateSkipsUnchangedEpisode(t *testing.T) {
 	}
 }
 
+func TestRunTaskUpdateRejectsFutureCanonicalSchemaBeforeAnyMutation(t *testing.T) {
+	tests := []struct {
+		name          string
+		removeEpisode bool
+		skipUnchanged bool
+	}{
+		{name: "regular update"},
+		{name: "skip unchanged", skipUnchanged: true},
+		{name: "episode prune", removeEpisode: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rootDir := t.TempDir()
+			store, err := storage.NewStore(rootDir)
+			if err != nil {
+				t.Fatalf("NewStore returned error: %v", err)
+			}
+			defer store.Close()
+
+			originalWork := model.Work{
+				Site:       model.SiteVerification,
+				SiteName:   "Verification",
+				SiteWorkID: "future-update-work",
+				SourceURL:  "https://example.invalid/future-update-work/",
+				Title:      "Synthetic original work",
+				Author:     "Synthetic author",
+				FetchedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				Episodes: []model.Episode{{
+					Index:      "1",
+					Title:      "Synthetic original episode",
+					ModifiedAt: "2026-01-01T00:00:00Z",
+					FetchedAt:  time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+					Element:    model.EpisodeElement{DataType: "html", Body: "<p>Synthetic original body.</p>"},
+				}},
+			}
+			stored, err := store.UpsertWorkToc(context.Background(), originalWork, storage.FetchStatusPartial)
+			if err != nil {
+				t.Fatalf("UpsertWorkToc returned error: %v", err)
+			}
+			if _, err := store.SaveEpisodeBody(context.Background(), originalWork, stored, originalWork.Episodes[0], 0); err != nil {
+				t.Fatalf("SaveEpisodeBody returned error: %v", err)
+			}
+			if err := store.UpdateWorkFetchStatus(context.Background(), stored.ID, storage.FetchStatusComplete, "", "", nil); err != nil {
+				t.Fatalf("UpdateWorkFetchStatus returned error: %v", err)
+			}
+
+			beforeWork, found, err := store.FindWorkByID(stored.ID)
+			if err != nil || !found {
+				t.Fatalf("FindWorkByID before update = %#v/%v/%v", beforeWork, found, err)
+			}
+			beforeEpisodes, err := store.ListEpisodes(stored.ID)
+			if err != nil || len(beforeEpisodes) != 1 {
+				t.Fatalf("ListEpisodes before update = %#v/%v", beforeEpisodes, err)
+			}
+			futureBytes, err := os.ReadFile(filepath.Join("..", "storage", "testdata", "canonical_episode_v99.json"))
+			if err != nil {
+				t.Fatalf("read future fixture: %v", err)
+			}
+			canonicalPath := filepath.Join(rootDir, beforeEpisodes[0].BodyPath)
+			if err := os.WriteFile(canonicalPath, futureBytes, 0o644); err != nil {
+				t.Fatalf("seed future canonical episode: %v", err)
+			}
+
+			incomingWork := originalWork
+			incomingWork.Title = "Synthetic updated work"
+			incomingWork.FetchedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+			incomingWork.Episodes = append([]model.Episode(nil), originalWork.Episodes...)
+			if test.removeEpisode {
+				incomingWork.Episodes = nil
+			} else {
+				incomingWork.Episodes[0].Title = "Synthetic updated episode"
+			}
+
+			fetcher := &fakeFetcher{work: incomingWork}
+			reporter := &recordingReporter{}
+			service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: reporter})
+			task := taskqueue.NewTask("update")
+			task.NovelIDs = []int{stored.ID}
+			task.SkipUnchanged = test.skipUnchanged
+
+			err = service.RunTask(context.Background(), task)
+			var unsupported storage.ErrUnsupportedEpisodeSchema
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("RunTask error = %v, want ErrUnsupportedEpisodeSchema", err)
+			}
+			if len(fetcher.fetched) != 0 || len(reporter.messages) != 0 {
+				t.Fatalf("update continued after preflight: fetched=%#v messages=%#v", fetcher.fetched, reporter.messages)
+			}
+
+			afterWork, found, err := store.FindWorkByID(stored.ID)
+			if err != nil || !found {
+				t.Fatalf("FindWorkByID after update = %#v/%v/%v", afterWork, found, err)
+			}
+			afterEpisodes, err := store.ListEpisodes(stored.ID)
+			if err != nil {
+				t.Fatalf("ListEpisodes after update returned error: %v", err)
+			}
+			if !reflect.DeepEqual(afterWork, beforeWork) || !reflect.DeepEqual(afterEpisodes, beforeEpisodes) {
+				t.Fatalf("storage metadata changed:\nwork before=%#v\nwork after=%#v\nepisodes before=%#v\nepisodes after=%#v", beforeWork, afterWork, beforeEpisodes, afterEpisodes)
+			}
+			afterBytes, err := os.ReadFile(canonicalPath)
+			if err != nil {
+				t.Fatalf("read canonical after update: %v", err)
+			}
+			if !bytes.Equal(afterBytes, futureBytes) {
+				t.Fatal("future canonical bytes changed during rejected update")
+			}
+		})
+	}
+}
+
 func TestRunTaskResumePropagatesMissingWork(t *testing.T) {
 	service := NewService(Options{
 		Store:    &fakeStore{},
@@ -369,6 +492,38 @@ func TestRunTaskMarksEpisodeFailed(t *testing.T) {
 	}
 	if reporter.failedEpisodeID != "1" || reporter.resumeEpisodeID != "1" {
 		t.Fatalf("reporter failure = %#v", reporter)
+	}
+}
+
+func TestRunTaskDoesNotMarkUnsupportedCanonicalSchemaAsFetchFailure(t *testing.T) {
+	observed := 99
+	unsupported := storage.ErrUnsupportedEpisodeSchema{Path: "future.json", Observed: &observed, Supported: 1}
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteWorkID: "future-save-work",
+		Title:      "Synthetic future save work",
+		Episodes:   []model.Episode{{Index: "1", Title: "Synthetic episode"}},
+	}
+	store := &fakeStore{
+		work:      model.StoredWork{ID: 41, Site: model.SiteVerification, SiteWorkID: "future-save-work", SourceURL: "https://example.invalid/future-save-work/"},
+		foundByID: true,
+		saveErr:   unsupported,
+	}
+	reporter := &recordingReporter{}
+	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work}, Reporter: reporter})
+	task := taskqueue.NewTask("resume")
+	task.NovelIDs = []int{41}
+
+	err := service.RunTask(context.Background(), task)
+	var got storage.ErrUnsupportedEpisodeSchema
+	if !errors.As(err, &got) {
+		t.Fatalf("RunTask error = %v, want ErrUnsupportedEpisodeSchema", err)
+	}
+	if len(store.markedFailed) != 0 || len(store.updatedStatuses) != 0 {
+		t.Fatalf("unsupported schema was recorded as fetch failure: marked=%#v statuses=%#v", store.markedFailed, store.updatedStatuses)
+	}
+	if reporter.failedEpisodeID != "" || reporter.resumeEpisodeID != "" {
+		t.Fatalf("unsupported schema was reported as resumable fetch failure: %#v", reporter)
 	}
 }
 

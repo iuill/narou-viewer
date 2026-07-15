@@ -115,6 +115,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `novel-fetcher`
   - 小説サイトからの取得、更新、削除、保存データの索引を担当する。
   - `library.sqlite` と `works/**` を所有し、`viewer-api` から内部 network 経由で利用される。
+  - `library.sqlite` の未知 migration と canonical episode の未知 `schema_version` は、write / API 応答前に拒否する。version、復旧、consistency group の正本は [`state-schema-policy.md`](state-schema-policy.md) とする。
 - `shared-data`
   - `novel-fetcher` の保存データ、server state、AI 利用統計、読書AI検索キャッシュを保持する。
   - repository には保存せず、開発時は `data/`、self-host 時は named volume として扱う。

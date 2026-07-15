@@ -3,18 +3,21 @@ package storage
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"narou-viewer/services/novel-fetcher/internal/fetcher"
 	"narou-viewer/services/novel-fetcher/internal/model"
+	"narou-viewer/services/novel-fetcher/internal/storage/migration"
 )
 
 type fakeAssetFetcher struct {
@@ -178,6 +181,367 @@ func TestStoreSavesSQLiteAndCanonicalEpisode(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(rootDir, episodes[0].RawPath)); err != nil {
 		t.Fatalf("raw html was not written: %v", err)
 	}
+}
+
+func TestReadCanonicalEpisodeValidatesSchemaFixtureBeforeTypedDecode(t *testing.T) {
+	tests := []struct {
+		name         string
+		fixture      string
+		wantObserved *int
+		wantTitle    string
+	}{
+		{
+			name:      "current v1",
+			fixture:   "canonical_episode_v1.json",
+			wantTitle: "Synthetic current episode",
+		},
+		{
+			name:         "future v99",
+			fixture:      "canonical_episode_v99.json",
+			wantObserved: intPointer(99),
+		},
+		{
+			name:    "missing version",
+			fixture: "canonical_episode_missing_version.json",
+		},
+	}
+
+	store := &Store{rootDir: "."}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document, err := store.ReadCanonicalEpisode(model.StoredEpisode{
+				BodyPath: filepath.Join("testdata", test.fixture),
+			})
+			if test.wantTitle != "" {
+				if err != nil {
+					t.Fatalf("ReadCanonicalEpisode returned error: %v", err)
+				}
+				if document.Title != test.wantTitle || document.SchemaVersion != canonicalEpisodeSchemaVersion {
+					t.Fatalf("document = %#v", document)
+				}
+				return
+			}
+
+			var unsupported ErrUnsupportedEpisodeSchema
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("ReadCanonicalEpisode error = %v, want ErrUnsupportedEpisodeSchema", err)
+			}
+			if unsupported.Supported != canonicalEpisodeSchemaVersion {
+				t.Fatalf("supported version = %d", unsupported.Supported)
+			}
+			if test.wantObserved == nil {
+				if unsupported.Observed != nil {
+					t.Fatalf("observed version = %v, want missing", *unsupported.Observed)
+				}
+				return
+			}
+			if unsupported.Observed == nil || *unsupported.Observed != *test.wantObserved {
+				t.Fatalf("observed version = %v, want %d", unsupported.Observed, *test.wantObserved)
+			}
+		})
+	}
+}
+
+func TestSaveEpisodeBodyDoesNotOverwriteFutureCanonicalEpisode(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "future-schema-work",
+		SourceURL:  "https://example.invalid/future-schema-work/",
+		Title:      "Synthetic schema guard work",
+		Author:     "Synthetic author",
+		FetchedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Episodes: []model.Episode{{
+			Index:     "1",
+			Title:     "Synthetic episode",
+			FetchedAt: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+			Element: model.EpisodeElement{
+				DataType: "html",
+				Body:     "<p>Synthetic current body.</p>",
+			},
+		}},
+	}
+	stored, err := saveWorkFully(t, store, work)
+	if err != nil {
+		t.Fatalf("saveWorkFully returned error: %v", err)
+	}
+	episodes, err := store.ListEpisodes(stored.ID)
+	if err != nil || len(episodes) != 1 {
+		t.Fatalf("ListEpisodes = %#v, %v", episodes, err)
+	}
+
+	futureBytes, err := os.ReadFile(filepath.Join("testdata", "canonical_episode_v99.json"))
+	if err != nil {
+		t.Fatalf("read future fixture: %v", err)
+	}
+	canonicalPath := filepath.Join(rootDir, episodes[0].BodyPath)
+	if err := os.WriteFile(canonicalPath, futureBytes, 0o644); err != nil {
+		t.Fatalf("seed future canonical episode: %v", err)
+	}
+	contentHashBefore := episodes[0].ContentHash
+
+	work.Episodes[0].Element.Body = "<p>This update must be rejected.</p>"
+	_, err = store.SaveEpisodeBody(context.Background(), work, stored, work.Episodes[0], 0)
+	var unsupported ErrUnsupportedEpisodeSchema
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("SaveEpisodeBody error = %v, want ErrUnsupportedEpisodeSchema", err)
+	}
+
+	afterBytes, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatalf("read canonical episode after rejected save: %v", err)
+	}
+	if !bytes.Equal(afterBytes, futureBytes) {
+		t.Fatal("future canonical episode bytes changed after rejected save")
+	}
+	updatedEpisodes, err := store.ListEpisodes(stored.ID)
+	if err != nil || len(updatedEpisodes) != 1 {
+		t.Fatalf("ListEpisodes after rejected save = %#v, %v", updatedEpisodes, err)
+	}
+	if updatedEpisodes[0].ContentHash != contentHashBefore {
+		t.Fatalf("content hash changed from %q to %q", contentHashBefore, updatedEpisodes[0].ContentHash)
+	}
+}
+
+func TestUpsertWorkTocRejectsFutureCanonicalEpisodeBeforeMetadataOrPrune(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "future-upsert-work",
+		SourceURL:  "https://example.invalid/future-upsert-work/",
+		Title:      "Synthetic original work",
+		Author:     "Synthetic author",
+		FetchedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Episodes: []model.Episode{
+			{
+				Index:     "1",
+				Title:     "Synthetic retained episode",
+				FetchedAt: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+				Element:   model.EpisodeElement{DataType: "html", Body: "<p>Synthetic retained body.</p>"},
+			},
+			{
+				Index:     "2",
+				Title:     "Synthetic pruned episode",
+				FetchedAt: time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),
+				Element:   model.EpisodeElement{DataType: "html", Body: "<p>Synthetic pruned body.</p>"},
+				RawHTML:   "<html><body>Synthetic raw fixture.</body></html>",
+			},
+		},
+	}
+	stored, err := saveWorkFully(t, store, work)
+	if err != nil {
+		t.Fatalf("saveWorkFully returned error: %v", err)
+	}
+	beforeWork, found, err := store.FindWorkByID(stored.ID)
+	if err != nil || !found {
+		t.Fatalf("FindWorkByID before upsert = %#v/%v/%v", beforeWork, found, err)
+	}
+	beforeEpisodes, err := store.ListEpisodes(stored.ID)
+	if err != nil || len(beforeEpisodes) != 2 {
+		t.Fatalf("ListEpisodes before upsert = %#v/%v", beforeEpisodes, err)
+	}
+
+	futureBytes, err := os.ReadFile(filepath.Join("testdata", "canonical_episode_v99.json"))
+	if err != nil {
+		t.Fatalf("read future fixture: %v", err)
+	}
+	futurePath := filepath.Join(rootDir, beforeEpisodes[1].BodyPath)
+	if err := os.WriteFile(futurePath, futureBytes, 0o644); err != nil {
+		t.Fatalf("seed future canonical episode: %v", err)
+	}
+
+	incoming := work
+	incoming.Title = "Synthetic updated work"
+	incoming.FetchedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	incoming.Episodes = append([]model.Episode(nil), work.Episodes[:1]...)
+	_, err = store.UpsertWorkToc(context.Background(), incoming, FetchStatusPartial)
+	var unsupported ErrUnsupportedEpisodeSchema
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("UpsertWorkToc error = %v, want ErrUnsupportedEpisodeSchema", err)
+	}
+
+	afterWork, found, err := store.FindWorkByID(stored.ID)
+	if err != nil || !found {
+		t.Fatalf("FindWorkByID after upsert = %#v/%v/%v", afterWork, found, err)
+	}
+	afterEpisodes, err := store.ListEpisodes(stored.ID)
+	if err != nil {
+		t.Fatalf("ListEpisodes after upsert returned error: %v", err)
+	}
+	if !reflect.DeepEqual(afterWork, beforeWork) || !reflect.DeepEqual(afterEpisodes, beforeEpisodes) {
+		t.Fatalf("storage metadata changed:\nwork before=%#v\nwork after=%#v\nepisodes before=%#v\nepisodes after=%#v", beforeWork, afterWork, beforeEpisodes, afterEpisodes)
+	}
+	afterBytes, err := os.ReadFile(futurePath)
+	if err != nil {
+		t.Fatalf("read future episode after rejected upsert: %v", err)
+	}
+	if !bytes.Equal(afterBytes, futureBytes) {
+		t.Fatal("future canonical bytes changed during rejected upsert")
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, beforeEpisodes[1].RawPath)); err != nil {
+		t.Fatalf("raw episode was pruned during rejected upsert: %v", err)
+	}
+}
+
+func TestUpsertWorkTocRejectsFutureCanonicalTargetBeforeNewWorkInsert(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "orphan-target-work",
+		SourceURL:  "https://example.invalid/orphan-target-work/",
+		Title:      "Synthetic new work",
+		Episodes: []model.Episode{{
+			Index: "1",
+			Title: "Synthetic episode",
+		}},
+	}
+	futureBytes, err := os.ReadFile(filepath.Join("testdata", "canonical_episode_v99.json"))
+	if err != nil {
+		t.Fatalf("read future fixture: %v", err)
+	}
+	targetPath := filepath.Join(rootDir, "works", "verification", "orphan-target-work", "episodes", "1.json")
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		t.Fatalf("create orphan target directory: %v", err)
+	}
+	if err := os.WriteFile(targetPath, futureBytes, 0o644); err != nil {
+		t.Fatalf("seed future target: %v", err)
+	}
+
+	_, err = store.UpsertWorkToc(context.Background(), work, FetchStatusPartial)
+	var unsupported ErrUnsupportedEpisodeSchema
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("UpsertWorkToc error = %v, want ErrUnsupportedEpisodeSchema", err)
+	}
+	works, err := store.ListWorks()
+	if err != nil {
+		t.Fatalf("ListWorks returned error: %v", err)
+	}
+	if len(works) != 0 {
+		t.Fatalf("new work metadata was inserted before target preflight: %#v", works)
+	}
+	afterBytes, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("read future target after rejected upsert: %v", err)
+	}
+	if !bytes.Equal(afterBytes, futureBytes) {
+		t.Fatal("future target bytes changed during rejected upsert")
+	}
+}
+
+func TestNewStoreDoesNotModifyFutureLibraryDatabase(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future migration: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seeded store: %v", err)
+	}
+
+	databasePath := filepath.Join(rootDir, "library.sqlite")
+	beforeBytes, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database before guarded open: %v", err)
+	}
+
+	_, err = NewStore(rootDir)
+	var futureSchema migration.ErrFutureSchema
+	if !errors.As(err, &futureSchema) {
+		t.Fatalf("NewStore error = %v, want migration.ErrFutureSchema", err)
+	}
+	if futureSchema.Path != databasePath || futureSchema.Observed != 99 || futureSchema.Supported != migration.SupportedLatestVersion {
+		t.Fatalf("future schema error = %#v", futureSchema)
+	}
+
+	afterBytes, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database after guarded open: %v", err)
+	}
+	if !bytes.Equal(afterBytes, beforeBytes) {
+		t.Fatal("future library database bytes changed during guarded open")
+	}
+}
+
+func TestNewStoreRejectsFutureMigrationStoredInUncheckpointedWAL(t *testing.T) {
+	rootDir := t.TempDir()
+	databasePath := filepath.Join(rootDir, "library.sqlite")
+	seedDB, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("open seed database: %v", err)
+	}
+	defer seedDB.Close()
+
+	if _, err := seedDB.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		t.Fatalf("enable WAL: %v", err)
+	}
+	if _, err := seedDB.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+	if _, err := seedDB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("checkpoint base schema: %v", err)
+	}
+	if _, err := seedDB.Exec(`PRAGMA wal_autocheckpoint=0`); err != nil {
+		t.Fatalf("disable automatic checkpoint: %v", err)
+	}
+	if _, err := seedDB.Exec(`INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future migration in WAL: %v", err)
+	}
+	walInfo, err := os.Stat(databasePath + "-wal")
+	if err != nil || walInfo.Size() == 0 {
+		t.Fatalf("future migration was not retained in WAL: info=%v err=%v", walInfo, err)
+	}
+
+	_, err = NewStore(rootDir)
+	var futureSchema migration.ErrFutureSchema
+	if !errors.As(err, &futureSchema) {
+		t.Fatalf("NewStore error = %v, want migration.ErrFutureSchema", err)
+	}
+	if futureSchema.Observed != 99 || futureSchema.Supported != migration.SupportedLatestVersion {
+		t.Fatalf("future schema error = %#v", futureSchema)
+	}
+
+	var observed int
+	if err := seedDB.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&observed); err != nil {
+		t.Fatalf("query future migration after rejected open: %v", err)
+	}
+	if observed != 99 {
+		t.Fatalf("future migration version = %d, want 99", observed)
+	}
+	var worksTableCount int
+	if err := seedDB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'works'`).Scan(&worksTableCount); err != nil {
+		t.Fatalf("query works table: %v", err)
+	}
+	if worksTableCount != 0 {
+		t.Fatal("known migrations ran after the read-only WAL preflight")
+	}
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func TestNewStoreReturnsErrorWhenRootIsFile(t *testing.T) {

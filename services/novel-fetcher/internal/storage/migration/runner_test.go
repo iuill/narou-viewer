@@ -2,19 +2,24 @@ package migration
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
 func TestRunCreatesSchemaAndRecordsMigrations(t *testing.T) {
+	if latest := migrations[len(migrations)-1].Version; latest != SupportedLatestVersion {
+		t.Fatalf("latest migration = %d, SupportedLatestVersion = %d", latest, SupportedLatestVersion)
+	}
+
 	db := openTestDB(t)
 	defer db.Close()
 
-	if err := Run(db); err != nil {
+	if err := Run(db, ":memory:"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if err := Run(db); err != nil {
+	if err := Run(db, ":memory:"); err != nil {
 		t.Fatalf("second Run() error = %v", err)
 	}
 
@@ -75,7 +80,7 @@ func TestRunUpgradesPartiallyInitializedSchema(t *testing.T) {
 		t.Fatalf("seed partial schema: %v", err)
 	}
 
-	if err := Run(db); err != nil {
+	if err := Run(db, ":memory:"); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -107,6 +112,32 @@ func TestRunMigrationSkipsAlreadyAppliedVersion(t *testing.T) {
 	}
 	if called {
 		t.Fatal("already-applied migration was executed")
+	}
+}
+
+func TestRunRejectsFutureSchemaBeforeKnownMigrations(t *testing.T) {
+	db := openTestDB(t)
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations(version) VALUES (99);`); err != nil {
+		t.Fatalf("seed schema_migrations: %v", err)
+	}
+
+	err := Run(db, "future-library.sqlite")
+	var futureSchema ErrFutureSchema
+	if !errors.As(err, &futureSchema) {
+		t.Fatalf("Run() error = %v, want ErrFutureSchema", err)
+	}
+	if futureSchema.Path != "future-library.sqlite" || futureSchema.Observed != 99 || futureSchema.Supported != SupportedLatestVersion {
+		t.Fatalf("ErrFutureSchema = %#v", futureSchema)
+	}
+
+	var worksTableCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'works'`).Scan(&worksTableCount); err != nil {
+		t.Fatalf("query works table: %v", err)
+	}
+	if worksTableCount != 0 {
+		t.Fatal("known migrations ran before the future schema guard")
 	}
 }
 
