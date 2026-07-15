@@ -154,7 +154,8 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `state/extraction_jobs/checkpoints/*.json`
 - `state/ai_usage.sqlite`
   - 読書AIなどの AI 利用統計を run / request 単位で保持する再生成不能な監査・利用履歴。
-  - producer が組み立てた分析用 JSON snapshot も保存する。現行の読書AIは会話件数と message / answer の文字数、tool 名・概要、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を記録し、発話本文や provider の raw response は記録しない。
+  - producer が組み立てた分析用 JSON snapshot も保存する。現行の読書AIは `message` / `history` / `answer` の本文を会話用の専用 field としては保存せず、会話件数と文字数、tool 名・概要、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を記録する。
+  - 制限付き tool I/O には、モデルが `query` や `summaryFocus` へ転記したユーザー文言・検索語と、tool が返した作品本文の excerpt / snippet / passage、local summary、人物・用語情報が含まれ得る。件数・深さ・文字列長の制限は内容の redaction ではない。
   - usage store 自体は snapshot をそのまま JSON 化し、credentials 系 key の汎用 redaction は行わない。現行 producer は AI credential を snapshot に含めない構造を組み立てており、新しい producer にも credential 非包含または明示的 redaction と test を要求する。
 - `state/reader_search.sqlite`
   - 読書AI `search_full_text` 用の plain text cache。`novel_id`、`episode_index`、`content_etag` をキーにし、検索時の lazy fill と本文閲覧時の write-through で更新する。
@@ -250,7 +251,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `GET /api/ai-generation/usage`
   - 読書AIなどの保存済み AI 利用統計を返す。schema は run / request ごとの token、cost、request kind、親 request、tool 名・概要を表現できるが、producer が取得しない値は `0` または未設定となる。現行の読書AI producer は `tool_call` / `final_answer`、input / output / total tokens、tool 名・概要を保存し、cost、cached / reasoning tokens、親子 request は投入しない
 - `GET /api/ai-generation/usage/:runId`
-  - 指定 run の統計詳細と producer 定義の分析用 JSON snapshot を返す。現行の読書AI snapshot は会話本文でなく件数・文字数を保存し、tool request / result には件数・深さ・文字列長の上限を適用する。provider の raw response や `finish_reason` は保存せず、usage store に credentials 系 key の汎用 redaction はない
+  - 指定 run の統計詳細と producer 定義の分析用 JSON snapshot を返す。現行の読書AI snapshot は会話本文を専用 field としては保存しないが、上限付き tool request / result に転記されたユーザー文言や作品本文の excerpt / snippet / passage が含まれ得る。provider の raw response body や `finish_reason` は snapshot に保存しない一方、失敗 run の `errorMessage` には provider 由来の error 文言が含まれ得る。usage store に key 名・内容ベースの汎用 redaction はない
 
 ### 6.3 話本文のバージョニングとキャッシュ無効化
 
@@ -305,7 +306,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 6. `viewer-api`: 各 tool 実行時にネタバレ境界、話数上限、本文長上限を再検証し、NDJSON で途中経過を返す。話範囲ロードは最大20話、範囲指定型の作品内検索は最大50話を基本上限とする。具体語の初出や過去の言及箇所など長編全体の探索では `search_full_text` が既読境界内を広く検索し、本文全体ではなく hit id、話情報、位置、短い snippet、score を返す。検索結果は score 上位の `topMatches` と、候補が出た話数帯を横断する `coverageMatches` に分け、`matches` には両者を統合して返す。候補総数、マッチした話数、最初/最後のマッチ話数、score 上位枠の打ち切り有無、未返却候補数は metadata として返し、長編の人物像や関係性を序盤の高スコア hit だけで判断しないようにする。`search_full_text.query` は短い具体語検索に限定し、長すぎる query や term 過多の query は回復可能な tool error として返す。`load_passages` は同一 reader-assistant run 内の `search_full_text` が返した hit id のみを受け取り、最大5件・最大4000文字/件のヒット周辺本文を返す。広い話範囲では `load_episode_range` に `output: "summary"`、`summaryPurpose`、`summaryFocus` を渡せるようにし、本文抜粋全文ではなく目的付き中間要約を返してから最終回答へ統合する。複数観点が必要な質問では、同じ話数範囲を観点別に再読せず、`summaryFocus` に必要な観点をまとめる。読書AIの tool 定義と system 指示でも、第1〜102話のような明らかな20話超過範囲を初手で呼ばず、最初から20話以下の chunk に分割するよう明示する。`load_episode_range` の20話超過と `search_episodes` の50話超過、未知 hit id などは agent loop 内ではモデル可視の tool output として返し、上限内への分割再実行や再検索を促す。これらの回復可能な入力エラーは `tool_recovery` として最終レスポンスにも記録する
 7. `viewer-api` -> `viewer-web`: 最終回答を `result` として返す
 8. `viewer-web`: 同一作品を開いている間は、話移動や境界切替後もチャット履歴と実行ログを保持し、各発話へその時点の参照上限を付与する。過去の回答は読者が既に得た情報として追質問の履歴に含めるが、新しい作品参照の境界はリクエストごとの上限話と `viewer-api` の tool 制限を正本とする。必要に応じて履歴をデバッグ用 JSON としてエクスポートできる
-9. `viewer-api`: 読書AI run の input / output / total tokens と tool call の名前・概要を `state/ai_usage.sqlite` に保存する。分析用 snapshot は会話件数、message / answer の文字数、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を含む。`summarize_episode_range` は現行では local 要約であり、nested request、cost、provider の raw response、`finish_reason` は保存しない。usage store は snapshot をそのまま JSON 化して汎用 redaction を行わないため、producer が AI credential を含めない構造を組み立てる
+9. `viewer-api`: 読書AI run の input / output / total tokens と tool call の名前・概要を `state/ai_usage.sqlite` に保存する。分析用 snapshot は会話件数、message / answer の文字数、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を含む。会話本文を専用 field としては保存しないが、tool I/O に転記されたユーザー文言や作品本文の excerpt / snippet / passage は保存され得る。`summarize_episode_range` は現行では local 要約であり、nested request、cost、provider の raw response body、`finish_reason` は snapshot に保存しない。usage store は内容を redaction せず snapshot を JSON 化するため、producer が AI credential を含めない構造を組み立てる
 
 ## 8. 永続 state schema
 
