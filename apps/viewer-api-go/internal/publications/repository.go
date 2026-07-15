@@ -8,10 +8,23 @@ import (
 	"strings"
 	"sync"
 
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 )
 
-const FileName = "publications.yaml"
+const (
+	FileName      = "publications.yaml"
+	SchemaVersion = 1
+)
+
+var SchemaContract = schemaguard.Contract{
+	ID:                   "VA-PUBLICATIONS",
+	Path:                 FileName,
+	Current:              SchemaVersion,
+	ReadableLegacy:       []int{0},
+	MissingPolicy:        schemaguard.MissingTreatAsLegacy,
+	MissingLegacyVersion: 0,
+}
 
 type Repository struct {
 	path string
@@ -193,7 +206,7 @@ func (r *Repository) Ensure() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return yamlfile.Ensure(r.path, document{SchemaVersion: 1, Novels: []NovelPublications{}})
+	return yamlfile.Ensure(r.path, document{SchemaVersion: SchemaVersion, Novels: []NovelPublications{}})
 }
 
 func (r *Repository) PruneNovel(novelID string) (int, error) {
@@ -229,14 +242,14 @@ func (r *Repository) PruneNovel(novelID string) (int, error) {
 
 func (r *Repository) readLocked() (document, error) {
 	var doc document
-	if err := yamlfile.Read(r.path, &doc); err != nil {
+	if _, err := yamlfile.ReadGuarded(r.path, SchemaContract, &doc); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return document{SchemaVersion: 1, Novels: []NovelPublications{}}, nil
+			return document{SchemaVersion: SchemaVersion, Novels: []NovelPublications{}}, nil
 		}
 		return document{}, err
 	}
 	if doc.SchemaVersion == 0 {
-		doc.SchemaVersion = 1
+		doc.SchemaVersion = SchemaVersion
 	}
 	if doc.Novels == nil {
 		doc.Novels = []NovelPublications{}
@@ -246,7 +259,7 @@ func (r *Repository) readLocked() (document, error) {
 
 func (r *Repository) writeLocked(doc document) error {
 	if doc.SchemaVersion == 0 {
-		doc.SchemaVersion = 1
+		doc.SchemaVersion = SchemaVersion
 	}
 	if doc.Novels == nil {
 		doc.Novels = []NovelPublications{}

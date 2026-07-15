@@ -64,10 +64,13 @@ type aiProfileCredentialsDocument struct {
 func (r *Repository) readAIGenerationSettingsDocument() (aiGenerationSettingsDocument, error) {
 	var raw aiGenerationSettingsDocument
 	path := filepath.Join(r.stateDir, FileName)
-	if err := yamlfile.Read(path, &raw); err != nil {
+	if _, err := yamlfile.ReadGuarded(path, SchemaContract, &raw); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return emptyAiGenerationSettingsDocument(), nil
 		}
+		return aiGenerationSettingsDocument{}, err
+	}
+	if err := validateAIGenerationAPIKeyVersions(raw); err != nil {
 		return aiGenerationSettingsDocument{}, err
 	}
 	doc := normalizeAIGenerationSettingsDocument(raw)
@@ -88,7 +91,7 @@ func (r *Repository) readAIGenerationSettingsDocument() (aiGenerationSettingsDoc
 func emptyAiGenerationSettingsDocument() aiGenerationSettingsDocument {
 	profileID := defaultAIProfileID
 	return aiGenerationSettingsDocument{
-		SchemaVersion:     2,
+		SchemaVersion:     SchemaVersion,
 		Revision:          0,
 		PreferredMode:     "heuristic",
 		SelectedProfileID: &profileID,

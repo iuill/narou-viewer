@@ -4820,10 +4820,10 @@ func TestServerAIGenerationSettingsStoreErrors(t *testing.T) {
 	}
 	stateStore := store.New(dataDir)
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
-	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusInternalServerError)
+	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusConflict)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{
 		"preferredMode": "heuristic",
-	}, http.StatusInternalServerError)
+	}, http.StatusConflict)
 
 	dataDir = newHTTPAPITestData(t)
 	stateStore = store.New(dataDir)

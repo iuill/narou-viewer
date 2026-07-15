@@ -2,6 +2,7 @@ package publications
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestNormalizeISBN13(t *testing.T) {
@@ -892,6 +896,71 @@ func TestRepositoryReadEmptyAndInvalidYAML(t *testing.T) {
 	}
 	if _, err := repo.Get("novel-1"); err == nil {
 		t.Fatal("invalid yaml should return an error")
+	}
+}
+
+func TestRepositorySchemaGuardRejectsMutationAndPruneWithoutTouchingFile(t *testing.T) {
+	tests := []struct {
+		name       string
+		document   string
+		wantStatus schemaguard.Status
+	}{
+		{name: "future", document: "schema_version: 99\nnovels: []\n", wantStatus: schemaguard.StatusFutureUnknown},
+		{name: "malformed", document: "schema_version: [\n", wantStatus: schemaguard.StatusMalformed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(stateDir, FileName)
+			if err := os.WriteFile(path, []byte(test.document), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			repository := NewRepository(stateDir)
+			for _, action := range []struct {
+				name string
+				run  func() error
+			}{
+				{name: "put", run: func() error {
+					_, err := repository.PutEntry("novel-1", Entry{ID: "novel", Kind: KindNovel})
+					return err
+				}},
+				{name: "prune", run: func() error {
+					_, err := repository.PruneNovel("novel-1")
+					return err
+				}},
+			} {
+				t.Run(action.name, func(t *testing.T) {
+					err := schemaguardtest.AssertFileUntouched(t, path, action.run)
+					var guardError *schemaguard.GuardError
+					if !errors.As(err, &guardError) || guardError.Result.Status != test.wantStatus {
+						t.Fatalf("error = %#v, want GuardError status %s", err, test.wantStatus)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRepositoryMigratesLegacyVersionZeroOnWrite(t *testing.T) {
+	for _, document := range []string{
+		"novels: []\n",
+		"schema_version: 0\nnovels: []\n",
+	} {
+		stateDir := t.TempDir()
+		path := filepath.Join(stateDir, FileName)
+		if err := os.WriteFile(path, []byte(document), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		if _, err := NewRepository(stateDir).PutEntry("novel-1", Entry{ID: "novel", Kind: KindNovel}); err != nil {
+			t.Fatalf("PutEntry legacy v0: %v", err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read migrated fixture: %v", err)
+		}
+		if !strings.Contains(string(raw), "schema_version: 1") {
+			t.Fatalf("legacy document was not migrated to v1: %s", raw)
+		}
 	}
 }
 

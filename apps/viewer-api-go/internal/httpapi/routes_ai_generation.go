@@ -86,6 +86,9 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		settings, err := s.stateStore.GetAIGenerationSettings()
 		if err != nil {
+			if writeStateSchemaError(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
 			return
 		}
@@ -123,6 +126,9 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 			} else {
 				current, err := s.stateStore.GetAIGenerationSettings()
 				if err != nil {
+					if writeStateSchemaError(w, err) {
+						return
+					}
 					writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
 					return
 				}
@@ -135,6 +141,9 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 		if update.SelectedProfileID == nil && update.ProfilesSet {
 			current, err := s.stateStore.GetAIGenerationSettings()
 			if err != nil {
+				if writeStateSchemaError(w, err) {
+					return
+				}
 				writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
 				return
 			}
@@ -145,6 +154,9 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 		}
 		settings, err := s.stateStore.PutAIGenerationSettings(update)
 		if err != nil {
+			if writeStateSchemaError(w, err) {
+				return
+			}
 			if store.IsAIGenerationSettingsCryptoError(err) {
 				writeError(w, http.StatusServiceUnavailable, err.Error())
 				return
@@ -208,6 +220,9 @@ func (s *Server) handlePreferredMode(w http.ResponseWriter, r *http.Request) {
 
 	response, err := s.stateStore.PutAIGenerationPreferredMode(preferred)
 	if err != nil {
+		if writeStateSchemaError(w, err) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Failed to access AI generation settings.")
 		return
 	}
