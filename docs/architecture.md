@@ -16,7 +16,7 @@ flowchart LR
   W[viewer-dev container<br/>viewer-web dev server<br/>viewer-api]
   NF[novel-fetcher sidecar]
   D[(host data dir<br/>./data)]
-  BL[(Browser local storage<br/>SW / Cache Storage / IndexedDB)]
+  BL[(Browser local state<br/>localStorage / SW / Cache Storage)]
 
   U --> W
   U <--> BL
@@ -28,7 +28,7 @@ flowchart LR
 - `viewer-web` と `viewer-api` は Dev Container の `viewer-dev` 内でプロセスとして起動する。
 - `novel-fetcher` と E2E 用常駐サービスは sidecar コンテナとして起動する。
 - 共有実データはホストの `./data` を介して共有する。
-- オフラインキャッシュ実体はブラウザ内に保持する。
+- 現行の app-shell fallback cache はブラウザ内に保持する。話本文のオフライン事前取得は未実装である。
 
 ### 2.2 self-host 構成
 
@@ -40,7 +40,7 @@ flowchart LR
   API[viewer-api<br/>BFF/API]
   NF[novel-fetcher<br/>sidecar]
   DATA[(shared-data volume)]
-  BL[(Browser local storage<br/>SW / Cache Storage / IndexedDB)]
+  BL[(Browser local state<br/>localStorage / SW / Cache Storage)]
 
   U --> RP
   RP --> WEB
@@ -107,7 +107,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 
 - `viewer-web`
   - ライブラリ一覧、本文リーダー、栞、表示設定、読書AIパネルなどの UI を担当する。
-  - Service Worker、Cache Storage、IndexedDB を使い、オフライン読書用のキャッシュと端末依存設定を管理する。
+  - `localStorage` に端末依存の reader 設定を保存する。Service Worker / Cache Storage は現行では app shell の navigation fallback を担当し、話本文とその metadata のオフライン保存は未実装である。
 - `viewer-api`
   - ブラウザ向け BFF/API として、作品一覧、目次、本文、栞、既読位置、AI 生成、ストレージ使用量を提供する。
   - `state/*.yaml`、`state/*.sqlite` を管理し、取得 sidecar の内部 API を呼び出す。
@@ -119,7 +119,8 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
   - `novel-fetcher` の保存データ、server state、AI 利用統計、読書AI検索キャッシュを保持する。
   - repository には保存せず、開発時は `data/`、self-host 時は named volume として扱う。
 - ブラウザローカル状態
-  - 端末依存の reader 設定、オフライン設定、話本文キャッシュ、キャッシュメタデータを保持する。
+  - `localStorage` に端末依存の reader 設定を保持する。
+  - Service Worker / Cache Storage に `/` と manifest の app-shell cache を保持する。
   - server state と同期する必要がある既読位置や栞は `viewer-api` に保存する。
 
 ## 5. データ境界と責務分離
@@ -137,6 +138,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `state/reading_state.yaml`
 - `state/bookmarks.yaml`
 - `state/reader_preferences.yaml`
+- `state/novel_reader_settings.yaml`
 - `state/ai_generation_settings.yaml`
 - `state/publications.yaml`
 - `state/character_events/*.yaml`
@@ -151,19 +153,20 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `state/extraction_jobs/index/*.yaml`
 - `state/extraction_jobs/checkpoints/*.json`
 - `state/ai_usage.sqlite`
-  - 読書AIなどの AI 利用統計を run / request 単位で保持する派生統計。
-  - 会話・tool request/result・provider response 由来の分析用 snapshot も保存するが、API キーなど credentials は保存前に redaction する。
+  - 読書AIなどの AI 利用統計を run / request 単位で保持する再生成不能な監査・利用履歴。
+  - producer が組み立てた分析用 JSON snapshot も保存する。現行の読書AIは `message` / `history` / `answer` の本文を会話用の専用 field としては保存せず、会話件数と文字数、tool 名・概要、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を記録する。
+  - 制限付き tool I/O には、モデルが `query` や `summaryFocus` へ転記したユーザー文言・検索語と、tool が返した作品本文の excerpt / snippet / passage、local summary、人物・用語情報が含まれ得る。件数・深さ・文字列長の制限は内容の redaction ではない。
+  - usage store 自体は snapshot をそのまま JSON 化し、credentials 系 key の汎用 redaction は行わない。現行 producer は AI credential を snapshot に含めない構造を組み立てており、新しい producer にも credential 非包含または明示的 redaction と test を要求する。
 - `state/reader_search.sqlite`
   - 読書AI `search_full_text` 用の plain text cache。`novel_id`、`episode_index`、`content_etag` をキーにし、検索時の lazy fill と本文閲覧時の write-through で更新する。
   - 取得済み本文と reader document から再生成できる派生キャッシュであり、破損・削除時も読書状態や AI 設定の正本には影響しない。
 
 ### 5.3 `viewer-web` / ブラウザが管理
 
-- オフライン設定値（`X`、総キャッシュ上限）
-- reader の端末依存設定値（文字サイズ、文字間隔）
+- library export の交換 schema
+- reader の端末依存設定値（文字サイズ、文字間隔、読み上げ等）を `localStorage` に保存
+- app-shell navigation fallback 用の Service Worker / Cache Storage
 - reader 同期用の `clientId`（タブ/PWA ウィンドウごとにメモリ上で生成し、storage には永続化しない）
-- キャッシュ済み話のメタデータ（`episodeIndex`, `contentEtag`, `lastAccessedAt`, `bytes`）
-- 話本文のレスポンスキャッシュ
 
 ### 5.4 競合回避ルール
 
@@ -173,8 +176,9 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `viewer-api` 内では `FileStateStore` facade が state 更新を直列化し、`reading_state.yaml` / `bookmarks.yaml` / `reader_preferences.yaml` / `novel_reader_settings.yaml` の schema と単一 file 更新は各 Repository が所有する。
 - reader state / reader preferences / bookmarks のような単一 state file に閉じた薄い CRUD は、route handler 近くで request validation を行い `FileStateStore` facade を呼ぶ。取得 backend 削除後の state pruning、publication cover 合成、reader correction 適用、AI usage coordination のように複数 domain を跨ぐ処理は application service へ切り出す。
 - YAML / JSON などの file state 書き込みは、共通の atomic file helper を通して「最新読込 -> メモリ上で変更 -> temp file -> fsync -> rename -> parent dir fsync」で行う。
-- `state/ai_usage.sqlite` は AI 利用統計専用の例外であり、`AiUsageStore` が SQLite transaction と WAL で更新する。`state/reader_search.sqlite` は読書AI検索用の派生キャッシュであり、本文検索時に viewer-api が SQLite へ読み書きする。
+- `state/ai_usage.sqlite` は AI 利用履歴専用の例外であり、`AiUsageStore` が SQLite transaction と process 内 write mutex で更新する。現行実装は WAL を明示的に有効化していない。`state/reader_search.sqlite` は読書AI検索用の派生キャッシュであり、本文検索時に viewer-api が SQLite へ読み書きする。
 - `viewer-api` を複数インスタンスに増やす場合、YAML 単体および単一 SQLite ファイルでは整合性保証が不足するため、外部ロックまたは外部ストアへ移行する。
+- 個別 schema の version、互換性、migration、prune、backup / restore は [`state-schema-policy.md`](state-schema-policy.md) を単一正本とする。
 
 ## 6. API 境界（viewer-api）
 
@@ -214,7 +218,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `GET /api/system/storage`
   - サーバ側 `data/` 配下の現行データのファイル論理サイズを走査し、`小説データ` / `キャッシュ` / `その他` のカテゴリ別合計と、作品単位の合計・内訳を返す
   - 旧作品データのディレクトリは走査・集計の対象外とする
-  - `novel-fetcher/works/**/episodes` と `assets` は小説データ、`raw` と `state/reader_search.sqlite*` は再生成可能キャッシュとして扱う。分類できない管理ファイルはその他に含める
+  - 容量集計上は `novel-fetcher/works/**/episodes` と `assets` を小説データ、`raw` と `state/reader_search.sqlite*` をキャッシュへ分類する。raw HTML は同一 bytes の再取得を保証できないため、backup 上の扱いは [`state-schema-policy.md`](state-schema-policy.md) を優先する。分類できない管理ファイルはその他に含める
 - `GET /api/system/storage/progress`
   - 直近のストレージ使用量走査について、処理状態と作品数単位の目安進捗を返す
 - `GET /api/library/novels`
@@ -245,15 +249,15 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `POST /api/library/novels/{novelId}/reader-assistant/chat/stream`
   - 読書AIの streaming 応答。`application/x-ndjson` で `status` / `tool_call` / `tool_result` / `result` / `error` を返し、クライアントの実行ログ表示に使う
 - `GET /api/ai-generation/usage`
-  - 読書AIなどの AI 利用統計を返す。読書AI run ごとの request 数、input/output/total tokens、cached tokens、reasoning tokens、tool call 件数、OpenRouter が返す cost を表示する。run 配下には request ごとの token/cost、tool call / handoff / final answer / sub request などの分類、tool 引数の短い概要、親 request への紐づけ、run id も含める
+  - 読書AIなどの保存済み AI 利用統計を返す。schema は run / request ごとの token、cost、request kind、親 request、tool 名・概要を表現できるが、producer が取得しない値は `0` または未設定となる。現行の読書AI producer は `tool_call` / `final_answer`、input / output / total tokens、tool 名・概要を保存し、cost、cached / reasoning tokens、親子 request は投入しない
 - `GET /api/ai-generation/usage/:runId`
-  - 指定 run の統計詳細と分析用 JSON snapshot を返す。snapshot には読書AIの会話、tool request/result、provider response 由来の usage 情報を含めるが、API キーなど credentials は保存対象にせず、保存前にも機密キー名を redaction する。
+  - 指定 run の統計詳細と producer 定義の分析用 JSON snapshot を返す。現行の読書AI snapshot は会話本文を専用 field としては保存しないが、上限付き tool request / result に転記されたユーザー文言や作品本文の excerpt / snippet / passage が含まれ得る。provider の raw response body や `finish_reason` は snapshot に保存しない一方、失敗 run の `errorMessage` には provider 由来の error 文言が含まれ得る。usage store に key 名・内容ベースの汎用 redaction はない
 
 ### 6.3 話本文のバージョニングとキャッシュ無効化
 
 - `contentEtag` は、`novel-fetcher` sidecar が返す `content_hash` を優先し、不足時は本文メタデータから作る安定キーとする。
-- `viewer-web` は `contentEtag` を IndexedDB に保持し、差分検知に使う。
-- `toc` または本文 API の `contentEtag` が変わった話は、Service Worker が stale とみなして再取得する。
+- 現行 `viewer-web` は `contentEtag` や話本文を browser storage に永続化せず、Service Worker も episode API を cache しない。
+- 将来、話本文のオフライン cache を実装する場合は、保存した `contentEtag` と `toc` / 本文 API の値を比較し、変更済みの話を再取得する。
 - 実装が容易なら HTTP `ETag` / `If-None-Match` も併用する。
 
 ## 7. 主要シーケンス
@@ -279,7 +283,9 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 10. `viewer-web` -> `viewer-api`: `PUT /api/reader/state`（最終既読話・本文内位置保存）
 11. `viewer-web` -> `viewer-api`: `PUT /api/reader/preferences`（組み方向、フォント種別、テーマ保存）
 
-### 7.3 オフライン事前取得
+### 7.3 オフライン事前取得（将来設計・未実装）
+
+話本文の事前取得、容量上限、episode metadata の browser 永続化は現行未実装である。実装する場合は次の sequence を基準にし、採用する browser storage schema を [`state-schema-policy.md`](state-schema-policy.md) へ追加する。
 
 1. `viewer-web` -> `viewer-api`: `GET /api/reader/state?novelId=...`
 2. `viewer-web` -> `viewer-api`: `GET /api/bookmarks?novelId=...`
@@ -300,66 +306,23 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 6. `viewer-api`: 各 tool 実行時にネタバレ境界、話数上限、本文長上限を再検証し、NDJSON で途中経過を返す。話範囲ロードは最大20話、範囲指定型の作品内検索は最大50話を基本上限とする。具体語の初出や過去の言及箇所など長編全体の探索では `search_full_text` が既読境界内を広く検索し、本文全体ではなく hit id、話情報、位置、短い snippet、score を返す。検索結果は score 上位の `topMatches` と、候補が出た話数帯を横断する `coverageMatches` に分け、`matches` には両者を統合して返す。候補総数、マッチした話数、最初/最後のマッチ話数、score 上位枠の打ち切り有無、未返却候補数は metadata として返し、長編の人物像や関係性を序盤の高スコア hit だけで判断しないようにする。`search_full_text.query` は短い具体語検索に限定し、長すぎる query や term 過多の query は回復可能な tool error として返す。`load_passages` は同一 reader-assistant run 内の `search_full_text` が返した hit id のみを受け取り、最大5件・最大4000文字/件のヒット周辺本文を返す。広い話範囲では `load_episode_range` に `output: "summary"`、`summaryPurpose`、`summaryFocus` を渡せるようにし、本文抜粋全文ではなく目的付き中間要約を返してから最終回答へ統合する。複数観点が必要な質問では、同じ話数範囲を観点別に再読せず、`summaryFocus` に必要な観点をまとめる。読書AIの tool 定義と system 指示でも、第1〜102話のような明らかな20話超過範囲を初手で呼ばず、最初から20話以下の chunk に分割するよう明示する。`load_episode_range` の20話超過と `search_episodes` の50話超過、未知 hit id などは agent loop 内ではモデル可視の tool output として返し、上限内への分割再実行や再検索を促す。これらの回復可能な入力エラーは `tool_recovery` として最終レスポンスにも記録する
 7. `viewer-api` -> `viewer-web`: 最終回答を `result` として返す
 8. `viewer-web`: 同一作品を開いている間は、話移動や境界切替後もチャット履歴と実行ログを保持し、各発話へその時点の参照上限を付与する。過去の回答は読者が既に得た情報として追質問の履歴に含めるが、新しい作品参照の境界はリクエストごとの上限話と `viewer-api` の tool 制限を正本とする。必要に応じて履歴をデバッグ用 JSON としてエクスポートできる
-9. `viewer-api`: provider response の usage と tool call 要約を `state/ai_usage.sqlite` に保存する。`summarize_episode_range` のように親 tool call から発生した nested summarizer の usage は `sub_request` として親 request index に紐づけ、nested run の raw response から cost と `finish_reason` も確認できるよう保存する。run id で後追い分析できるよう、読書AIの会話、tool request/result、usage request、親 run / nested run の raw response の分析用 snapshot も保存する。API キーは保存せず、snapshot 保存前に credentials 系キー名を redaction する
+9. `viewer-api`: 読書AI run の input / output / total tokens と tool call の名前・概要を `state/ai_usage.sqlite` に保存する。分析用 snapshot は会話件数、message / answer の文字数、件数・深さ・文字列長を制限した tool request / result、usage request、生成 mode / reasoning 設定を含む。会話本文を専用 field としては保存しないが、tool I/O に転記されたユーザー文言や作品本文の excerpt / snippet / passage は保存され得る。`summarize_episode_range` は現行では local 要約であり、nested request、cost、provider の raw response body、`finish_reason` は snapshot に保存しない。usage store は内容を redaction せず snapshot を JSON 化するため、producer が AI credential を含めない構造を組み立てる
 
-## 8. state YAML スキーマ
+## 8. 永続 state schema
 
-```yaml
-# state/reading_state.yaml
-schema_version: 3
-revision: 1
-novels:
-  "<novel_id>":
-    last_read_episode_index: "120"
-    position: 42
-    state_version: 7
-    updated_by_client_id: "reader-device-a"
-    scroll:
-      type: ratio
-      value: 0.42
-    updated_at: "2026-03-01T00:00:00+09:00"
-```
-
-```yaml
-# state/bookmarks.yaml
-schema_version: 3
-revision: 3
-bookmarks:
-  - id: "bm_20260301_001"
-    novel_id: "<novel_id>"
-    episode_index: "130"
-    position: 42
-    label: "再開ポイント"
-    created_at: "2026-03-01T00:00:00+09:00"
-```
-
-```yaml
-# state/reader_preferences.yaml
-schema_version: 3
-revision: 2
-reader:
-  reading_mode: "vertical"
-  font_family: "mincho"
-  theme: "classic"
-  updated_at: "2026-03-01T00:00:00+09:00"
-```
-
-- `revision` は `viewer-api` 内の更新直列化で使う内部世代値であり、ファイル書き換えごとに加算する。
-- `position` は `readerDocument` を線形化した 0 始まりの本文位置で、text/title/meta は書記素数、`lineBreak`/`image`/`html` は 1 として数える。
-- `state_version` は作品ごとの既読位置更新回数で、reader 復帰時の別端末更新検知に使う。
-- `updated_by_client_id` はタブ/PWA ウィンドウごとにメモリ上で生成する同期用 writer ID で、reader 復帰時の競合判定補助に使う。storage には永続化しないため、複製タブ間でも同じ ID を再利用しない。
-- 旧 `lineNumber` / `line_number` 入力は受け取っても保存には使わず、位置未指定時は `position: 0` を採用する。
-- ブラウザローカルのキャッシュメタデータや reader の端末依存表示設定は端末依存のため、サーバ YAML には保持しない。
-- `reading_state.yaml` の互換読み込み、書き出し禁止 field、migration、破損時の扱いは [`docs/state-schema-policy.md`](state-schema-policy.md) に固定する。
+- `state/` の YAML / JSON / SQLite、`novel-fetcher` storage、library export は、所有境界を統合せず別 schema として管理する。
+- schema version、CAS 等の運用世代、crypto version、exchange format version は別々の軸として扱う。
+- `position` は `readerDocument` を線形化した0始まりの本文位置で、text / title / meta は書記素数、`lineBreak` / `image` / `html` は1として数える。
+- `state_version` は作品ごとの既読位置更新回数で、reader 復帰時の別端末更新検知と tombstone の CAS に使う。document `schema_version` とは別である。
+- ブラウザローカルのキャッシュ metadata と端末依存表示設定は server state に保持しない。
+- schema inventory、現行 version、互換、migration、prune、復旧、backup / restore の正本は [`state-schema-policy.md`](state-schema-policy.md) とする。
 
 ## 9. 障害・運用設計
 
-- 起動時に `state/*.yaml` がなければ `viewer-api` が初期ファイルを自動生成する。
-- YAML 書き込みは `FileStateStore` facade の mutex 内で各 repository が行い、テンポラリファイル + rename で原子的に更新する。
-- `state/ai_usage.sqlite` は読書機能や AI 設定の正本ではなく後追い分析用の派生統計として扱う。`state/reader_search.sqlite` も読書AI検索用の派生キャッシュとして扱う。破損・削除時も既読位置、栞、AI 生成設定、キャラクター一覧の正本には影響しない。
-- 日次バックアップ（最低）:
-  - `novel-fetcher/`
-  - `state/`
+- 起動時に designated singleton state がなければ `viewer-api` が初期ファイルを生成する。per-novel state の欠落、既存 file の parse error、未知 schema version は別に扱う。
+- core singleton YAML は `FileStateStore` facade と各 repository の mutex 内で更新する。その他は schema ごとに lock または workflow の調停境界が異なり、いずれも共通 atomic file helper で更新する。現行差異は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
+- `state/ai_usage.sqlite` は現在値の正本ではないが、再生成不能な監査・利用履歴として扱う。`state/reader_search.sqlite` は読書AI検索用の再生成可能 cache とする。
+- backup は `novel-fetcher/library.sqlite` と `novel-fetcher/works/**`、viewer-api の正本、生成正本、監査履歴を consistency group ごとに取得する。稼働中 SQLite と file tree の単純な順次 copy を一貫した snapshot とみなさない。詳細は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - 取得 backend の更新タスク中に対象作品の本文読込が不整合になった場合は、`409` を返しクライアントがリトライする。
 - ブラウザキャッシュが消えても、既読位置・栞は `state/*.yaml` から復元できる。
 
@@ -375,5 +338,5 @@ reader:
 1. `viewer-api` の最小API実装（一覧・toc・episode・state更新）。
 2. `viewer-api` に `FileStateStore` を実装し、`reading_state.yaml` / `bookmarks.yaml` の直列更新を行う。
 3. `viewer-web` で一覧と本文表示を接続する。
-4. `viewer-web` に Service Worker とブラウザローカルのオフライン管理を実装する。
+4. `viewer-web` の app-shell Service Worker を基礎に、話本文のブラウザローカルなオフライン管理を追加する。
 5. `novel-fetcher` の download/update 操作UIを接続する。

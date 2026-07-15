@@ -13,7 +13,7 @@
 - 本文表示画面の FAB「読書AI」から reader panel として開く。
 - 目次、栞、表示設定、キャラクター一覧と同じ reader panel 系 UI に揃える。
 - チャット履歴は、同一作品を開いている間はクライアント側で保持し、会話履歴そのものをサーバ側の正本 state としては永続化しない。
-- ただし、読書AIの usage / run 分析用 snapshot は `state/ai_usage.sqlite` に保存し、message 長、answer 長、tool request / result のサニタイズ済み概要を後追い確認できるようにする。
+- ただし、読書AIの usage / run 分析用 snapshot は `state/ai_usage.sqlite` に保存する。`message` / `history` / `answer` の本文は会話用の専用 field としては保存せず、会話件数と文字数を記録する。一方、件数・深さ・文字列長を制限して保存する tool request / result には、モデルが `query` や `summaryFocus` へ転記したユーザー文言・検索語と、tool が返した作品本文の excerpt / snippet / passage、local summary、人物・用語情報が含まれ得る。この制限処理は内容の redaction ではなく、usage store に credentials 系 key の汎用 redaction もないため、producer が AI credential を含めない構造を組み立てる。この DB は現在値の正本ではないが再生成不能な監査・利用履歴であり、schema と復旧方針は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 
 ## ネタバレ境界
 

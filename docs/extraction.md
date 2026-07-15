@@ -1,6 +1,6 @@
 # 人物・用語抽出機能
 
-本文から人物一覧と作品固有の用語一覧を同じ抽出 response で生成する機能の仕様を定める。全体の責務分離は [`architecture.md`](architecture.md) を優先する。
+本文から人物一覧と作品固有の用語一覧を同じ抽出 response で生成する機能の仕様を定める。全体の責務分離は [`architecture.md`](architecture.md)、永続 schema の version、互換性、共通 recovery は [`state-schema-policy.md`](state-schema-policy.md) を優先する。
 
 ## 境界と表示
 
@@ -23,7 +23,7 @@
 - discovery の人物名候補は response の話数を当該バッチで検証し、最終補正では既存の名前・別名の話数を維持する。補正理由は物語上の人物履歴へ保存しない。
 - 人物の同一性判明は `identity_merge_events` に source / target ID と有効話数を保存する。明示的な `mergeProposals` は返却した runtime batch の境界、identity resolver の判定は生成上限を有効話数とし、それより前の表示境界では別人物のまま投影する。
 - 並列バッチの用語説明は、そのバッチで新しく判明した事実差分として受け取り、`description_facts` に話単位で保存する。表示時だけ境界以下の事実を合成し、中間話ごとの累積 snapshot を重複保存しない。後続プロンプトへ渡す説明は長さを制限する。
-- term profile は `description_facts` 追加後も `schema_version: 1` を維持する。新ビルドが保存した profile を旧ビルドへロールバックして読み込むと、旧ビルドは未知fieldを無視して事実差分を表示できないため、ロールバック前にstateを退避し、再度新ビルドへ戻した後に再生成する。
+- term profile の `description_facts` は旧ビルドが無視する。新ビルドが保存した profile を旧ビルドへロールバックして再保存すると事実差分を失い得るため、ロールバック前にstateを退避する。現行 version と横断 rollback 方針は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - character event / profile の `identity_merge_events` も旧ビルドでは無視される。旧ビルドで保存し直すと時系列identity情報を失うため、同じくロールバック前にstateを退避する。
 - snapshotを持たない用語は、表示境界以下の事実をすべて連結して説明を構築する。長編で説明が長くなる場合の表示要約・折りたたみはfollow-upとする。
 - serial は従来どおり直前までの用語 snapshot を次バッチへ渡し、LLM response 自体に自己完結型 snapshot を返させる。
@@ -43,6 +43,8 @@
 - `state/extraction_jobs/index/*.yaml`
 - `state/extraction_jobs/checkpoints/*.json`
 
+character events と term profiles は生成正本、character profiles と job index は派生 view / index、extraction jobs は運用正本、checkpoint は再実行 cost を伴う一時 state として扱う。現行 version、未知 version、backup / restore、prune の横断方針は [`state-schema-policy.md`](state-schema-policy.md) に集約する。
+
 ## API
 
 - `GET /api/library/novels/{novelId}/characters?upToEpisodeIndex=...`
@@ -58,4 +60,4 @@
 - PR #1 を含む版で旧 job state の移行を済ませた前提とし、現行 runtime は新形式への変換や fallback を行わない。
 - 起動時に旧 `state/character_jobs` と移行時の退避先 `state/extraction_jobs/legacy_conflicts` の一括削除を best-effort で試みる。権限不整合などで削除できない場合は warning を記録して起動を継続し、現行 `state/extraction_jobs/index` を初期化できない場合だけ起動エラーとする。保持が必要な場合は新しい版を起動する前に退避する。
 - job state の clear/reset は旧 `state/character_jobs` を参照せず、`state/extraction_jobs` 以下だけを対象とする。作品単位の抽出 state clear は現行の人物・用語 state も削除する。旧 character-only state との不整合がある場合は、抽出 state をクリアして人物・用語を再生成する。
-- usage 履歴は `feature` 値だけでは除外せず汎用的に読み取る。旧 `character-summary` 行もその値を理由には除外しないが、旧 schema や metadata 形式の互換は保証しない。不要な履歴は `state/ai_usage.sqlite` を退避または削除して初期化する。
+- usage 履歴は `feature` 値だけでは除外せず汎用的に読み取る。旧 `character-summary` 行もその値を理由には除外しないが、旧 schema や metadata 形式の互換は保証しない。不要な履歴を初期化する場合も、`state/ai_usage.sqlite` は再生成不能な監査・利用履歴として先に退避する。
