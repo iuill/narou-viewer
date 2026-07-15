@@ -1591,7 +1591,7 @@ job_ids:
 	if err := ai.SaveUsageRun(server.aiUsageDBPath(), ai.UsageRun{
 		RunID:          "run-target-remove",
 		Feature:        "extraction",
-		WorkflowName:   "Character summary",
+		WorkflowName:   "Extraction",
 		Status:         "completed",
 		StartedAt:      "2026-01-01T00:00:00Z",
 		FinishedAt:     "2026-01-01T00:00:01Z",
@@ -5951,7 +5951,7 @@ func seedHTTPAIUsage(t *testing.T, dbPath string) {
 			generation_mode, answer_chars, request_count, input_tokens, output_tokens, total_tokens,
 			cached_input_tokens, reasoning_output_tokens, total_cost, tool_call_count, tool_result_count,
 			error_message
-		) VALUES ('run-http', 'character-summary', 'Character summary', 'completed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 1000, 'n0000aa', 'Novel', '1', 'openrouter/auto', 'default', 'Default', 'openrouter', 10, 1, 1, 2, 3, 0, 0, 0.01, 0, 0, NULL);
+		) VALUES ('run-http', 'extraction', 'Extraction', 'completed', '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 1000, 'n0000aa', 'Novel', '1', 'openrouter/auto', 'default', 'Default', 'openrouter', 10, 1, 1, 2, 3, 0, 0, 0.01, 0, 0, NULL);
 		INSERT INTO ai_usage_requests (
 			run_id, request_index, kind, parent_request_index, tool_names, tool_summaries,
 			input_tokens, output_tokens, total_tokens, cached_input_tokens, reasoning_output_tokens, cost

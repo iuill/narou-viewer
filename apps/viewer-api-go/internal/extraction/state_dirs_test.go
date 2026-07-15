@@ -28,7 +28,7 @@ func TestEnsureStateDirsReportsBlockedJobDirectory(t *testing.T) {
 	}
 }
 
-func TestEnsureStateDirsMigratesLegacyJobDirectoryBeforeCreatingDestination(t *testing.T) {
+func TestEnsureStateDirsRemovesObsoleteJobArtifacts(t *testing.T) {
 	stateDir := t.TempDir()
 	legacyIndex := filepath.Join(stateDir, "character_jobs", "index")
 	if err := os.MkdirAll(legacyIndex, 0o755); err != nil {
@@ -38,48 +38,62 @@ func TestEnsureStateDirsMigratesLegacyJobDirectoryBeforeCreatingDestination(t *t
 	if err := os.WriteFile(legacyJob, []byte("job_id: legacy"), 0o644); err != nil {
 		t.Fatalf("write legacy job: %v", err)
 	}
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	if err := os.MkdirAll(filepath.Join(jobsDir, "legacy_conflicts", "checkpoints"), 0o755); err != nil {
+		t.Fatalf("mkdir obsolete conflict directory: %v", err)
+	}
+	canonicalJob := filepath.Join(jobsDir, "job.yaml")
+	if err := os.WriteFile(canonicalJob, []byte("job_id: canonical"), 0o644); err != nil {
+		t.Fatalf("write canonical job: %v", err)
+	}
+	conflictCheckpoint := filepath.Join(jobsDir, "legacy_conflicts", "checkpoints", "legacy.json")
+	if err := os.WriteFile(conflictCheckpoint, []byte(`{"novelId":"legacy"}`), 0o600); err != nil {
+		t.Fatalf("write obsolete conflict checkpoint: %v", err)
+	}
 	if err := EnsureStateDirs(stateDir); err != nil {
 		t.Fatalf("EnsureStateDirs returned error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "extraction_jobs", "job.yaml")); err != nil {
-		t.Fatalf("legacy job was not migrated: %v", err)
+	if _, err := os.Stat(filepath.Join(jobsDir, "index")); err != nil {
+		t.Fatalf("canonical job index directory was not created: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "character_jobs")); !os.IsNotExist(err) {
-		t.Fatalf("legacy directory should be renamed, err=%v", err)
+	for _, obsoletePath := range []string{filepath.Join(stateDir, "character_jobs"), filepath.Join(jobsDir, "legacy_conflicts")} {
+		if _, err := os.Stat(obsoletePath); !os.IsNotExist(err) {
+			t.Fatalf("obsolete job artifacts should be removed: path=%s err=%v", obsoletePath, err)
+		}
+	}
+	if canonical, err := os.ReadFile(canonicalJob); err != nil || string(canonical) != "job_id: canonical" {
+		t.Fatalf("canonical job should be preserved: %q err=%v", canonical, err)
 	}
 }
 
-func TestEnsureStateDirsMergesLegacyJobsWhenBothDirectoriesExist(t *testing.T) {
-	stateDir := t.TempDir()
-	for _, dir := range []string{"character_jobs", "extraction_jobs"} {
-		if err := os.MkdirAll(filepath.Join(stateDir, dir), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
+func TestEnsureStateDirsContinuesWhenObsoleteArtifactsCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission failure cannot be reproduced as root")
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "character_jobs", "legacy.yaml"), []byte("job_id: legacy\n"), 0o644); err != nil {
+
+	stateDir := t.TempDir()
+	legacyDir := filepath.Join(stateDir, "character_jobs")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy job directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "job.yaml"), []byte("job_id: legacy"), 0o644); err != nil {
 		t.Fatalf("write legacy job: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "character_jobs", "conflict.yaml"), []byte("job_id: old\n"), 0o644); err != nil {
-		t.Fatalf("write conflicting legacy job: %v", err)
+	indexDir := filepath.Join(stateDir, "extraction_jobs", "index")
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("mkdir canonical job index: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "conflict.yaml"), []byte("job_id: new\n"), 0o644); err != nil {
-		t.Fatalf("write canonical job: %v", err)
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatalf("make state directory read-only: %v", err)
 	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+	})
+
 	if err := EnsureStateDirs(stateDir); err != nil {
-		t.Fatalf("EnsureStateDirs returned error: %v", err)
+		t.Fatalf("obsolete cleanup failure should not prevent startup: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "extraction_jobs", "legacy.yaml")); err != nil {
-		t.Fatalf("non-conflicting legacy job should be migrated: %v", err)
-	}
-	canonical, err := os.ReadFile(filepath.Join(stateDir, "extraction_jobs", "conflict.yaml"))
-	if err != nil || string(canonical) != "job_id: new\n" {
-		t.Fatalf("canonical conflict should be preserved: %q err=%v", canonical, err)
-	}
-	archived, err := os.ReadFile(filepath.Join(stateDir, "extraction_jobs", "legacy_conflicts", "conflict.yaml"))
-	if err != nil || string(archived) != "job_id: old\n" {
-		t.Fatalf("legacy conflict should be archived: %q err=%v", archived, err)
-	}
-	if _, err := os.Stat(filepath.Join(stateDir, "character_jobs")); !os.IsNotExist(err) {
-		t.Fatalf("fully migrated legacy directory should be removed: %v", err)
+	if info, err := os.Stat(legacyDir); err != nil || !info.IsDir() {
+		t.Fatalf("failed obsolete cleanup should leave the undeletable directory: info=%+v err=%v", info, err)
 	}
 }

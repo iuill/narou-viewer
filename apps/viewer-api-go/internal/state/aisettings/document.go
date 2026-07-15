@@ -11,15 +11,14 @@ import (
 )
 
 type aiGenerationSettingsDocument struct {
-	SchemaVersion                 int                                `yaml:"schema_version"`
-	Revision                      int                                `yaml:"revision"`
-	PreferredMode                 string                             `yaml:"preferred_mode"`
-	SelectedProfileID             *string                            `yaml:"selected_profile_id"`
-	SharedProviders               aiSharedProvidersDocument          `yaml:"shared_providers"`
-	Profiles                      []aiGenerationProfileRecord        `yaml:"profiles"`
-	ExtractionStrategyModels      aiExtractionStrategyModelsDocument `yaml:"extraction_strategy_models,omitempty"`
-	ExtractionRuntime             aiExtractionRuntimeDocument        `yaml:"extraction_runtime,omitempty"`
-	LegacyCharacterStrategyModels aiExtractionStrategyModelsDocument `yaml:"character_summary_strategy_models,omitempty"`
+	SchemaVersion            int                                `yaml:"schema_version"`
+	Revision                 int                                `yaml:"revision"`
+	PreferredMode            string                             `yaml:"preferred_mode"`
+	SelectedProfileID        *string                            `yaml:"selected_profile_id"`
+	SharedProviders          aiSharedProvidersDocument          `yaml:"shared_providers"`
+	Profiles                 []aiGenerationProfileRecord        `yaml:"profiles"`
+	ExtractionStrategyModels aiExtractionStrategyModelsDocument `yaml:"extraction_strategy_models,omitempty"`
+	ExtractionRuntime        aiExtractionRuntimeDocument        `yaml:"extraction_runtime,omitempty"`
 }
 
 type aiSharedProvidersDocument struct {
@@ -127,12 +126,8 @@ func normalizeAIGenerationSettingsDocument(raw aiGenerationSettingsDocument) aiG
 	}
 	doc.SharedProviders.OpenRouter = normalizeAIAPIKeyDocument(raw.SharedProviders.OpenRouter)
 	doc.SharedProviders.GoogleBooks = normalizeAIAPIKeyDocument(raw.SharedProviders.GoogleBooks)
-	strategyModels := raw.ExtractionStrategyModels
-	if normalizeStringPtr(strategyModels.NameDiscoveryModelID) == nil {
-		strategyModels = raw.LegacyCharacterStrategyModels
-	}
 	doc.ExtractionStrategyModels = aiExtractionStrategyModelsDocument{
-		NameDiscoveryModelID: normalizeStringPtr(strategyModels.NameDiscoveryModelID),
+		NameDiscoveryModelID: normalizeStringPtr(raw.ExtractionStrategyModels.NameDiscoveryModelID),
 	}
 	doc.ExtractionRuntime = aiExtractionRuntimeDocument{
 		ParallelRequestConcurrency: normalizeParallelRequestConcurrency(raw.ExtractionRuntime.ParallelRequestConcurrency),

@@ -250,7 +250,7 @@ func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
 	}
 }
 
-func TestAIGenerationSettingsReadsLegacyCharacterStrategyModels(t *testing.T) {
+func TestAIGenerationSettingsIgnoresLegacyCharacterStrategyModels(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(stateDir, FileName), []byte(`
 schema_version: 2
@@ -273,9 +273,8 @@ character_summary_strategy_models:
 	if err != nil {
 		t.Fatalf("GetAIGenerationSettings returned error: %v", err)
 	}
-	modelID := settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID
-	if modelID == nil || *modelID != "openai/legacy-model" {
-		t.Fatalf("legacy strategy model was not read: %+v", settings.Settings.ExtractionStrategyModels)
+	if settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID != nil {
+		t.Fatalf("legacy strategy model should be ignored: %+v", settings.Settings.ExtractionStrategyModels)
 	}
 }
 
