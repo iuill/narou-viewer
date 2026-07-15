@@ -152,13 +152,6 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	writeFile(t, filepath.Join(checkpointDir, "target.json"), `{"schemaVersion":1,"novelId":"novel-1"}`)
 	writeFile(t, filepath.Join(checkpointDir, "other.json"), `{"schemaVersion":1,"novelId":"novel-2"}`)
 	writeFile(t, filepath.Join(checkpointDir, "broken.json"), `{`)
-	conflictDir := filepath.Join(stateDir, "extraction_jobs", "legacy_conflicts")
-	if err := os.MkdirAll(conflictDir, 0o755); err != nil {
-		t.Fatalf("mkdir conflict dir: %v", err)
-	}
-	writeFile(t, filepath.Join(conflictDir, "target.yaml"), "novel_id: novel-1\n")
-	writeFile(t, filepath.Join(conflictDir, "other.yaml"), "novel_id: novel-2\n")
-	writeFile(t, filepath.Join(conflictDir, "target.json"), `{"novelId":"novel-1"}`)
 
 	result, err := PruneNovelState(stateDir, "novel-1")
 	if err != nil {
@@ -174,8 +167,6 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 		filepath.Join(stateDir, "extraction_jobs", "job-target.yaml"),
 		filepath.Join(stateDir, "extraction_jobs", "index", "novel-1.yaml"),
 		filepath.Join(checkpointDir, "target.json"),
-		filepath.Join(conflictDir, "target.yaml"),
-		filepath.Join(conflictDir, "target.json"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("target file should be removed: path=%s err=%v", path, err)
@@ -184,7 +175,7 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if jobs, ok, err := LoadJobs(stateDir, "novel-2"); err != nil || !ok || len(jobs) != 1 || jobs[0].JobID != "job-other" {
 		t.Fatalf("other novel jobs should remain: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
-	for _, path := range []string{filepath.Join(checkpointDir, "other.json"), filepath.Join(checkpointDir, "broken.json"), filepath.Join(conflictDir, "other.yaml")} {
+	for _, path := range []string{filepath.Join(checkpointDir, "other.json"), filepath.Join(checkpointDir, "broken.json")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("non-target checkpoint should remain: path=%s err=%v", path, err)
 		}

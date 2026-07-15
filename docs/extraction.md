@@ -51,10 +51,11 @@
 - `DELETE /api/library/novels/{novelId}/extraction`
 - `/api/ai-generation/playground/extraction` と stream final event は `characters` と `terms` を返す。
 
-## 移行互換
+## 旧名称からのカットオーバー
 
-- settings は `extraction_strategy_models` を保存し、旧 `character_summary_strategy_models` は read fallback のみ行う。
+- settings は `extraction_strategy_models` のみを読み書きする。旧 `character_summary_strategy_models` は読み取らない。
 - 環境変数は `EXTRACTION_*` / `VIEWER_EXTRACTION_TIMING_LOG` のみを使用する。旧 `CHARACTER_SUMMARY_*` / `VIEWER_CHARACTER_SUMMARY_TIMING_LOG` を使用している `.env.local` は利用者側で更新する。
-- 起動時に旧 `state/character_jobs` を `state/extraction_jobs` へ best-effortで移行する。新旧ディレクトリが併存する場合もファイル単位で移し、同名で内容が異なる旧ファイルは `state/extraction_jobs/legacy_conflicts` へ退避する。clear/reset は新旧両方を削除する。
-- 旧 usage row の feature 名は表示互換のため読み取れる。
-- settings / job state の旧名称互換は移行猶予後に [#2](https://github.com/iuill/narou-viewer/issues/2) で削除する。
+- PR #1 を含む版で旧 job state の移行を済ませた前提とし、現行 runtime は新形式への変換や fallback を行わない。
+- 起動時に旧 `state/character_jobs` と移行時の退避先 `state/extraction_jobs/legacy_conflicts` を不要なデータとして一括削除する。保持が必要な場合は新しい版を起動する前に退避する。
+- job state の clear/reset は旧 `state/character_jobs` を参照せず、`state/extraction_jobs` 以下だけを対象とする。作品単位の抽出 state clear は現行の人物・用語 state も削除する。旧 character-only state との不整合がある場合は、抽出 state をクリアして人物・用語を再生成する。
+- usage 履歴は `feature` 値だけでは除外せず汎用的に読み取る。旧 `character-summary` 行もその値を理由には除外しないが、旧 schema や metadata 形式の互換は保証しない。不要な履歴は `state/ai_usage.sqlite` を退避または削除して初期化する。

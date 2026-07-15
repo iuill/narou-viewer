@@ -43,8 +43,8 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	usageDBPath := filepath.Join(dataDir, "state", "ai_usage.sqlite")
 	if err := ai.SaveUsageRun(usageDBPath, ai.UsageRun{
 		RunID:          "run-remove",
-		Feature:        "character-summary",
-		WorkflowName:   "Character summary",
+		Feature:        "extraction",
+		WorkflowName:   "Extraction",
 		Status:         "completed",
 		StartedAt:      "2026-01-01T00:00:00Z",
 		FinishedAt:     "2026-01-01T00:00:01Z",

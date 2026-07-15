@@ -172,8 +172,8 @@ func TestPruneUsageByNovelIDDeletesRunsRequestsAndSnapshots(t *testing.T) {
 	for _, run := range []UsageRun{
 		{
 			RunID:          "run-target",
-			Feature:        "character-summary",
-			WorkflowName:   "Character summary",
+			Feature:        "extraction",
+			WorkflowName:   "Extraction",
 			Status:         "completed",
 			StartedAt:      "2026-01-01T00:00:00Z",
 			FinishedAt:     "2026-01-01T00:00:01Z",
@@ -197,8 +197,8 @@ func TestPruneUsageByNovelIDDeletesRunsRequestsAndSnapshots(t *testing.T) {
 		},
 		{
 			RunID:          "run-other",
-			Feature:        "character-summary",
-			WorkflowName:   "Character summary",
+			Feature:        "extraction",
+			WorkflowName:   "Extraction",
 			Status:         "completed",
 			StartedAt:      "2026-01-02T00:00:00Z",
 			FinishedAt:     "2026-01-02T00:00:01Z",
@@ -412,7 +412,7 @@ func TestLoadUsageAggregatesMultipleRunsInStartedOrder(t *testing.T) {
 			generation_mode, answer_chars, request_count, input_tokens, output_tokens, total_tokens,
 			cached_input_tokens, reasoning_output_tokens, total_cost, tool_call_count, tool_result_count,
 			error_message
-		) VALUES ('run-2', 'character-summary', 'Character summary', 'failed', '2026-01-02T00:00:00Z', '2026-01-02T00:00:03Z', 3000, NULL, NULL, NULL, NULL, NULL, NULL, 'openrouter', 0, 2, 5, 7, 12, 1, 2, 0.5, 2, 0, 'failed');
+		) VALUES ('run-2', 'custom-feature', 'Custom workflow', 'failed', '2026-01-02T00:00:00Z', '2026-01-02T00:00:03Z', 3000, NULL, NULL, NULL, NULL, NULL, NULL, 'openrouter', 0, 2, 5, 7, 12, 1, 2, 0.5, 2, 0, 'failed');
 		INSERT INTO ai_usage_requests (
 			run_id, request_index, kind, parent_request_index, tool_names, tool_summaries, input_tokens, output_tokens, total_tokens, cached_input_tokens, reasoning_output_tokens, cost
 		) VALUES
@@ -430,7 +430,7 @@ func TestLoadUsageAggregatesMultipleRunsInStartedOrder(t *testing.T) {
 	if !ok || len(usage.Runs) != 2 {
 		t.Fatalf("unexpected usage runs: ok=%v usage=%+v", ok, usage)
 	}
-	if usage.Runs[0].RunID != "run-2" || usage.Runs[1].RunID != "run-1" {
+	if usage.Runs[0].RunID != "run-2" || usage.Runs[0].Feature != "custom-feature" || usage.Runs[1].RunID != "run-1" {
 		t.Fatalf("runs were not sorted by started_at desc: %+v", usage.Runs)
 	}
 	if usage.Summary.RunCount != 2 || usage.Summary.RequestCount != 3 || usage.Summary.InputTokens != 15 || usage.Summary.CachedInputTokens != 4 || usage.Summary.ReasoningOutputTokens != 6 || usage.Summary.TotalCost != 0.75 || usage.Summary.AverageTotalTokens != 21 {
@@ -438,6 +438,10 @@ func TestLoadUsageAggregatesMultipleRunsInStartedOrder(t *testing.T) {
 	}
 	if got := usage.Runs[0].Requests[0].ToolNames; len(got) != 2 || got[0] != "tool_a" || got[1] != "tool_b" {
 		t.Fatalf("requests were not sorted by request_index: %+v", usage.Runs[0].Requests)
+	}
+	detail, ok, err := LoadUsageRun(dbPath, "run-2")
+	if err != nil || !ok || detail.Feature != "custom-feature" {
+		t.Fatalf("custom feature detail was not loaded: ok=%v detail=%+v err=%v", ok, detail, err)
 	}
 }
 

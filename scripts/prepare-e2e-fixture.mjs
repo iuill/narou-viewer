@@ -25,7 +25,6 @@ const aiGenerationSettingsPath = path.join(stateDir, "ai_generation_settings.yam
 const aiUsagePath = path.join(stateDir, "ai_usage.sqlite");
 const extractionJobsDir = path.join(stateDir, "extraction_jobs");
 const extractionJobsIndexDir = path.join(extractionJobsDir, "index");
-const legacyCharacterJobsDir = path.join(stateDir, "character_jobs");
 const characterProfilesDir = path.join(stateDir, "character_profiles");
 const characterEventsDir = path.join(stateDir, "character_events");
 const termProfilesDir = path.join(stateDir, "term_profiles");
@@ -232,7 +231,6 @@ async function writeStateDocuments() {
   await fs.mkdir(stateDir, { recursive: true });
   await Promise.all([
     fs.rm(extractionJobsDir, { recursive: true, force: true }),
-    fs.rm(legacyCharacterJobsDir, { recursive: true, force: true }),
     fs.rm(characterProfilesDir, { recursive: true, force: true }),
     fs.rm(characterEventsDir, { recursive: true, force: true }),
     fs.rm(termProfilesDir, { recursive: true, force: true }),

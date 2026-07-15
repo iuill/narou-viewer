@@ -110,86 +110,55 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		result.TermProfileDeleted = deleted
 	}
 
-	for _, jobsDirName := range []string{"extraction_jobs", "character_jobs"} {
-		indexPath := filepath.Join(stateDir, jobsDirName, "index", novelID+".yaml")
-		if deleted, err := removeIfExists(indexPath); err != nil {
-			return NovelStatePruneResult{}, err
-		} else {
-			result.JobIndexDeleted = result.JobIndexDeleted || deleted
-		}
-
-		jobPaths, err := filepath.Glob(filepath.Join(stateDir, jobsDirName, "*.yaml"))
-		if err != nil {
-			return NovelStatePruneResult{}, err
-		}
-		for _, path := range jobPaths {
-			var doc jobDocument
-			if ok, err := readYAMLIfExists(path, &doc); err != nil {
-				log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
-				continue
-			} else if !ok || doc.NovelID != novelID {
-				continue
-			}
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return NovelStatePruneResult{}, err
-			}
-			result.JobsDeleted++
-		}
-
-		checkpointPaths, err := filepath.Glob(filepath.Join(stateDir, jobsDirName, "checkpoints", "*.json"))
-		if err != nil {
-			return NovelStatePruneResult{}, err
-		}
-		for _, path := range checkpointPaths {
-			raw, err := os.ReadFile(path)
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				return NovelStatePruneResult{}, err
-			}
-			var checkpoint struct {
-				NovelID string `json:"novelId"`
-			}
-			if err := json.Unmarshal(raw, &checkpoint); err != nil || checkpoint.NovelID != novelID {
-				continue
-			}
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return NovelStatePruneResult{}, err
-			}
-			result.CheckpointsDeleted++
-		}
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	indexPath := filepath.Join(jobsDir, "index", novelID+".yaml")
+	if deleted, err := removeIfExists(indexPath); err != nil {
+		return NovelStatePruneResult{}, err
+	} else {
+		result.JobIndexDeleted = deleted
 	}
-	conflictRoot := filepath.Join(stateDir, "extraction_jobs", "legacy_conflicts")
-	_ = filepath.WalkDir(conflictRoot, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil || entry.IsDir() {
-			return nil
+
+	jobPaths, err := filepath.Glob(filepath.Join(jobsDir, "*.yaml"))
+	if err != nil {
+		return NovelStatePruneResult{}, err
+	}
+	for _, path := range jobPaths {
+		var doc jobDocument
+		if ok, err := readYAMLIfExists(path, &doc); err != nil {
+			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
+			continue
+		} else if !ok || doc.NovelID != novelID {
+			continue
 		}
-		matchesNovel := false
-		switch strings.ToLower(filepath.Ext(path)) {
-		case ".yaml", ".yml":
-			var doc struct {
-				NovelID string `yaml:"novel_id"`
-			}
-			if ok, err := readYAMLIfExists(path, &doc); err == nil && ok {
-				matchesNovel = doc.NovelID == novelID
-			}
-		case ".json":
-			raw, err := os.ReadFile(path)
-			if err == nil {
-				var doc struct {
-					NovelID string `json:"novelId"`
-				}
-				matchesNovel = json.Unmarshal(raw, &doc) == nil && doc.NovelID == novelID
-			}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return NovelStatePruneResult{}, err
 		}
-		if matchesNovel {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				log.Printf("extraction: legacy conflict could not be pruned %s: %v", path, err)
-			}
+		result.JobsDeleted++
+	}
+
+	checkpointPaths, err := filepath.Glob(filepath.Join(jobsDir, "checkpoints", "*.json"))
+	if err != nil {
+		return NovelStatePruneResult{}, err
+	}
+	for _, path := range checkpointPaths {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		return nil
-	})
+		if err != nil {
+			return NovelStatePruneResult{}, err
+		}
+		var checkpoint struct {
+			NovelID string `json:"novelId"`
+		}
+		if err := json.Unmarshal(raw, &checkpoint); err != nil || checkpoint.NovelID != novelID {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return NovelStatePruneResult{}, err
+		}
+		result.CheckpointsDeleted++
+	}
 	return result, nil
 }
 
