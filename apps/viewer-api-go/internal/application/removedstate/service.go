@@ -2,6 +2,8 @@ package removedstate
 
 import (
 	"context"
+	"strings"
+	"sync"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
@@ -29,6 +31,7 @@ type Service struct {
 	stateDir          string
 	aiUsageDBPath     string
 	readerSearchCache *readertextcache.Store
+	mu                sync.Mutex
 }
 
 func NewService(stateStore *store.Store, stateDir string, aiUsageDBPath string) *Service {
@@ -48,6 +51,21 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 	cleanup := CleanupResult{}
 	if s == nil {
 		return cleanup, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	novelIDs = normalizeNovelIDs(novelIDs)
+	if err := s.preflightPruneRemovedNovelState(novelIDs); err != nil {
+		return cleanup, err
+	}
+
+	for _, novelID := range novelIDs {
+		readerSearchRowsDeleted, err := s.readerSearchCache.PruneByNovelID(context.Background(), novelID)
+		if err != nil {
+			return cleanup, err
+		}
+		cleanup.ReaderSearchCacheRowsDeleted += readerSearchRowsDeleted
 	}
 
 	for _, novelID := range novelIDs {
@@ -93,11 +111,41 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 		}
 		cleanup.AIUsageRunsDeleted += usageDeleted
 
-		readerSearchRowsDeleted, err := s.readerSearchCache.PruneByNovelID(context.Background(), novelID)
-		if err != nil {
-			return cleanup, err
-		}
-		cleanup.ReaderSearchCacheRowsDeleted += readerSearchRowsDeleted
 	}
 	return cleanup, nil
+}
+
+func (s *Service) preflightPruneRemovedNovelState(novelIDs []string) error {
+	if err := ai.PreflightUsagePrune(s.aiUsageDBPath); err != nil {
+		return err
+	}
+	publicationRepository := publications.NewRepository(s.stateDir)
+	for _, novelID := range novelIDs {
+		if s.stateStore != nil {
+			if err := s.stateStore.PreflightPruneNovelState(novelID); err != nil {
+				return err
+			}
+		}
+		if err := extractdomain.PreflightPruneNovelState(s.stateDir, novelID); err != nil {
+			return err
+		}
+		if err := publicationRepository.PreflightPruneNovel(novelID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeNovelIDs(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		novelID := strings.TrimSpace(value)
+		if novelID == "" || seen[novelID] {
+			continue
+		}
+		seen[novelID] = true
+		result = append(result, novelID)
+	}
+	return result
 }

@@ -30,21 +30,12 @@ func IsFutureSchema(err error) bool {
 }
 
 func Guard(db *sql.DB, databasePath string) error {
-	var exists int
-	if err := db.QueryRow(`
-		SELECT EXISTS(
-			SELECT 1 FROM sqlite_master
-			WHERE type = 'table' AND name = 'schema_migrations'
-		)
-	`).Scan(&exists); err != nil {
+	exists, observed, err := migrationVersion(db)
+	if err != nil {
 		return err
 	}
-	if exists == 0 {
+	if !exists {
 		return nil
-	}
-	var observed int
-	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&observed); err != nil {
-		return err
 	}
 	if observed > SupportedLatestVersion {
 		return &FutureSchemaError{Path: databasePath, Observed: observed, Supported: SupportedLatestVersion}
@@ -52,8 +43,63 @@ func Guard(db *sql.DB, databasePath string) error {
 	return nil
 }
 
-func Run(db *sql.DB, databasePath string) error {
+func Preflight(db *sql.DB, databasePath string) error {
 	if err := Guard(db, databasePath); err != nil {
+		return err
+	}
+	_, observed, err := migrationVersion(db)
+	if err != nil {
+		return err
+	}
+	present, err := baselineTablePresence(db)
+	if err != nil {
+		return err
+	}
+	if present == 0 && observed < 1 {
+		return nil
+	}
+	if present != len(baselineTables) {
+		return fmt.Errorf("VA-AI-USAGE baseline is partial: found %d of %d tables", present, len(baselineTables))
+	}
+	if err := validateRequiredColumns(db); err != nil {
+		return err
+	}
+	if observed >= 1 {
+		columns, err := tableColumns(db, "ai_usage_requests")
+		if err != nil {
+			return err
+		}
+		for _, column := range requestMetadataColumns {
+			if !columns[column.name] {
+				return fmt.Errorf("ai_usage_requests.%s is required after VA-AI-USAGE migration 1", column.name)
+			}
+		}
+	}
+	return nil
+}
+
+func migrationVersion(db *sql.DB) (bool, int, error) {
+	var exists int
+	if err := db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1 FROM sqlite_master
+			WHERE type = 'table' AND name = 'schema_migrations'
+		)
+	`).Scan(&exists); err != nil {
+		return false, 0, err
+	}
+	if exists == 0 {
+		return false, 0, nil
+	}
+	var observed int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&observed); err != nil {
+		return true, 0, err
+	}
+	return true, observed, nil
+}
+
+func Run(db *sql.DB, databasePath string) error {
+	if err := Preflight(db, databasePath); err != nil {
 		return err
 	}
 	if _, err := db.Exec(`PRAGMA journal_mode = DELETE`); err != nil {
@@ -84,13 +130,34 @@ func Run(db *sql.DB, databasePath string) error {
 }
 
 func applyBaseline(tx *sql.Tx) error {
-	for _, statement := range baselineTables {
-		if _, err := tx.Exec(strings.TrimSpace(statement)); err != nil {
+	present, err := baselineTablePresence(tx)
+	if err != nil {
+		return err
+	}
+	if present != 0 && present != len(baselineTables) {
+		return fmt.Errorf("VA-AI-USAGE baseline is partial: found %d of %d tables", present, len(baselineTables))
+	}
+	if present == 0 {
+		for _, statement := range baselineTables {
+			if _, err := tx.Exec(strings.TrimSpace(statement)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := validateRequiredColumns(tx); err != nil {
+		return err
+	}
+	for _, column := range requestMetadataColumns {
+		if err := ensureColumn(tx, "ai_usage_requests", column.name, column.definition); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateRequiredColumns(db queryer) error {
 	for _, table := range requiredColumns {
-		columns, err := tableColumns(tx, table.name)
+		columns, err := tableColumns(db, table.name)
 		if err != nil {
 			return err
 		}
@@ -100,12 +167,24 @@ func applyBaseline(tx *sql.Tx) error {
 			}
 		}
 	}
-	for _, column := range requestMetadataColumns {
-		if err := ensureColumn(tx, "ai_usage_requests", column.name, column.definition); err != nil {
-			return err
-		}
-	}
 	return nil
+}
+
+func baselineTablePresence(db queryer) (int, error) {
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('ai_usage_runs', 'ai_usage_requests', 'ai_usage_run_snapshots')`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return 0, err
+		}
+		count++
+	}
+	return count, rows.Err()
 }
 
 var baselineTables = []string{

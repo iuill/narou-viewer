@@ -193,6 +193,9 @@ func (s *Store) PruneNovelState(novelID string) (NovelStatePruneResult, error) {
 	if novelID == "" {
 		return NovelStatePruneResult{}, nil
 	}
+	if err := s.preflightPruneNovelStateLocked(novelID); err != nil {
+		return NovelStatePruneResult{}, err
+	}
 
 	result := NovelStatePruneResult{}
 	readingStateDeleted, err := s.readingState.Prune(novelID)
@@ -210,6 +213,33 @@ func (s *Store) PruneNovelState(novelID string) (NovelStatePruneResult, error) {
 		return NovelStatePruneResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) PreflightPruneNovelState(novelID string) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	return s.preflightPruneNovelStateLocked(novelID)
+}
+
+func (s *Store) preflightPruneNovelStateLocked(novelID string) error {
+	if _, err := s.readingState.Get(novelID); err != nil {
+		return err
+	}
+	if _, err := s.bookmarks.List(novelID); err != nil {
+		return err
+	}
+	if _, err := s.novelSettings.Get(novelID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) isNovelDeletedLocked(novelID string) (bool, error) {

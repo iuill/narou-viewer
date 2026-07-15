@@ -1,11 +1,14 @@
 package removedstate
 
 import (
+	"bytes"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/ai/usagemigration"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
@@ -75,7 +78,7 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "term_profiles"), 0o755); err != nil {
 		t.Fatalf("mkdir term profiles: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "term_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\nterms: []\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "term_profiles", novelID+".yaml"), []byte("schema_version: 1\nnovel_id: "+novelID+"\nterms: []\n"), 0o644); err != nil {
 		t.Fatalf("write term profile fixture: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
@@ -87,14 +90,14 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml"), []byte("job_ids:\n  - job-remove\n"), 0o644); err != nil {
 		t.Fatalf("write character job index fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "job-remove.yaml"), []byte("novel_id: "+novelID+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "job-remove.yaml"), []byte("schema_version: 2\nnovel_id: "+novelID+"\n"), 0o644); err != nil {
 		t.Fatalf("write character job fixture: %v", err)
 	}
 	checkpointDir := filepath.Join(stateDir, "extraction_jobs", "checkpoints")
 	if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(checkpointDir, "checkpoint-remove.json"), []byte(`{"novelId":"`+novelID+`"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(checkpointDir, "checkpoint-remove.json"), []byte(`{"schemaVersion":4,"novelId":"`+novelID+`"}`), 0o644); err != nil {
 		t.Fatalf("write checkpoint fixture: %v", err)
 	}
 	if _, err := publications.NewRepository(stateDir).PutEntry(novelID, publications.Entry{
@@ -163,5 +166,144 @@ func TestNilServiceReturnsEmptyCleanup(t *testing.T) {
 	}
 	if result != (CleanupResult{}) {
 		t.Fatalf("nil service should return empty cleanup: %+v", result)
+	}
+}
+
+func TestServicePreflightsEveryNovelBeforeFirstMutation(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	episodeIndex := "1"
+	for _, novelID := range []string{"novel-first", "novel-future"} {
+		if _, err := stateStore.PutReadingState(store.ReadingStatePutInput{ReadingState: store.ReadingState{
+			NovelID:              novelID,
+			LastReadEpisodeIndex: &episodeIndex,
+			Position:             10,
+		}}); err != nil {
+			t.Fatalf("PutReadingState(%s): %v", novelID, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(stateDir, "term_profiles"), 0o755); err != nil {
+		t.Fatalf("mkdir term profiles: %v", err)
+	}
+	futurePath := filepath.Join(stateDir, "term_profiles", "novel-future.yaml")
+	futureBytes := []byte("schema_version: 99\nnovel_id: novel-future\nterms: []\n")
+	if err := os.WriteFile(futurePath, futureBytes, 0o644); err != nil {
+		t.Fatalf("write future term profile: %v", err)
+	}
+	readingPath := filepath.Join(stateDir, "reading_state.yaml")
+	readingBefore, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state before prune: %v", err)
+	}
+
+	service := NewService(stateStore, stateDir, filepath.Join(stateDir, "ai_usage.sqlite"))
+	if result, err := service.PruneRemovedNovelState([]string{"novel-first", "novel-future"}); err == nil || result != (CleanupResult{}) {
+		t.Fatalf("future state should reject the operation-wide preflight: result=%+v err=%v", result, err)
+	}
+	readingAfter, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state after prune: %v", err)
+	}
+	if !bytes.Equal(readingBefore, readingAfter) {
+		t.Fatal("the first novel was mutated before the second novel failed preflight")
+	}
+	if after, err := os.ReadFile(futurePath); err != nil || !bytes.Equal(after, futureBytes) {
+		t.Fatalf("future term profile changed: err=%v bytes=%q", err, after)
+	}
+}
+
+func TestServiceFutureUsagePreflightPreservesAllFileState(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	episodeIndex := "1"
+	if _, err := stateStore.PutReadingState(store.ReadingStatePutInput{ReadingState: store.ReadingState{
+		NovelID:              "novel-1",
+		LastReadEpisodeIndex: &episodeIndex,
+		Position:             10,
+	}}); err != nil {
+		t.Fatalf("PutReadingState returned error: %v", err)
+	}
+	usagePath := filepath.Join(stateDir, "ai_usage.sqlite")
+	db, err := sql.Open("sqlite", usagePath)
+	if err != nil {
+		t.Fatalf("open future usage fixture: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future usage fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future usage fixture: %v", err)
+	}
+	readingPath := filepath.Join(stateDir, "reading_state.yaml")
+	readingBefore, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state before usage preflight: %v", err)
+	}
+	usageBefore, err := os.ReadFile(usagePath)
+	if err != nil {
+		t.Fatalf("read usage before preflight: %v", err)
+	}
+
+	service := NewService(stateStore, stateDir, usagePath)
+	result, err := service.PruneRemovedNovelState([]string{"novel-1"})
+	if !usagemigration.IsFutureSchema(err) || result != (CleanupResult{}) {
+		t.Fatalf("future usage should stop prune: result=%+v err=%v", result, err)
+	}
+	readingAfter, _ := os.ReadFile(readingPath)
+	usageAfter, _ := os.ReadFile(usagePath)
+	if !bytes.Equal(readingBefore, readingAfter) || !bytes.Equal(usageBefore, usageAfter) {
+		t.Fatal("future usage preflight changed file state")
+	}
+}
+
+func TestServicePartialLegacyUsageSchemaFailsBeforeCorePrune(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	episodeIndex := "1"
+	if _, err := stateStore.PutReadingState(store.ReadingStatePutInput{ReadingState: store.ReadingState{
+		NovelID:              "novel-1",
+		LastReadEpisodeIndex: &episodeIndex,
+		Position:             10,
+	}}); err != nil {
+		t.Fatalf("PutReadingState returned error: %v", err)
+	}
+	usagePath := filepath.Join(stateDir, "ai_usage.sqlite")
+	db, err := sql.Open("sqlite", usagePath)
+	if err != nil {
+		t.Fatalf("open partial usage fixture: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE ai_usage_runs (run_id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatalf("seed partial usage fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close partial usage fixture: %v", err)
+	}
+	readingPath := filepath.Join(stateDir, "reading_state.yaml")
+	before, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state before partial usage preflight: %v", err)
+	}
+
+	if result, err := NewService(stateStore, stateDir, usagePath).PruneRemovedNovelState([]string{"novel-1"}); err == nil || result != (CleanupResult{}) {
+		t.Fatalf("partial usage schema should stop prune: result=%+v err=%v", result, err)
+	}
+	after, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state after partial usage preflight: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("partial usage schema was detected after core state changed")
 	}
 }

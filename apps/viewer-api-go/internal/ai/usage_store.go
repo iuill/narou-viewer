@@ -187,6 +187,26 @@ func PruneUsageByNovelID(dbPath string, novelID string) (int, error) {
 	return int(rowsAffected), nil
 }
 
+func PreflightUsagePrune(dbPath string) error {
+	info, err := os.Stat(dbPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath)+"?mode=ro&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	return usagemigration.Preflight(db, dbPath)
+}
+
 func usageSQLiteDSN(dbPath string) string {
 	return "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)"
 }

@@ -240,6 +240,16 @@ func (r *Repository) PruneNovel(novelID string) (int, error) {
 	return deleted, nil
 }
 
+func (r *Repository) PreflightPruneNovel(novelID string) error {
+	if r == nil || strings.TrimSpace(novelID) == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, err := r.readLocked()
+	return err
+}
+
 func (r *Repository) readLocked() (document, error) {
 	var doc document
 	if _, err := yamlfile.ReadGuarded(r.path, SchemaContract, &doc); err != nil {

@@ -74,6 +74,17 @@ func loadCharacterEventsDocument(stateDir string, novelID string) (characterEven
 	return migrateLegacyProfilesToEvents(novelID, profiles), false, nil
 }
 
+func PreflightPruneNovelState(stateDir string, novelID string) error {
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	path := filepath.Join(stateDir, "character_events", novelID+".yaml")
+	var doc characterEventsDocument
+	_, _, err := readCharacterEventsIfExists(path, &doc)
+	return err
+}
+
 func LoadGeneratedUnresolvedMentions(stateDir string, novelID string) ([]GeneratedUnresolvedMention, error) {
 	doc, ok, err := loadCharacterEventsDocument(stateDir, novelID)
 	if err != nil || !ok {

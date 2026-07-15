@@ -11,11 +11,13 @@ import (
 	"strings"
 	"sync"
 
+	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/novelstate"
 	"narou-viewer/apps/viewer-api-go/internal/state/filequarantine"
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
 
 	"gopkg.in/yaml.v3"
 )
@@ -56,11 +58,23 @@ func PruneNovelState(stateDir string, novelID string) (NovelStatePruneResult, er
 
 	var result NovelStatePruneResult
 	err := novelstate.WithLock(novelID, func() error {
+		if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
 		var err error
 		result, err = pruneNovelStateUnlocked(stateDir, novelID)
 		return err
 	})
 	return result, err
+}
+
+func PreflightPruneNovelState(stateDir string, novelID string) error {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	return novelstate.WithLock(novelID, func() error {
+		return preflightPruneNovelStateUnlocked(stateDir, novelID)
+	})
 }
 
 func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePruneResult, bool, error) {
@@ -70,6 +84,9 @@ func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePrune
 	novelID = strings.TrimSpace(novelID)
 	if novelID == "" {
 		return NovelStatePruneResult{}, false, nil
+	}
+	if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+		return NovelStatePruneResult{}, false, err
 	}
 	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
 	if err != nil {
@@ -82,11 +99,66 @@ func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePrune
 	}
 	var result NovelStatePruneResult
 	err = novelstate.WithLock(novelID, func() error {
+		if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
 		var err error
 		result, err = pruneNovelStateUnlocked(stateDir, novelID)
 		return err
 	})
 	return result, false, err
+}
+
+func preflightPruneNovelStateUnlocked(stateDir string, novelID string) error {
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	if err := characters.PreflightPruneNovelState(stateDir, novelID); err != nil {
+		return err
+	}
+	if err := terms.PreflightPruneNovelState(stateDir, novelID); err != nil {
+		return err
+	}
+
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	jobPaths, err := filepath.Glob(filepath.Join(jobsDir, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, path := range jobPaths {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
+		}
+		if read.exists && read.incompatible && read.document.NovelID == novelID {
+			return read.guardError
+		}
+	}
+
+	checkpointPaths, err := filepath.Glob(filepath.Join(jobsDir, "checkpoints", "*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range checkpointPaths {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, guardErr := schemaguard.CheckJSON(raw, checkpointstore.SchemaContract)
+		var checkpoint checkpointstore.Checkpoint
+		if err := json.Unmarshal(raw, &checkpoint); err != nil {
+			_, malformedErr := schemaguard.Malformed(checkpointstore.SchemaContract, err)
+			return fmt.Errorf("preflight extraction checkpoint %s: %w", path, malformedErr)
+		}
+		if checkpoint.NovelID == novelID && guardErr != nil {
+			return guardErr
+		}
+	}
+	return nil
 }
 
 func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneResult, error) {

@@ -70,6 +70,19 @@ func LoadGeneratedTerms(stateDir string, novelID string) ([]GeneratedTerm, *stri
 	return loadGeneratedTermsUnlocked(stateDir, novelID)
 }
 
+func PreflightPruneNovelState(stateDir string, novelID string) error {
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	var doc document
+	_, err := yamlfile.ReadGuarded(profilePath(stateDir, novelID), SchemaContract, &doc)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func loadGeneratedTermsUnlocked(stateDir string, novelID string) ([]GeneratedTerm, *string, bool, error) {
 	var doc document
 	_, err := yamlfile.ReadGuarded(profilePath(stateDir, novelID), SchemaContract, &doc)

@@ -147,16 +147,15 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(profileDir, "novel-1.yaml"), `novel_id: novel-1`)
 	writeFile(t, filepath.Join(eventsDir, "novel-1.yaml"), `novel_id: novel-1`)
-	writeFile(t, filepath.Join(termDir, "novel-1.yaml"), `novel_id: novel-1`)
+	writeFile(t, filepath.Join(termDir, "novel-1.yaml"), "schema_version: 1\nnovel_id: novel-1")
 	if err := SaveJob(stateDir, "novel-1", Job{JobID: "job-target", RequestedUpToEpisodeIndex: "1", GenerationMode: "heuristic", Status: "completed", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob target returned error: %v", err)
 	}
 	if err := SaveJob(stateDir, "novel-2", Job{JobID: "job-other", RequestedUpToEpisodeIndex: "1", GenerationMode: "heuristic", Status: "completed", CreatedAt: "2026-01-02T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob other returned error: %v", err)
 	}
-	writeFile(t, filepath.Join(checkpointDir, "target.json"), `{"schemaVersion":1,"novelId":"novel-1"}`)
-	writeFile(t, filepath.Join(checkpointDir, "other.json"), `{"schemaVersion":1,"novelId":"novel-2"}`)
-	writeFile(t, filepath.Join(checkpointDir, "broken.json"), `{`)
+	writeFile(t, filepath.Join(checkpointDir, "target.json"), `{"schemaVersion":4,"novelId":"novel-1"}`)
+	writeFile(t, filepath.Join(checkpointDir, "other.json"), `{"schemaVersion":4,"novelId":"novel-2"}`)
 
 	result, err := PruneNovelState(stateDir, "novel-1")
 	if err != nil {
@@ -180,7 +179,7 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if jobs, ok, err := LoadJobs(stateDir, "novel-2"); err != nil || !ok || len(jobs) != 1 || jobs[0].JobID != "job-other" {
 		t.Fatalf("other novel jobs should remain: ok=%v jobs=%+v err=%v", ok, jobs, err)
 	}
-	for _, path := range []string{filepath.Join(checkpointDir, "other.json"), filepath.Join(checkpointDir, "broken.json")} {
+	for _, path := range []string{filepath.Join(checkpointDir, "other.json")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("non-target checkpoint should remain: path=%s err=%v", path, err)
 		}
@@ -193,6 +192,28 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	missing, err := PruneNovelState(stateDir, "missing")
 	if err != nil || missing.ProfileDeleted || missing.EventsDeleted || missing.JobsDeleted != 0 || missing.JobIndexDeleted || missing.CheckpointsDeleted != 0 {
 		t.Fatalf("missing prune should be a no-op: result=%+v err=%v", missing, err)
+	}
+}
+
+func TestPruneNovelStateRejectsMalformedCheckpointBeforeDeletingAnything(t *testing.T) {
+	stateDir := t.TempDir()
+	profilePath := filepath.Join(stateDir, "character_profiles", "novel-1.yaml")
+	checkpointPath := filepath.Join(stateDir, "extraction_jobs", "checkpoints", "broken.json")
+	for _, dir := range []string{filepath.Dir(profilePath), filepath.Dir(checkpointPath)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir prune fixture: %v", err)
+		}
+	}
+	writeFile(t, profilePath, `novel_id: novel-1`)
+	writeFile(t, checkpointPath, `{`)
+
+	if result, err := PruneNovelState(stateDir, "novel-1"); err == nil || result.ProfileDeleted {
+		t.Fatalf("malformed checkpoint should stop prune preflight: result=%+v err=%v", result, err)
+	}
+	for _, path := range []string{profilePath, checkpointPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("preflight rejection should preserve %s: %v", path, err)
+		}
 	}
 }
 
