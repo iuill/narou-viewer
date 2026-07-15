@@ -1,10 +1,14 @@
 package terms
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestSaveAndLoadGeneratedTermsRoundTripAndEmptyState(t *testing.T) {
@@ -36,7 +40,7 @@ func TestSaveAndLoadGeneratedTermsRoundTripAndEmptyState(t *testing.T) {
 		t.Fatalf("save empty terms: %v", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(stateDir, "term_profiles", "empty.yaml"))
-	if err != nil || !strings.Contains(string(raw), "terms: []") {
+	if err != nil || !strings.Contains(string(raw), "schema_version: 1") || !strings.Contains(string(raw), "terms: []") {
 		t.Fatalf("empty generated state should persist terms: []: raw=%s err=%v", raw, err)
 	}
 	response, err := BuildResponse(stateDir, "empty", "5", "5")
@@ -228,6 +232,40 @@ func TestMalformedGeneratedTermsPropagatesThroughReadAPIs(t *testing.T) {
 	}
 	if _, err := BuildResponse(stateDir, "broken", "1", "1"); err == nil {
 		t.Fatal("BuildResponse should propagate malformed YAML")
+	}
+}
+
+func TestTermProfilesSchemaGuardRejectsMutationWithoutTouchingFile(t *testing.T) {
+	tests := []struct {
+		name       string
+		document   string
+		wantStatus schemaguard.Status
+	}{
+		{name: "future", document: "schema_version: 99\nnovel_id: guarded\nterms: []\n", wantStatus: schemaguard.StatusFutureUnknown},
+		{name: "missing", document: "novel_id: guarded\nterms: []\n", wantStatus: schemaguard.StatusUnsupportedLegacy},
+		{name: "malformed", document: "schema_version: 1\nterms: invalid\n", wantStatus: schemaguard.StatusMalformed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			if err := EnsureStateDirs(stateDir); err != nil {
+				t.Fatalf("EnsureStateDirs: %v", err)
+			}
+			path := profilePath(stateDir, "guarded")
+			if err := os.WriteFile(path, []byte(test.document), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+				return SaveGeneratedTerms(stateDir, "guarded", "1", []GeneratedTerm{{
+					Term:               "合成語",
+					DescriptionHistory: []HistoryVersion{{Text: "合成説明", EpisodeIndex: "1"}},
+				}}, nil)
+			})
+			var guardError *schemaguard.GuardError
+			if !errors.As(err, &guardError) || guardError.Result.Status != test.wantStatus {
+				t.Fatalf("error = %#v, want GuardError status %s", err, test.wantStatus)
+			}
+		})
 	}
 }
 

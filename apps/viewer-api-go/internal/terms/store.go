@@ -10,11 +10,20 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/novelstate"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 
 	"gopkg.in/yaml.v3"
 )
 
 const schemaVersion = 1
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-TERM-PROFILES",
+	Path:          "term_profiles/*.yaml",
+	Current:       schemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type document struct {
 	SchemaVersion             int             `yaml:"schema_version"`
@@ -62,15 +71,12 @@ func LoadGeneratedTerms(stateDir string, novelID string) ([]GeneratedTerm, *stri
 }
 
 func loadGeneratedTermsUnlocked(stateDir string, novelID string) ([]GeneratedTerm, *string, bool, error) {
-	raw, err := os.ReadFile(profilePath(stateDir, novelID))
+	var doc document
+	_, err := yamlfile.ReadGuarded(profilePath(stateDir, novelID), SchemaContract, &doc)
 	if errors.Is(err, os.ErrNotExist) {
 		return []GeneratedTerm{}, nil, false, nil
 	}
 	if err != nil {
-		return nil, nil, false, err
-	}
-	var doc document
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, nil, false, err
 	}
 	processed := strings.TrimSpace(doc.ProcessedUpToEpisodeIndex)

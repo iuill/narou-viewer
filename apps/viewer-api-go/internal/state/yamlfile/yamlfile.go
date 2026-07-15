@@ -44,7 +44,7 @@ func ReadGuarded(path string, contract schemaguard.Contract, target any) (schema
 		return result, err
 	}
 	if err := yaml.Unmarshal(raw, target); err != nil {
-		return result, err
+		return schemaguard.Malformed(contract, err)
 	}
 	return result, nil
 }

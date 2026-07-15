@@ -300,11 +300,9 @@ async function writeCharacterProfilesFixture() {
     const episodeIndex = row.episode_index;
     const characterName = "契約テスト人物";
     const document = {
-      schema_version: 2,
-      revision: 1,
+      schema_version: 1,
       novel_id: novelId,
       processed_up_to_episode_index: episodeIndex,
-      updated_at: "2026-05-11T03:43:24.000Z",
       characters: [
         {
           character_id: "api_contract_character",

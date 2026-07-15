@@ -148,6 +148,10 @@ func malformedResult(contract Contract, cause error) (Result, error) {
 	return result, &GuardError{Result: result, Cause: cause}
 }
 
+func Malformed(contract Contract, cause error) (Result, error) {
+	return malformedResult(contract, cause)
+}
+
 func AsGuardError(err error) (*GuardError, bool) {
 	var guardError *GuardError
 	if !errors.As(err, &guardError) {

@@ -4981,7 +4981,7 @@ func TestServerGoogleBooksRuntimeStatusService(t *testing.T) {
 	}
 }
 
-func TestServerAIGenerationProfileReadErrors(t *testing.T) {
+func TestServerAIGenerationQuarantinesCorruptDerivedProfile(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	novels := requestJSON(t, newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), store.New(dataDir)), http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
@@ -4996,13 +4996,17 @@ func TestServerAIGenerationProfileReadErrors(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
-	}, http.StatusServiceUnavailable)
+	}, http.StatusOK)
 	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
-	if !strings.Contains(stream, `"type":"error"`) {
-		t.Fatalf("expected stream error event, got %s", stream)
+	if !strings.Contains(stream, `"type":"result"`) {
+		t.Fatalf("expected recovered stream result, got %s", stream)
+	}
+	quarantined, err := filepath.Glob(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml.unsupported-*"))
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined profiles = %v, err=%v", quarantined, err)
 	}
 }
 

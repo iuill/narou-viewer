@@ -4,7 +4,7 @@ import "strings"
 
 func migrateLegacyProfilesToEvents(novelID string, profiles profilesDocument) characterEventsDocument {
 	doc := characterEventsDocument{
-		SchemaVersion:             1,
+		SchemaVersion:             characterEventsSchemaVersion,
 		NovelID:                   novelID,
 		ProcessedUpToEpisodeIndex: profiles.ProcessedUpToEpisodeIndex,
 		NextCharacterOrdinal:      1,

@@ -13,7 +13,7 @@ func assignGeneratedCharacterIDs(stateDir string, novelID string, processedUpToE
 		return nil, characterEventsDocument{}, err
 	}
 	if doc.SchemaVersion == 0 {
-		doc.SchemaVersion = 1
+		doc.SchemaVersion = characterEventsSchemaVersion
 	}
 	doc.NovelID = novelID
 	doc.ProcessedUpToEpisodeIndex = &processedUpToEpisodeIndex
@@ -57,14 +57,19 @@ func assignGeneratedCharacterIDs(stateDir string, novelID string, processedUpToE
 func loadCharacterEventsDocument(stateDir string, novelID string) (characterEventsDocument, bool, error) {
 	path := filepath.Join(stateDir, "character_events", novelID+".yaml")
 	doc := characterEventsDocument{}
-	if ok, err := readYAMLIfExists(path, &doc); err != nil || ok {
+	if ok, _, err := readCharacterEventsIfExists(path, &doc); err != nil || ok {
 		return doc, ok, err
 	}
 	profilePath := filepath.Join(stateDir, "character_profiles", novelID+".yaml")
 	var profiles profilesDocument
-	ok, err := readYAMLIfExists(profilePath, &profiles)
+	ok, _, err := readCharacterProfilesIfExists(profilePath, &profiles)
+	if err != nil {
+		if quarantined, quarantineErr := quarantineCharacterProfile(profilePath, err); quarantined || quarantineErr != nil {
+			return characterEventsDocument{SchemaVersion: characterEventsSchemaVersion, NovelID: novelID, NextCharacterOrdinal: 1}, false, quarantineErr
+		}
+	}
 	if err != nil || !ok {
-		return characterEventsDocument{SchemaVersion: 1, NovelID: novelID, NextCharacterOrdinal: 1}, false, err
+		return characterEventsDocument{SchemaVersion: characterEventsSchemaVersion, NovelID: novelID, NextCharacterOrdinal: 1}, false, err
 	}
 	return migrateLegacyProfilesToEvents(novelID, profiles), false, nil
 }
