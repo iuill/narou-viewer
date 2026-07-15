@@ -206,6 +206,9 @@ func (s *Server) handleBookmarks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
+			if writeStateSchemaError(w, err) {
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "Internal server error.")
 			return
 		}

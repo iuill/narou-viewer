@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,22 @@ func Read(path string, target any) error {
 		return err
 	}
 	return yaml.Unmarshal(raw, target)
+}
+
+func ReadGuarded(path string, contract schemaguard.Contract, target any) (schemaguard.Result, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return schemaguard.Result{}, err
+	}
+	contract = contract.WithPath(path)
+	result, err := schemaguard.CheckYAML(raw, contract)
+	if err != nil {
+		return result, err
+	}
+	if err := yaml.Unmarshal(raw, target); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func WriteAtomic(path string, value any) error {

@@ -939,6 +939,9 @@ func matchesContentEtag(values []string, contentEtag string) bool {
 
 func writeResult(w http.ResponseWriter, value any, err error) {
 	if err != nil {
+		if writeStateSchemaError(w, err) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Internal server error.")
 		return
 	}
