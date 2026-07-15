@@ -310,6 +310,30 @@ func TestScanReportsAIUsageCurrentLegacyAndFutureSchemas(t *testing.T) {
 	}
 }
 
+func TestScanReportsUnknownAISettingsCryptoVersionWithoutReadingCredential(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	path := filepath.Join(stateDir, "ai_generation_settings.yaml")
+	raw := []byte("schema_version: 2\nshared_providers:\n  openrouter:\n    api_key_encrypted: synthetic-ciphertext\n    api_key_version: 99\n")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	report, err := Scan(context.Background(), dataDir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if !reportHasSchemaKind(report, "VA-AI-SETTINGS-CRYPTO", "crypto_future_unknown") {
+		t.Fatalf("crypto future finding missing: %+v", report.Findings)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, after) {
+		t.Fatalf("crypto scan changed source bytes: err=%v", err)
+	}
+}
+
 func TestHumanReportIncludesObservedRecoveryAndRepair(t *testing.T) {
 	report := Report{Findings: []Finding{
 		{ID: "finding-test", SchemaID: "TEST", Path: "state/test.yaml", Kind: "mismatch", Severity: SeverityWarning, Observed: "2", Supported: "1", RecoveryHint: "synthetic recovery", RepairKind: "synthetic_rebuild"},
@@ -367,6 +391,62 @@ func TestScanReportsNovelFetcherLegacyAndFutureMigrations(t *testing.T) {
 				t.Fatalf("report missing NF-LIBRARY/%s: %+v", test.wantKind, report.Findings)
 			}
 		})
+	}
+}
+
+func TestScanReportsCanonicalPathSchemaAndReferenceProblems(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, "novel-fetcher")
+	episodesDir := filepath.Join(root, "works", "synthetic", "episodes")
+	if err := os.MkdirAll(episodesDir, 0o700); err != nil {
+		t.Fatalf("mkdir episodes: %v", err)
+	}
+	for name, raw := range map[string]string{
+		"future.json":    `{"schema_version":99}`,
+		"malformed.json": `{"schema_version":`,
+		"orphan.json":    `{"schema_version":1,"blocks":[]}`,
+	} {
+		if err := os.WriteFile(filepath.Join(episodesDir, name), []byte(raw), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	outside := filepath.Join(dataDir, "outside.json")
+	if err := os.WriteFile(outside, []byte(`{"schema_version":1}`), 0o600); err != nil {
+		t.Fatalf("write outside fixture: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(episodesDir, "linked.json")); err != nil {
+		t.Fatalf("symlink canonical fixture: %v", err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(root, "library.sqlite"))
+	if err != nil {
+		t.Fatalf("open library: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+		INSERT INTO schema_migrations(version) VALUES (1), (2), (3);
+		CREATE TABLE works (id INTEGER PRIMARY KEY, site TEXT NOT NULL, site_work_id TEXT NOT NULL);
+		CREATE TABLE episodes (body_path TEXT NOT NULL, content_hash TEXT NOT NULL);
+		INSERT INTO episodes(body_path, content_hash) VALUES
+			('../outside.json', ''),
+			('works/synthetic/episodes/future.json', ''),
+			('works/synthetic/episodes/malformed.json', ''),
+			('works/synthetic/episodes/linked.json', '');
+	`)
+	if err != nil {
+		t.Fatalf("seed library: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close library: %v", err)
+	}
+
+	report, err := Scan(context.Background(), dataDir)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	for _, kind := range []string{"unsafe_body_path", "schema_unsupported", "schema_malformed", "symlink_not_scanned", "orphan_body_file"} {
+		if !reportHasKind(report, kind) {
+			t.Fatalf("report missing %q: %+v", kind, report.Findings)
+		}
 	}
 }
 

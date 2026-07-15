@@ -299,3 +299,122 @@ func TestFullRebuildAndPruneAreIdempotent(t *testing.T) {
 		}
 	}
 }
+
+func TestRebuildHandlesNilAndMissingCache(t *testing.T) {
+	if quarantined, err := (*Store)(nil).Rebuild(context.Background()); err != nil || quarantined != "" {
+		t.Fatalf("nil Rebuild: quarantined=%q err=%v", quarantined, err)
+	}
+	stateDir := t.TempDir()
+	store := New(stateDir)
+	if quarantined, err := store.Rebuild(context.Background()); err != nil || quarantined != "" {
+		t.Fatalf("missing Rebuild: quarantined=%q err=%v", quarantined, err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, FileName)); err != nil {
+		t.Fatalf("Rebuild should create an empty current cache: %v", err)
+	}
+}
+
+func TestStorePropagatesOpenAndClosedDatabaseErrors(t *testing.T) {
+	root := t.TempDir()
+	blockedParent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocked parent: %v", err)
+	}
+	newBlockedStore := func() *Store {
+		return NewAtPath(filepath.Join(blockedParent, FileName))
+	}
+	if _, _, err := newBlockedStore().Get(context.Background(), "novel", "1", "etag"); err == nil {
+		t.Fatal("Get should propagate open error")
+	}
+	if _, err := newBlockedStore().GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); err == nil {
+		t.Fatal("GetMany should propagate open error")
+	}
+	if err := newBlockedStore().Save(context.Background(), "novel", "1", "etag", "text"); err == nil {
+		t.Fatal("Save should propagate open error")
+	}
+	if _, err := newBlockedStore().PruneByNovelID(context.Background(), "novel"); err == nil {
+		t.Fatal("PruneByNovelID should propagate stat error")
+	}
+	if _, err := newBlockedStore().Rebuild(context.Background()); err == nil {
+		t.Fatal("Rebuild should propagate stat error")
+	}
+
+	store := New(t.TempDir())
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	if err := store.db.Close(); err != nil {
+		t.Fatalf("close cache: %v", err)
+	}
+	if _, _, err := store.Get(context.Background(), "novel", "1", "etag"); err == nil {
+		t.Fatal("Get should propagate closed database error")
+	}
+	if _, err := store.GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); err == nil {
+		t.Fatal("GetMany should propagate closed database error")
+	}
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err == nil {
+		t.Fatal("Save should propagate closed database error")
+	}
+	if _, err := store.PruneByNovelID(context.Background(), "novel"); err == nil {
+		t.Fatal("PruneByNovelID should propagate closed database error")
+	}
+}
+
+func TestStoreContextCancellationAndEmptyNormalizedLookup(t *testing.T) {
+	store := New(t.TempDir())
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	entries, err := store.GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: " ", ContentEtag: "etag"}})
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty normalized lookup = %+v err=%v", entries, err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := store.Get(cancelled, "novel", "1", "etag"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Get error = %v", err)
+	}
+	if _, err := store.GetMany(cancelled, "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled GetMany error = %v", err)
+	}
+	if err := store.Save(cancelled, "novel", "1", "etag-new", "text"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Save error = %v", err)
+	}
+	if _, err := store.PruneByNovelID(cancelled, "novel"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled PruneByNovelID error = %v", err)
+	}
+}
+
+func TestCacheHelpersPropagateDirectDatabaseAndFilesystemErrors(t *testing.T) {
+	if entries, err := getManyWithDB(context.Background(), nil, "novel", nil); err != nil || len(entries) != 0 {
+		t.Fatalf("empty direct lookup = %+v err=%v", entries, err)
+	}
+	if db, err := (*Store)(nil).open(context.Background()); err != nil || db != nil {
+		t.Fatalf("nil store open = %v err=%v", db, err)
+	}
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocked parent: %v", err)
+	}
+	if err := ensureDBFileMode(filepath.Join(blocked, FileName)); err == nil {
+		t.Fatal("ensureDBFileMode should fail below a regular file")
+	}
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "direct.sqlite"))
+	if err != nil {
+		t.Fatalf("open direct sqlite: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := initSchema(cancelled, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled initSchema error = %v", err)
+	}
+	if label, err := validateExistingCache(cancelled, db); !errors.Is(err, context.Canceled) || label != "corrupt" {
+		t.Fatalf("cancelled validateExistingCache label=%q err=%v", label, err)
+	}
+	if err := validateCacheSchema(cancelled, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled validateCacheSchema error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close direct sqlite: %v", err)
+	}
+}

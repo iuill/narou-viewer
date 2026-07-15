@@ -2,6 +2,8 @@
 
 `state-doctor` は `data/` 配下の viewer-api / novel-fetcher state を横断して診断する CLI です。既定は read-only dry-run で、YAML / JSON / SQLite の version、integrity、owner 間の対応関係、機微 file の配置と mode を確認します。
 
+暗号化 cold backup / restore は [`state-backup.md`](state-backup.md) を参照してください。restore tooling は staging と公開後の両方で doctor を再利用します。
+
 ## 実行
 
 repository root から human report を表示します。

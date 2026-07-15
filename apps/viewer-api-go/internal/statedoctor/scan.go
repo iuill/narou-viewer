@@ -220,6 +220,25 @@ func (s *scanner) scanSensitiveState() {
 	} else if exists && found {
 		s.add(Finding{SchemaID: "VA-AI-SETTINGS", Path: s.rel(path), Kind: "legacy_plaintext_api_key", Severity: SeverityError, Observed: "non-empty api_key", Supported: "encrypted credential", RecoveryHint: "対応 build と master passphrase で暗号化 migration し、再検査してください。値を log や archive manifest に出さないでください。"})
 	}
+	if versions, exists, err := statesecurity.APIKeyVersionsIfExists(path); err != nil {
+		s.add(Finding{SchemaID: "VA-AI-SETTINGS-CRYPTO", Path: s.rel(path), Kind: "crypto_version_scan_error", Severity: SeverityError, Observed: "unreadable", Supported: "0,1", RecoveryHint: "raw YAML を変更せず api_key_version の型と schema を確認してください。"})
+	} else if exists && len(versions) > 0 {
+		observed := make([]string, 0, len(versions))
+		unsupported := false
+		for _, version := range versions {
+			observed = append(observed, strconv.Itoa(version))
+			if version != 0 && version != aisettings.APIKeyCryptoVersion {
+				unsupported = true
+			}
+		}
+		finding := Finding{SchemaID: "VA-AI-SETTINGS-CRYPTO", Path: s.rel(path), Kind: "crypto_current", Severity: SeverityInfo, Observed: strings.Join(observed, ","), Supported: "0,1", RecoveryHint: "API key ciphertext version は current です。"}
+		if unsupported {
+			finding.Kind = "crypto_future_unknown"
+			finding.Severity = SeverityError
+			finding.RecoveryHint = "対応 build または supported backup を使い、現行 build で再暗号化・消去しないでください。"
+		}
+		s.add(finding)
+	}
 	for _, item := range []struct {
 		id   string
 		path string

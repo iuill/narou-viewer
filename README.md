@@ -120,6 +120,7 @@ compose の主な service:
 - テスト方針: [`docs/testing/testing-strategy.md`](docs/testing/testing-strategy.md), [`docs/testing/e2e-setup.md`](docs/testing/e2e-setup.md)
 - self-host とデプロイ方針: [`docs/deployment.md`](docs/deployment.md)
 - state 診断と限定 repair: [`docs/state-doctor.md`](docs/state-doctor.md)
+- encrypted cold backup / restore: [`docs/state-backup.md`](docs/state-backup.md)
 - AI 実験・評価手順: [`docs/ai-experiments.md`](docs/ai-experiments.md)
 - エージェント向け手順: [`docs/README.md` の Skills 索引](docs/README.md#エージェント向け-skills)
 

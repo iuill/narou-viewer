@@ -12,6 +12,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/config"
 	"narou-viewer/apps/viewer-api-go/internal/runtime"
+	"narou-viewer/apps/viewer-api-go/internal/statebarrier"
 )
 
 func main() {
@@ -19,6 +20,11 @@ func main() {
 	defer stop()
 
 	cfg := config.Load()
+	writerLock, err := statebarrier.AcquireViewerAPI(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("acquire viewer-api state writer barrier: %v", err)
+	}
+	defer writerLock.Close()
 	if _, err := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{}); err != nil {
 		log.Fatalf("validate OPENROUTER_REASONING_EFFORT: %v", err)
 	}

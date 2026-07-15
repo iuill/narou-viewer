@@ -15,11 +15,18 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/server"
 	"narou-viewer/services/novel-fetcher/internal/sites"
 	"narou-viewer/services/novel-fetcher/internal/storage"
+	"narou-viewer/services/novel-fetcher/internal/writerlock"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	cfg := config.Load()
+	writerLock, err := writerlock.Acquire(cfg.DataDir)
+	if err != nil {
+		logger.Error("failed to acquire state writer barrier", "error", err)
+		os.Exit(1)
+	}
+	defer writerLock.Close()
 
 	store, err := storage.NewStore(cfg.DataDir)
 	if err != nil {

@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	aiAPIKeyCryptoVersion = 1
+	APIKeyCryptoVersion   = 1
+	aiAPIKeyCryptoVersion = APIKeyCryptoVersion
 	aiAPIKeySaltBytes     = 16
 	aiAPIKeyIVBytes       = 12
 	aiAPIKeyTagBytes      = 16
