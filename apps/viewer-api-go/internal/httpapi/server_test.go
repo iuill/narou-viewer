@@ -1680,7 +1680,7 @@ job_ids:
 	}
 }
 
-func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.T) {
+func TestServerFetcherRemoveKeepsAcceptedAndDoesNotPartiallyPruneWhenViewerStatePreflightFails(t *testing.T) {
 	var removeCalled bool
 	fetcherServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v2/novels/remove" {
@@ -1715,8 +1715,8 @@ func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.
 		t.Fatalf("cleanup failure should be reported without failing remove: %+v", response)
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
-	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["extractionJobsDeleted"] != float64(1) {
-		t.Fatalf("cleanup response should keep successful partial counts: %+v", cleanup)
+	if cleanup["characterProfilesDeleted"] != float64(0) || cleanup["extractionJobsDeleted"] != float64(0) {
+		t.Fatalf("operation-wide preflight failure should report zero mutations: %+v", cleanup)
 	}
 }
 

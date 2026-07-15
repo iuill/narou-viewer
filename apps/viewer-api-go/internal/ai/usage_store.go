@@ -48,22 +48,32 @@ func LoadUsage(dbPath string) (UsageResponse, bool, error) {
 	if err != nil {
 		return UsageResponse{}, false, err
 	}
-	defer rows.Close()
-
+	runs := []UsageRun{}
 	for rows.Next() {
 		run, err := scanUsageRun(rows)
 		if err != nil {
+			_ = rows.Close()
 			return UsageResponse{}, false, err
 		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return UsageResponse{}, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return UsageResponse{}, false, err
+	}
+	// VA-AI-USAGE intentionally uses one SQLite connection. Release the run
+	// result set before loading child requests so the nested queries cannot
+	// wait forever for the connection held by rows.
+	for _, run := range runs {
 		requests, err := loadUsageRequests(db, run.RunID)
 		if err != nil {
 			return UsageResponse{}, false, err
 		}
 		run.Requests = requests
 		response.Runs = append(response.Runs, run)
-	}
-	if err := rows.Err(); err != nil {
-		return UsageResponse{}, false, err
 	}
 	return response, len(response.Runs) > 0, nil
 }
