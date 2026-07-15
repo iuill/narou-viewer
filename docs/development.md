@@ -89,6 +89,8 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - Pull Request のタイトルと本文は日本語で記述してください。
 - Pull Request の作成・更新前に [PR template](../.github/pull_request_template.md) を読み、ユーザーへの影響、互換性・移行、検証結果を含む各セクションを維持してください。AI エージェントにも同じ手順を `AGENTS.md` で必須化しています。
 - Pull Request へ追いコミットする場合は、PR 本文の更新要否も確認し、必要であれば更新してください。
+- default branch（現在は `main`）は repository ruleset `main-protection` で保護し、変更を Pull Request と required checks 経由に限定します。approval は solo 運用のため 0 件とし、未解決の review conversation は merge 前に解決します。管理者や GitHub App を含む常設 bypass は設定しません。
+- required check の context または workflow job 名を変更・削除する場合は、repository ruleset の設定も同じ作業で更新してください。現在の対象条件、required checks と expected source、loose mode の採用理由、変更履歴、緊急時手順は [Issue #13 の適用結果](https://github.com/iuill/narou-viewer/issues/13#issuecomment-4979908781) を参照してください。
 - Pull Request の merge には squash merge を使い、merge commit / rebase merge は使いません。GitHub repository settings は squash merge だけを許可する運用とします。エージェントはユーザーから明示的に依頼された場合だけ merge を実行します。
 - merge 後は PR の base repository から対象 branch ref だけを fetchし、base branchへのfast-forwardと不要になったremote / local branchの削除確認までを一続きの作業として扱います。dirty worktree、別worktreeで使用中のbranch、ほかのopen PRが使うbranchは勝手に変更・削除しません。
 
