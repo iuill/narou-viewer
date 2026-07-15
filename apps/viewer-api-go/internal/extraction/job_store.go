@@ -5,12 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"narou-viewer/apps/viewer-api-go/internal/novelstate"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
+	"narou-viewer/apps/viewer-api-go/internal/novelstate"
+	"narou-viewer/apps/viewer-api-go/internal/state/filequarantine"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
+
+	"gopkg.in/yaml.v3"
 )
 
 var jobsMu sync.Mutex
@@ -123,11 +130,11 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		return NovelStatePruneResult{}, err
 	}
 	for _, path := range jobPaths {
-		var doc jobDocument
-		if ok, err := readYAMLIfExists(path, &doc); err != nil {
-			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
+		read := readJobDocument(path)
+		if read.err != nil {
+			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, read.err)
 			continue
-		} else if !ok || doc.NovelID != novelID {
+		} else if !read.exists || read.incompatible || read.document.NovelID != novelID {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -169,19 +176,57 @@ func loadJobRecords(stateDir string) ([]JobWithNovel, error) {
 	}
 	records := []JobWithNovel{}
 	for _, path := range paths {
-		var doc jobDocument
-		if ok, err := readYAMLIfExists(path, &doc); err != nil {
-			log.Printf("extraction: skipping unreadable extraction job %s: %v", path, err)
+		read := readJobDocument(path)
+		if read.err != nil {
+			log.Printf("extraction: skipping unreadable extraction job %s: %v", path, read.err)
 			continue
-		} else if !ok {
+		} else if !read.exists {
 			continue
 		}
-		records = append(records, JobWithNovel{NovelID: doc.NovelID, Job: doc.toJob()})
+		records = append(records, JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()})
 	}
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].Job.CreatedAt > records[j].Job.CreatedAt
 	})
 	return records, nil
+}
+
+type jobDocumentRead struct {
+	document     jobDocument
+	exists       bool
+	incompatible bool
+	guardError   error
+	err          error
+}
+
+func readJobDocument(path string) jobDocumentRead {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return jobDocumentRead{}
+	}
+	if err != nil {
+		return jobDocumentRead{err: err}
+	}
+	_, guardErr := schemaguard.CheckYAML(raw, JobSchemaContract)
+	var doc jobDocument
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		_, malformedErr := schemaguard.Malformed(JobSchemaContract, err)
+		return jobDocumentRead{exists: true, err: malformedErr}
+	}
+	if guardErr == nil {
+		return jobDocumentRead{document: doc, exists: true}
+	}
+	guardError, ok := schemaguard.AsGuardError(guardErr)
+	if !ok || guardError.Result.Status == schemaguard.StatusMalformed {
+		return jobDocumentRead{exists: true, err: guardErr}
+	}
+	if strings.TrimSpace(doc.JobID) == "" {
+		doc.JobID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	doc.Status = "incompatible"
+	message := "この抽出 job は現在の build と互換性がないため、変更せず保持されています。"
+	doc.ErrorMessage = &message
+	return jobDocumentRead{document: doc, exists: true, incompatible: true, guardError: guardErr}
 }
 
 func (d jobDocument) toJob() Job {
@@ -249,6 +294,26 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 			continue
 		}
 		job := record.Job
+		checkpointStore := checkpointstore.NewFileStore(stateDir)
+		if checkpointStore.Exists(record.NovelID, job.RequestedUpToEpisodeIndex) {
+			if _, checkpointErr := checkpointStore.Load(record.NovelID, job.RequestedUpToEpisodeIndex); checkpointErr != nil {
+				if _, ok := schemaguard.AsGuardError(checkpointErr); !ok {
+					return recovered, checkpointErr
+				}
+				incompatibleErr := checkpointStore.Quarantine(record.NovelID, job.RequestedUpToEpisodeIndex, "schema or payload validation failed", checkpointErr)
+				if !checkpointstore.IsIncompatible(incompatibleErr) {
+					return recovered, incompatibleErr
+				}
+				job.Status = "incompatible"
+				message := incompatibleErr.Error()
+				job.ErrorMessage = &message
+				job.ActiveWorkers = nil
+				if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
+					return recovered, err
+				}
+				continue
+			}
+		}
 		job.Status = "queued"
 		job.StartedAt = nil
 		job.FinishedAt = nil
@@ -273,7 +338,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 
 func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	doc := jobDocument{
-		SchemaVersion:             2,
+		SchemaVersion:             jobSchemaVersion,
 		Revision:                  1,
 		JobID:                     job.JobID,
 		NovelID:                   novelID,
@@ -301,7 +366,15 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	if err != nil {
 		return err
 	}
-	if err := writeYAMLAtomic(filepath.Join(stateDir, "extraction_jobs", fileName+".yaml"), doc); err != nil {
+	path := filepath.Join(stateDir, "extraction_jobs", fileName+".yaml")
+	read := readJobDocument(path)
+	if read.err != nil {
+		return read.err
+	}
+	if read.incompatible {
+		return read.guardError
+	}
+	if err := writeYAMLAtomic(path, doc); err != nil {
 		return err
 	}
 	return saveJobIndex(stateDir, novelID, job)
@@ -309,14 +382,12 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 
 func saveJobIndex(stateDir string, novelID string, job Job) error {
 	path := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
-	doc := jobsIndexDocument{SchemaVersion: 2, NovelID: novelID, JobIDs: []string{}}
-	if ok, err := readYAMLIfExists(path, &doc); err != nil {
+	doc, err := loadOrRebuildJobIndex(stateDir, novelID, path)
+	if err != nil {
 		return err
-	} else if !ok {
-		doc = jobsIndexDocument{SchemaVersion: 2, NovelID: novelID, JobIDs: []string{}}
 	}
 	doc.Revision++
-	doc.SchemaVersion = 2
+	doc.SchemaVersion = jobIndexSchemaVersion
 	doc.NovelID = novelID
 	if job.Status == "queued" || job.Status == "running" {
 		doc.ActiveJobID = &job.JobID
@@ -325,6 +396,50 @@ func saveJobIndex(stateDir string, novelID string, job Job) error {
 	}
 	doc.JobIDs = prependUniqueJobID(doc.JobIDs, job.JobID)
 	return writeYAMLAtomic(path, doc)
+}
+
+func loadOrRebuildJobIndex(stateDir string, novelID string, path string) (jobsIndexDocument, error) {
+	var doc jobsIndexDocument
+	_, err := yamlfile.ReadGuarded(path, JobIndexSchemaContract, &doc)
+	if err == nil && doc.NovelID == novelID {
+		if doc.JobIDs == nil {
+			doc.JobIDs = []string{}
+		}
+		return doc, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if _, ok := schemaguard.AsGuardError(err); !ok {
+			return jobsIndexDocument{}, err
+		}
+		if _, moveErr := filequarantine.Move(path, "unsupported"); moveErr != nil {
+			return jobsIndexDocument{}, moveErr
+		}
+	} else if err == nil {
+		if _, moveErr := filequarantine.Move(path, "unsupported"); moveErr != nil {
+			return jobsIndexDocument{}, moveErr
+		}
+	}
+	records, loadErr := loadJobRecords(stateDir)
+	if loadErr != nil {
+		return jobsIndexDocument{}, loadErr
+	}
+	rebuilt := jobsIndexDocument{
+		SchemaVersion: jobIndexSchemaVersion,
+		Revision:      0,
+		NovelID:       novelID,
+		JobIDs:        []string{},
+	}
+	for _, record := range records {
+		if record.NovelID != novelID || strings.TrimSpace(record.Job.JobID) == "" {
+			continue
+		}
+		rebuilt.JobIDs = append(rebuilt.JobIDs, record.Job.JobID)
+		if rebuilt.ActiveJobID == nil && (record.Job.Status == "queued" || record.Job.Status == "running") {
+			jobID := record.Job.JobID
+			rebuilt.ActiveJobID = &jobID
+		}
+	}
+	return rebuilt, nil
 }
 
 func prependUniqueJobID(jobIDs []string, jobID string) []string {

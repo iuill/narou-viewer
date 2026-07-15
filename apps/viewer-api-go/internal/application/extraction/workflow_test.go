@@ -3,6 +3,7 @@ package extraction
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -53,6 +54,8 @@ type workflowFakePorts struct {
 	heuristicEpisodes      []characters.HeuristicEpisode
 	generatedEpisodes      []characters.HeuristicEpisode
 	checkpoint             checkpointstore.Checkpoint
+	checkpointQuarantined  bool
+	checkpointReason       string
 	savedCheckpoint        bool
 	savedCharacters        []characters.GeneratedCharacter
 	savedSummaryOptions    characters.SaveGeneratedSummaryOptions
@@ -187,9 +190,15 @@ func (p *workflowFakePorts) GenerateDiscoveryParallelCorrection(_ context.Contex
 
 func (p *workflowFakePorts) LoadCheckpoint(string, string) (checkpointstore.Checkpoint, error) {
 	if p.checkpoint.NovelID == "" {
-		return checkpointstore.Checkpoint{}, errors.New("missing checkpoint")
+		return checkpointstore.Checkpoint{}, os.ErrNotExist
 	}
 	return p.checkpoint, nil
+}
+
+func (p *workflowFakePorts) QuarantineCheckpoint(_ string, _ string, reason string, cause error) error {
+	p.checkpointQuarantined = true
+	p.checkpointReason = reason
+	return &checkpointstore.IncompatibleError{Path: "checkpoint", QuarantinedPath: "checkpoint.unsupported", Reason: reason, Err: cause}
 }
 
 func (p *workflowFakePorts) SaveCheckpoint(_ string, _ string, checkpoint checkpointstore.Checkpoint) error {

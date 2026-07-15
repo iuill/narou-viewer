@@ -5,19 +5,22 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"os"
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
 const (
 	extractionContractVersion = 2
-	CheckpointSchemaVersion   = 4
+	CheckpointSchemaVersion   = checkpointstore.SchemaVersion
 )
 
 type generationRunner struct {
@@ -30,7 +33,10 @@ func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *st
 		return nil, core.GenerationState{}, nil, err
 	}
 	checkpointFingerprint := CheckpointFingerprint(config, CheckpointGenerationInputs(seed, seedTerms, batches, initialUnresolved, allocator))
-	checkpoint := r.loadCheckpointForGeneration(novelID, upToEpisodeIndex, checkpointFingerprint)
+	checkpoint, err := r.loadCheckpointForGeneration(novelID, upToEpisodeIndex, checkpointFingerprint)
+	if err != nil {
+		return nil, core.GenerationState{}, nil, err
+	}
 	processedBatches := map[int]bool{}
 	for _, batchIndex := range checkpoint.ProcessedBatchIndexes {
 		processedBatches[batchIndex] = true
@@ -185,16 +191,30 @@ func (r generationRunner) GeneratePreview(ctx context.Context, config *store.Res
 	return generated, state, usageRequests, nil
 }
 
-func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) checkpointstore.Checkpoint {
+func (r generationRunner) loadCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) (checkpointstore.Checkpoint, error) {
 	checkpoint, err := r.ports.LoadCheckpoint(novelID, upToEpisodeIndex)
-	if err != nil ||
-		checkpoint.SchemaVersion != CheckpointSchemaVersion ||
-		checkpoint.NovelID != novelID ||
-		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
-		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
-		return EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
+	if errors.Is(err, os.ErrNotExist) {
+		return EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint), nil
 	}
-	return NormalizeCheckpoint(checkpoint)
+	if err != nil {
+		if _, ok := schemaguard.AsGuardError(err); !ok {
+			return checkpointstore.Checkpoint{}, err
+		}
+		return checkpointstore.Checkpoint{}, r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, "schema or payload validation failed", err)
+	}
+	reason := ""
+	switch {
+	case checkpoint.SchemaVersion != CheckpointSchemaVersion:
+		reason = "schema version mismatch"
+	case checkpoint.NovelID != novelID || checkpoint.UpToEpisodeIndex != upToEpisodeIndex:
+		reason = "checkpoint target mismatch"
+	case expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint:
+		reason = "generation fingerprint mismatch"
+	}
+	if reason != "" {
+		return checkpointstore.Checkpoint{}, r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, reason, nil)
+	}
+	return NormalizeCheckpoint(checkpoint), nil
 }
 
 func EmptyCheckpoint(novelID string, upToEpisodeIndex string, fingerprint string) checkpointstore.Checkpoint {

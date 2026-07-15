@@ -70,7 +70,7 @@ func generatedContainsName(values []characters.GeneratedCharacter, name string) 
 	return false
 }
 
-func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
+func TestGenerationRunnerQuarantinesMismatchedCheckpointWithoutProviderCall(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
 	batches := runnerBatches("1")
 	ports := &workflowFakePorts{
@@ -86,18 +86,15 @@ func TestGenerationRunnerIgnoresMismatchedCheckpoint(t *testing.T) {
 	}
 
 	generated, _, usageRequests, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "1", nil, nil, batches, nil, nil)
-	if err != nil {
-		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
+	if !checkpointstore.IsIncompatible(err) {
+		t.Fatalf("RunOpenRouterWithCheckpoint error = %v, want incompatible", err)
 	}
-	if ports.generateCalls != 1 || len(usageRequests) != 1 {
-		t.Fatalf("mismatched checkpoint should be ignored and regenerated: calls=%d usage=%+v", ports.generateCalls, usageRequests)
-	}
-	if len(generated) != 1 || generated[0].CanonicalName == "古い" {
-		t.Fatalf("mismatched checkpoint snapshot should not be reused: %+v", generated)
+	if ports.generateCalls != 0 || len(usageRequests) != 0 || len(generated) != 0 || !ports.checkpointQuarantined {
+		t.Fatalf("mismatched checkpoint should stop before provider call: calls=%d usage=%+v generated=%+v quarantined=%v", ports.generateCalls, usageRequests, generated, ports.checkpointQuarantined)
 	}
 }
 
-func TestGenerationRunnerIgnoresCheckpointWhenPersistentSeedChanges(t *testing.T) {
+func TestGenerationRunnerQuarantinesCheckpointWhenPersistentSeedChanges(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
 	batches := runnerBatches("2")
 	oldSeed := []characters.GeneratedCharacter{{CharacterID: "char_old", CanonicalName: "古い人物", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"}}
@@ -115,11 +112,8 @@ func TestGenerationRunnerIgnoresCheckpointWhenPersistentSeedChanges(t *testing.T
 	}
 
 	generated, _, _, err := NewWorkflow(ports).RunOpenRouterWithCheckpoint(context.Background(), config, "novel-a", "2", newSeed, nil, batches, nil, nil)
-	if err != nil {
-		t.Fatalf("RunOpenRouterWithCheckpoint returned error: %v", err)
-	}
-	if ports.generateCalls != 1 || !generatedContainsName(generated, "更新後の人物") || generatedContainsName(generated, "古い人物") {
-		t.Fatalf("changed seed must invalidate stale checkpoint: calls=%d generated=%+v", ports.generateCalls, generated)
+	if !checkpointstore.IsIncompatible(err) || ports.generateCalls != 0 || len(generated) != 0 || !ports.checkpointQuarantined {
+		t.Fatalf("changed seed must quarantine stale checkpoint before generation: calls=%d generated=%+v quarantined=%v err=%v", ports.generateCalls, generated, ports.checkpointQuarantined, err)
 	}
 }
 

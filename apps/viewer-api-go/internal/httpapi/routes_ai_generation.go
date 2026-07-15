@@ -1210,12 +1210,24 @@ func (s *Server) loadExtractionCheckpoint(novelID string, upToEpisodeIndex strin
 }
 
 func (s *Server) loadExtractionCheckpointForGeneration(novelID string, upToEpisodeIndex string, expectedFingerprint string) extractionCheckpoint {
-	checkpoint, err := s.extractionRuntime().LoadCheckpoint(novelID, upToEpisodeIndex)
-	if err != nil ||
-		checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion ||
-		checkpoint.NovelID != novelID ||
-		checkpoint.UpToEpisodeIndex != upToEpisodeIndex ||
-		(expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint) {
+	runtime := s.extractionRuntime()
+	checkpoint, err := runtime.LoadCheckpoint(novelID, upToEpisodeIndex)
+	if errors.Is(err, os.ErrNotExist) {
+		return appextraction.EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
+	}
+	reason := ""
+	switch {
+	case err != nil:
+		reason = "schema or payload validation failed"
+	case checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion:
+		reason = "schema version mismatch"
+	case checkpoint.NovelID != novelID || checkpoint.UpToEpisodeIndex != upToEpisodeIndex:
+		reason = "checkpoint target mismatch"
+	case expectedFingerprint != "" && checkpoint.GenerationFingerprint != expectedFingerprint:
+		reason = "generation fingerprint mismatch"
+	}
+	if reason != "" {
+		_ = runtime.QuarantineCheckpoint(novelID, upToEpisodeIndex, reason, err)
 		return appextraction.EmptyCheckpoint(novelID, upToEpisodeIndex, expectedFingerprint)
 	}
 	return appextraction.NormalizeCheckpoint(checkpoint)

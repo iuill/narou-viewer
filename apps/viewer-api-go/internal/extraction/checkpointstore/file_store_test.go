@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestFileStoreSavesLoadsExistsAndDeletesCheckpoint(t *testing.T) {
@@ -48,6 +50,9 @@ func TestFileStoreSavesLoadsExistsAndDeletesCheckpoint(t *testing.T) {
 	}
 	if loaded.NovelID != "novel-a" || loaded.GenerationFingerprint != "fingerprint-a" || len(loaded.Characters) != 1 {
 		t.Fatalf("loaded checkpoint = %+v", loaded)
+	}
+	if loaded.SchemaVersion != SchemaVersion {
+		t.Fatalf("loaded schema version = %d, want %d", loaded.SchemaVersion, SchemaVersion)
 	}
 	if err := store.Delete("novel-a", "2"); err != nil {
 		t.Fatalf("Delete returned error: %v", err)
@@ -96,5 +101,44 @@ func TestFileStoreSaveReportsPathErrors(t *testing.T) {
 	}
 	if err := store.Save("novel-a", "1", Checkpoint{}); err == nil {
 		t.Fatal("Save should fail when target path is a directory")
+	}
+}
+
+func TestFileStoreQuarantinesFutureCheckpointWithoutOverwritingIt(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(dir)
+	path := store.Path("novel-future", "1")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir checkpoint dir: %v", err)
+	}
+	future := []byte(`{"schemaVersion":99,"novelId":"novel-future","upToEpisodeIndex":"1","characters":[]}`)
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatalf("write future checkpoint: %v", err)
+	}
+	_, loadErr := store.Load("novel-future", "1")
+	var guardError *schemaguard.GuardError
+	if !errors.As(loadErr, &guardError) || guardError.Result.Status != schemaguard.StatusFutureUnknown {
+		t.Fatalf("Load error = %#v, want future GuardError", loadErr)
+	}
+	saveErr := schemaguardtest.AssertFileUntouched(t, path, func() error {
+		return store.Save("novel-future", "1", Checkpoint{})
+	})
+	if !errors.As(saveErr, &guardError) {
+		t.Fatalf("Save error = %#v, want GuardError", saveErr)
+	}
+	quarantineErr := store.Quarantine("novel-future", "1", "schema version mismatch", loadErr)
+	if !IsIncompatible(quarantineErr) {
+		t.Fatalf("Quarantine error = %#v, want IncompatibleError", quarantineErr)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("original checkpoint should be moved: %v", err)
+	}
+	quarantined, err := filepath.Glob(path + ".unsupported-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined checkpoints = %v, err=%v", quarantined, err)
+	}
+	raw, err := os.ReadFile(quarantined[0])
+	if err != nil || string(raw) != string(future) {
+		t.Fatalf("quarantined bytes = %q, err=%v", raw, err)
 	}
 }

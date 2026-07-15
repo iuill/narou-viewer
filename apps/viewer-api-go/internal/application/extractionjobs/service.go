@@ -3,6 +3,7 @@ package extractionjobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -85,7 +86,7 @@ func (s *Service) List(ctx context.Context, novelID string) (JobsResponse, error
 	}
 	loadedJobs, ok, err := extractdomain.LoadJobs(s.stateDir, novelID)
 	if err != nil {
-		return JobsResponse{}, ErrJobsRead
+		return JobsResponse{}, fmt.Errorf("%w: %w", ErrJobsRead, err)
 	}
 	if !ok {
 		loadedJobs = []extractdomain.Job{}
@@ -113,7 +114,7 @@ func (s *Service) Enqueue(ctx context.Context, novelID string, input EnqueueInpu
 	}
 	settings, err := s.settings.GetAIGenerationSettings()
 	if err != nil {
-		return EnqueueResponse{}, false, ErrSettingsRead
+		return EnqueueResponse{}, false, fmt.Errorf("%w: %w", ErrSettingsRead, err)
 	}
 	activeProfile := resolveActiveAIProfile(settings)
 	now := s.nowISOValue()
@@ -133,7 +134,7 @@ func (s *Service) Enqueue(ctx context.Context, novelID string, input EnqueueInpu
 	}
 	savedJob, created, err := extractdomain.SaveJobIfNoActive(s.stateDir, novelID, job)
 	if err != nil {
-		return EnqueueResponse{}, false, ErrJobSave
+		return EnqueueResponse{}, false, fmt.Errorf("%w: %w", ErrJobSave, err)
 	}
 	return enqueueResponse(savedJob, created), created, nil
 }
@@ -144,7 +145,7 @@ func (s *Service) Clear(ctx context.Context, novelID string) (ClearResponse, err
 	}
 	result, active, err := extractdomain.PruneNovelStateIfNoActive(s.stateDir, novelID)
 	if err != nil {
-		return ClearResponse{}, ErrExtractionClear
+		return ClearResponse{}, fmt.Errorf("%w: %w", ErrExtractionClear, err)
 	}
 	if active {
 		return ClearResponse{}, ErrExtractionActive

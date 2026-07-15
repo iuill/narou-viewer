@@ -411,6 +411,10 @@ func (r *Runtime) LoadCheckpoint(novelID string, upToEpisodeIndex string) (check
 	return checkpointstore.NewFileStore(r.stateDir).Load(novelID, upToEpisodeIndex)
 }
 
+func (r *Runtime) QuarantineCheckpoint(novelID string, upToEpisodeIndex string, reason string, cause error) error {
+	return checkpointstore.NewFileStore(r.stateDir).Quarantine(novelID, upToEpisodeIndex, reason, cause)
+}
+
 func (r *Runtime) SaveCheckpoint(novelID string, upToEpisodeIndex string, checkpoint checkpointstore.Checkpoint) error {
 	startedAt := time.Now()
 	err := checkpointstore.NewFileStore(r.stateDir).Save(novelID, upToEpisodeIndex, checkpoint)

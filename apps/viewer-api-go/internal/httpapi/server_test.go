@@ -22,6 +22,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/fetcher"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
@@ -2187,7 +2188,7 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
-	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":3,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":4,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 
@@ -4576,17 +4577,15 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 	}
 
 	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), newConfig, "novel-1", "1", nil, batches, nil)
-	if err != nil {
-		t.Fatalf("generation with mismatched checkpoint returned error: %v", err)
+	if !checkpointstore.IsIncompatible(err) {
+		t.Fatalf("generation with mismatched checkpoint error = %v, want incompatible", err)
 	}
-	if requests != 1 {
-		t.Fatalf("mismatched checkpoint should not skip the provider request, requests=%d", requests)
+	if requests != 0 || len(generated) != 0 || len(usageRequests) != 0 {
+		t.Fatalf("mismatched checkpoint should stop before provider request: requests=%d generated=%+v usage=%+v", requests, generated, usageRequests)
 	}
-	if len(generated) != 1 || generated[0].CanonicalName != "新モデル" {
-		t.Fatalf("mismatched checkpoint should be discarded before merging: %+v", generated)
-	}
-	if len(usageRequests) != 1 || usageRequests[0].OutputTokens != 5 || usageRequests[0].TotalTokens != 14 {
-		t.Fatalf("provider token usage should be retained: %+v", usageRequests)
+	quarantined, globErr := filepath.Glob(server.extractionCheckpointPath("novel-1", "1") + ".unsupported-*")
+	if globErr != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined checkpoints = %v, err=%v", quarantined, globErr)
 	}
 }
 
@@ -4629,17 +4628,11 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 	}
 
 	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, novelID, "1", nil, inputs.Batches, nil)
-	if err != nil {
-		t.Fatalf("library checkpoint generation returned error: %v", err)
+	if !checkpointstore.IsIncompatible(err) {
+		t.Fatalf("library checkpoint generation error = %v, want incompatible", err)
 	}
-	if providerCalls != 1 {
-		t.Fatalf("library checkpoint should be discarded when batch inputs differ, calls=%d", providerCalls)
-	}
-	if len(generated) != 1 || generated[0].CanonicalName != "新本文" {
-		t.Fatalf("library checkpoint should not reuse stale characters: %+v", generated)
-	}
-	if len(usageRequests) != 1 || usageRequests[0].OutputTokens != 5 {
-		t.Fatalf("library generation should retain usage for regenerated batch: %+v", usageRequests)
+	if providerCalls != 0 || len(generated) != 0 || len(usageRequests) != 0 {
+		t.Fatalf("library checkpoint mismatch should stop before provider call: calls=%d generated=%+v usage=%+v", providerCalls, generated, usageRequests)
 	}
 }
 
@@ -5871,6 +5864,8 @@ characters:
         text: テスト人物。
 `)
 	writeHTTPFixtureFile(t, filepath.Join(stateDir, "extraction_jobs", "job-1.yaml"), `
+schema_version: 2
+revision: 1
 job_id: job-1
 novel_id: `+novelID+`
 requested_up_to_episode_index: "1"
