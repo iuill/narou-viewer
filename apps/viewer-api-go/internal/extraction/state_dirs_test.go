@@ -65,3 +65,35 @@ func TestEnsureStateDirsRemovesObsoleteJobArtifacts(t *testing.T) {
 		t.Fatalf("canonical job should be preserved: %q err=%v", canonical, err)
 	}
 }
+
+func TestEnsureStateDirsContinuesWhenObsoleteArtifactsCannotBeRemoved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission failure cannot be reproduced as root")
+	}
+
+	stateDir := t.TempDir()
+	legacyDir := filepath.Join(stateDir, "character_jobs")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy job directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "job.yaml"), []byte("job_id: legacy"), 0o644); err != nil {
+		t.Fatalf("write legacy job: %v", err)
+	}
+	indexDir := filepath.Join(stateDir, "extraction_jobs", "index")
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		t.Fatalf("mkdir canonical job index: %v", err)
+	}
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatalf("make state directory read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(stateDir, 0o700)
+	})
+
+	if err := EnsureStateDirs(stateDir); err != nil {
+		t.Fatalf("obsolete cleanup failure should not prevent startup: %v", err)
+	}
+	if info, err := os.Stat(legacyDir); err != nil || !info.IsDir() {
+		t.Fatalf("failed obsolete cleanup should leave the undeletable directory: info=%+v err=%v", info, err)
+	}
+}
