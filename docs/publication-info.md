@@ -46,6 +46,8 @@
 
 ## データモデル
 
+`publications.yaml` の owner、schema version、未知 version、prune、backup / restore の横断方針は [`state-schema-policy.md`](state-schema-policy.md) を参照する。この文書では書籍情報としての field の意味と UI / API 挙動を定める。
+
 ```yaml
 novels:
   - novel_id: example
