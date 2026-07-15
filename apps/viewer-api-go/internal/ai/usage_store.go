@@ -9,12 +9,15 @@ import (
 	"strings"
 	"sync"
 
+	"narou-viewer/apps/viewer-api-go/internal/ai/usagemigration"
+
 	_ "modernc.org/sqlite"
 )
 
 const usageRunListLimit = 50
 
 var usageWriteMu sync.Mutex
+var usageMigrationMu sync.Mutex
 
 func LoadUsage(dbPath string) (UsageResponse, bool, error) {
 	db, ok, err := openUsageDB(dbPath)
@@ -71,17 +74,11 @@ func SaveUsageRun(dbPath string, run UsageRun) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return err
 	}
-	if err := ensureUsageDBFileMode(dbPath); err != nil {
-		return err
-	}
-	db, err := sql.Open("sqlite", usageSQLiteDSN(dbPath))
+	db, err := openUsageWriteDB(dbPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	if err := ensureUsageSchema(db); err != nil {
-		return err
-	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -158,7 +155,7 @@ func PruneUsageByNovelID(dbPath string, novelID string) (int, error) {
 	if info.Size() == 0 {
 		return 0, nil
 	}
-	db, err := sql.Open("sqlite", usageSQLiteDSN(dbPath))
+	db, err := openUsageWriteDB(dbPath)
 	if err != nil {
 		return 0, err
 	}
@@ -205,61 +202,31 @@ func ensureUsageDBFileMode(dbPath string) error {
 	return os.Chmod(dbPath, 0o600)
 }
 
-func ensureUsageSchema(db *sql.DB) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS ai_usage_runs (
-			run_id TEXT PRIMARY KEY,
-			feature TEXT NOT NULL,
-			workflow_name TEXT NOT NULL,
-			status TEXT NOT NULL,
-			started_at TEXT NOT NULL,
-			finished_at TEXT NOT NULL,
-			elapsed_ms INTEGER NOT NULL,
-			novel_id TEXT NULL,
-			novel_title TEXT NULL,
-			current_episode_index TEXT NULL,
-			model_id TEXT NULL,
-			profile_id TEXT NULL,
-			profile_label TEXT NULL,
-			generation_mode TEXT NOT NULL,
-			answer_chars INTEGER NOT NULL,
-			request_count INTEGER NOT NULL,
-			input_tokens INTEGER NOT NULL,
-			output_tokens INTEGER NOT NULL,
-			total_tokens INTEGER NOT NULL,
-			cached_input_tokens INTEGER NOT NULL,
-			reasoning_output_tokens INTEGER NOT NULL,
-			total_cost REAL NOT NULL,
-			tool_call_count INTEGER NOT NULL,
-			tool_result_count INTEGER NOT NULL,
-			error_message TEXT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS ai_usage_requests (
-			run_id TEXT NOT NULL,
-			request_index INTEGER NOT NULL,
-			kind TEXT NOT NULL,
-			parent_request_index INTEGER NULL,
-			tool_names TEXT NOT NULL,
-			tool_summaries TEXT NOT NULL,
-			input_tokens INTEGER NOT NULL,
-			output_tokens INTEGER NOT NULL,
-			total_tokens INTEGER NOT NULL,
-			cached_input_tokens INTEGER NOT NULL,
-			reasoning_output_tokens INTEGER NOT NULL,
-			cost REAL NOT NULL,
-			PRIMARY KEY (run_id, request_index)
-		)`,
-		`CREATE TABLE IF NOT EXISTS ai_usage_run_snapshots (
-			run_id TEXT PRIMARY KEY,
-			snapshot_json TEXT NOT NULL
-		)`,
-	}
-	for _, statement := range statements {
-		if _, err := db.Exec(strings.TrimSpace(statement)); err != nil {
-			return err
+func openUsageWriteDB(dbPath string) (*sql.DB, error) {
+	usageMigrationMu.Lock()
+	defer usageMigrationMu.Unlock()
+
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		if err := ensureUsageDBFileMode(dbPath); err != nil {
+			return nil, err
 		}
+	} else if err != nil {
+		return nil, err
 	}
-	return nil
+	db, err := sql.Open("sqlite", usageSQLiteDSN(dbPath))
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := usagemigration.Run(db, dbPath); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func loadUsageSummary(db *sql.DB) (UsageResponse, error) {
@@ -343,28 +310,14 @@ func openUsageDB(dbPath string) (*sql.DB, bool, error) {
 	if info.Size() == 0 {
 		return nil, false, nil
 	}
-	db, err := sql.Open("sqlite", usageSQLiteReadDSN(dbPath))
-	if err != nil {
-		return nil, false, err
-	}
-	return db, true, nil
-}
-
-func usageSQLiteReadDSN(dbPath string) string {
-	return "file:" + filepath.ToSlash(dbPath) + "?mode=ro&_pragma=busy_timeout(5000)"
+	db, err := openUsageWriteDB(dbPath)
+	return db, err == nil, err
 }
 
 func loadUsageRequests(db *sql.DB, runID string) ([]UsageRequest, error) {
-	columns, err := tableColumns(db, "ai_usage_requests")
-	if err != nil {
-		return nil, err
-	}
-	if len(columns) == 0 {
-		return nil, errors.New("ai_usage_requests table was not found")
-	}
-
 	rows, err := db.Query(`
-		SELECT request_index, `+usageRequestColumnExpr(columns, "kind", "'other'")+`, `+usageRequestColumnExpr(columns, "parent_request_index", "NULL")+`, `+usageRequestColumnExpr(columns, "tool_names", "'[]'")+`, `+usageRequestColumnExpr(columns, "tool_summaries", "'[]'")+`, input_tokens, output_tokens, total_tokens, cached_input_tokens, reasoning_output_tokens, cost
+		SELECT request_index, kind, parent_request_index, tool_names, tool_summaries,
+			input_tokens, output_tokens, total_tokens, cached_input_tokens, reasoning_output_tokens, cost
 		FROM ai_usage_requests
 		WHERE run_id = ?
 		ORDER BY request_index ASC
@@ -404,36 +357,6 @@ func loadUsageRequests(db *sql.DB, runID string) ([]UsageRequest, error) {
 		requests = append(requests, request)
 	}
 	return requests, rows.Err()
-}
-
-func tableColumns(db *sql.DB, tableName string) (map[string]bool, error) {
-	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return nil, err
-		}
-		columns[name] = true
-	}
-	return columns, rows.Err()
-}
-
-func usageRequestColumnExpr(columns map[string]bool, columnName string, fallback string) string {
-	if columns[columnName] {
-		return columnName
-	}
-	return fallback + " AS " + columnName
 }
 
 type usageRunScanner interface {

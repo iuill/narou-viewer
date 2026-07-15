@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/ai/snapshotcontracttest"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
@@ -364,6 +365,10 @@ func TestWorkflowGenerateAndSaveParallelIdentityUsesStrategy(t *testing.T) {
 	snapshot, ok := ports.recordedUsage[0].Snapshot.(map[string]any)
 	if !ok || snapshot["generationStrategy"] != GenerationStrategyParallelIdentity {
 		t.Fatalf("snapshot = %#v, want generationStrategy", ports.recordedUsage[0].Snapshot)
+	}
+	snapshotcontracttest.AssertSafeProducerSnapshot(t, snapshot, 1000)
+	if ports.recordedUsage[0].ErrorMessage != nil {
+		t.Fatal("completed extraction usage unexpectedly recorded an error message")
 	}
 }
 

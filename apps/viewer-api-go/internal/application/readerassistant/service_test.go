@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/ai/snapshotcontracttest"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
@@ -45,6 +46,34 @@ func TestUsageRequestsIncludeToolCallsAndFinalAnswer(t *testing.T) {
 	}
 	if requests[1].Kind != "final_answer" || requests[1].InputTokens != 3 || requests[1].OutputTokens != 4 || requests[1].TotalTokens != 7 {
 		t.Fatalf("final answer token usage was not recorded: %+v", requests[1])
+	}
+}
+
+func TestReaderAssistantUsageSnapshotContract(t *testing.T) {
+	longUserQuery := strings.Repeat("質問", 700)
+	longBodyExcerpt := strings.Repeat("本文", 700)
+	input := readerAssistantUsageInput{
+		NovelID:             "synthetic-novel",
+		NovelTitle:          "合成作品",
+		Message:             longUserQuery,
+		Answer:              "回答",
+		GenerationMode:      "openrouter",
+		ToolRequests:        []map[string]any{{"name": "search_full_text", "arguments": map[string]any{"query": longUserQuery}}},
+		ToolResults:         []map[string]any{{"name": "search_full_text", "result": map[string]any{"excerpt": longBodyExcerpt}}},
+		ErrorMessage:        "provider failure detail is stored outside the snapshot",
+		CurrentEpisodeIndex: "1",
+	}
+	snapshot := readerAssistantUsageSnapshot(input, readerAssistantUsageRequests(input.ToolRequests, 1, 2))
+	snapshotcontracttest.AssertSafeProducerSnapshot(t, snapshot, 1000)
+	if _, exists := snapshot["errorMessage"]; exists {
+		t.Fatal("provider error_message must remain outside the producer snapshot")
+	}
+	toolRequests := snapshot["toolRequests"].([]any)
+	query := toolRequests[0].(map[string]any)["arguments"].(map[string]any)["query"].(string)
+	toolResults := snapshot["toolResults"].([]any)
+	excerpt := toolResults[0].(map[string]any)["result"].(map[string]any)["excerpt"].(string)
+	if len([]rune(query)) != 1000 || len([]rune(excerpt)) != 1000 {
+		t.Fatalf("bounded tool I/O contract changed: query=%d excerpt=%d", len([]rune(query)), len([]rune(excerpt)))
 	}
 }
 

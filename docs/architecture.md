@@ -177,7 +177,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `viewer-api` 内では `FileStateStore` facade が state 更新を直列化し、`reading_state.yaml` / `bookmarks.yaml` / `reader_preferences.yaml` / `novel_reader_settings.yaml` の schema と単一 file 更新は各 Repository が所有する。
 - reader state / reader preferences / bookmarks のような単一 state file に閉じた薄い CRUD は、route handler 近くで request validation を行い `FileStateStore` facade を呼ぶ。取得 backend 削除後の state pruning、publication cover 合成、reader correction 適用、AI usage coordination のように複数 domain を跨ぐ処理は application service へ切り出す。
 - YAML / JSON などの file state 書き込みは、共通の atomic file helper を通して「最新読込 -> メモリ上で変更 -> temp file -> fsync -> rename -> parent dir fsync」で行う。
-- `state/ai_usage.sqlite` は AI 利用履歴専用の例外であり、`AiUsageStore` が SQLite transaction と process 内 write mutex で更新する。現行実装は WAL を明示的に有効化していない。`state/reader_search.sqlite` は読書AI検索用の派生キャッシュであり、本文検索時に viewer-api が SQLite へ読み書きする。
+- `state/ai_usage.sqlite` は AI 利用履歴専用の例外であり、`AiUsageStore` が SQLite transaction と process 内 write mutex で更新する。`schema_migrations` の既知 latest を open 直後に検査し、未知の将来 version では read / write / prune を停止する。cold backup を単一 main file に保つため `journal_mode=DELETE` を明示する。`state/reader_search.sqlite` は読書AI検索用の派生キャッシュであり、本文検索時に viewer-api が SQLite へ読み書きする。
 - `viewer-api` を複数インスタンスに増やす場合、YAML 単体および単一 SQLite ファイルでは整合性保証が不足するため、外部ロックまたは外部ストアへ移行する。
 - 個別 schema の version、互換性、migration、prune、backup / restore は [`state-schema-policy.md`](state-schema-policy.md) を単一正本とする。
 
