@@ -71,6 +71,10 @@ func TestUsageSQLiteDSNIncludesBusyTimeout(t *testing.T) {
 	if dsn != "file:tmp/ai_usage.sqlite?_pragma=busy_timeout(5000)" {
 		t.Fatalf("unexpected usage sqlite dsn: %s", dsn)
 	}
+	readOnlyDSN := usageReadOnlySQLiteDSN(filepath.Join("tmp", "ai_usage.sqlite"))
+	if readOnlyDSN != "file:tmp/ai_usage.sqlite?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)" {
+		t.Fatalf("unexpected read-only usage sqlite dsn: %s", readOnlyDSN)
+	}
 }
 
 func TestLoadUsageHandlesMissingDatabase(t *testing.T) {
@@ -396,6 +400,9 @@ func TestLoadUsageHandlesOlderRequestMetadataSchema(t *testing.T) {
 		}
 	}
 	db.Close()
+	if err := EnsureUsageDB(dbPath); err != nil {
+		t.Fatalf("EnsureUsageDB returned error: %v", err)
+	}
 
 	usage, ok, err := LoadUsage(dbPath)
 	if err != nil {
@@ -429,6 +436,34 @@ func TestLoadUsageHandlesOlderRequestMetadataSchema(t *testing.T) {
 	}
 	if !ok || len(detail.Requests) != 1 || detail.Requests[0].Kind != "other" {
 		t.Fatalf("unexpected detail defaults: ok=%v detail=%+v", ok, detail)
+	}
+}
+
+func TestLoadUsageDoesNotMutateCurrentDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ai_usage.sqlite")
+	if err := SaveUsageRun(dbPath, UsageRun{RunID: "read-only", StartedAt: "2026-01-01T00:00:00Z", FinishedAt: "2026-01-01T00:00:00Z"}); err != nil {
+		t.Fatalf("SaveUsageRun: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o640); err != nil {
+		t.Fatalf("chmod current database: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read current database: %v", err)
+	}
+	if _, ok, err := LoadUsage(dbPath); err != nil || !ok {
+		t.Fatalf("LoadUsage: ok=%v err=%v", ok, err)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("reread current database: %v", err)
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat current database: %v", err)
+	}
+	if !bytes.Equal(before, after) || info.Mode().Perm() != 0o640 {
+		t.Fatalf("read mutated current database: bytesEqual=%v mode=%o", bytes.Equal(before, after), info.Mode().Perm())
 	}
 }
 

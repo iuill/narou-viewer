@@ -374,6 +374,9 @@ func TestRecoverRunningJobsDoesNotRequeueUnsupportedCheckpoint(t *testing.T) {
 	if err != nil || !ok || len(jobs) != 1 || jobs[0].Status != "incompatible" || jobs[0].ErrorMessage == nil {
 		t.Fatalf("jobs = %+v, ok=%v err=%v", jobs, ok, err)
 	}
+	if strings.Contains(*jobs[0].ErrorMessage, stateDir) || !strings.Contains(*jobs[0].ErrorMessage, "互換性") {
+		t.Fatalf("job error message should be stable and path-free: %q", *jobs[0].ErrorMessage)
+	}
 	quarantined, err := filepath.Glob(checkpointPath + ".unsupported-*")
 	if err != nil || len(quarantined) != 1 {
 		t.Fatalf("quarantined checkpoints = %v, err=%v", quarantined, err)
@@ -437,15 +440,18 @@ func TestSaveJobUsesTSCompatibleFileNamesAndRejectsUnsafeIDs(t *testing.T) {
 	}
 }
 
-func TestLoadJobsSkipsInvalidYAML(t *testing.T) {
+func TestMalformedJobStopsReadsAndNewJobMutation(t *testing.T) {
 	stateDir := t.TempDir()
 	jobDir := filepath.Join(stateDir, "extraction_jobs")
 	if err := os.MkdirAll(jobDir, 0o755); err != nil {
 		t.Fatalf("mkdir job dir: %v", err)
 	}
 	writeFile(t, filepath.Join(jobDir, "bad.yaml"), "job_id: [")
-	if jobs, ok, err := LoadJobs(stateDir, "novel-1"); err != nil || ok || len(jobs) != 0 {
-		t.Fatalf("invalid job yaml should be skipped, jobs=%+v ok=%v err=%v", jobs, ok, err)
+	if jobs, ok, err := LoadJobs(stateDir, "novel-1"); err == nil || ok || len(jobs) != 0 {
+		t.Fatalf("invalid job yaml should stop reads, jobs=%+v ok=%v err=%v", jobs, ok, err)
+	}
+	if _, created, err := SaveJobIfNoActive(stateDir, "novel-1", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
+		t.Fatalf("invalid job yaml should stop new job mutation: created=%v err=%v", created, err)
 	}
 }
 

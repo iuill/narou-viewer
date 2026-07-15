@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,8 +210,7 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 	for _, path := range jobPaths {
 		read := readJobDocument(path)
 		if read.err != nil {
-			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, read.err)
-			continue
+			return NovelStatePruneResult{}, fmt.Errorf("read extraction job during prune %s: %w", path, read.err)
 		} else if !read.exists || read.incompatible || read.document.NovelID != novelID {
 			continue
 		}
@@ -257,8 +255,7 @@ func loadJobRecords(stateDir string) ([]JobWithNovel, error) {
 	for _, path := range paths {
 		read := readJobDocument(path)
 		if read.err != nil {
-			log.Printf("extraction: skipping unreadable extraction job %s: %v", path, read.err)
-			continue
+			return nil, fmt.Errorf("read extraction job %s: %w", path, read.err)
 		} else if !read.exists {
 			continue
 		}
@@ -384,7 +381,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 					return recovered, incompatibleErr
 				}
 				job.Status = "incompatible"
-				message := incompatibleErr.Error()
+				message := "抽出チェックポイントが現在の build と互換性がないため隔離しました。内容を確認してから再実行してください。"
 				job.ErrorMessage = &message
 				job.ActiveWorkers = nil
 				if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {

@@ -221,6 +221,31 @@ func usageSQLiteDSN(dbPath string) string {
 	return "file:" + filepath.ToSlash(dbPath) + "?_pragma=busy_timeout(5000)"
 }
 
+func usageReadOnlySQLiteDSN(dbPath string) string {
+	return "file:" + filepath.ToSlash(dbPath) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)"
+}
+
+// EnsureUsageDB applies supported migrations before the HTTP server starts.
+// Missing and zero-length databases remain lazy so unused installations do not
+// create AI usage state during startup.
+func EnsureUsageDB(dbPath string) error {
+	info, err := os.Stat(dbPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+	db, err := openUsageWriteDB(dbPath)
+	if err != nil {
+		return err
+	}
+	return db.Close()
+}
+
 func ensureUsageDBFileMode(dbPath string) error {
 	file, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
@@ -340,8 +365,16 @@ func openUsageDB(dbPath string) (*sql.DB, bool, error) {
 	if info.Size() == 0 {
 		return nil, false, nil
 	}
-	db, err := openUsageWriteDB(dbPath)
-	return db, err == nil, err
+	db, err := sql.Open("sqlite", usageReadOnlySQLiteDSN(dbPath))
+	if err != nil {
+		return nil, false, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := usagemigration.Preflight(db, dbPath); err != nil {
+		db.Close()
+		return nil, false, err
+	}
+	return db, true, nil
 }
 
 func loadUsageRequests(db *sql.DB, runID string) ([]UsageRequest, error) {

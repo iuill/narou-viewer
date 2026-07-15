@@ -90,6 +90,10 @@ func TestBackupRestoreEncryptedColdGeneration(t *testing.T) {
 	if err := os.WriteFile(derivedPath, []byte("schema_version: 99\n"), 0o600); err != nil {
 		t.Fatalf("mutate derived cache: %v", err)
 	}
+	staleLibrarySHM := filepath.Join(dataDir, "novel-fetcher", "library.sqlite-shm")
+	if err := os.WriteFile(staleLibrarySHM, []byte("stale shared memory"), 0o600); err != nil {
+		t.Fatalf("write stale library shm: %v", err)
+	}
 	restored, err := Restore(context.Background(), RestoreOptions{
 		DataDir:      dataDir,
 		ArchivePath:  result.ArchivePath,
@@ -108,6 +112,9 @@ func TestBackupRestoreEncryptedColdGeneration(t *testing.T) {
 	}
 	if _, err := os.Stat(derivedPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("derived cache should be removed: %v", err)
+	}
+	if _, err := os.Stat(staleLibrarySHM); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale library shm should be removed: %v", err)
 	}
 	if leftovers, _ := filepath.Glob(filepath.Join(dataDir, ".restore-*")); len(leftovers) != 0 {
 		t.Fatalf("restore temporary directories remain: %v", leftovers)

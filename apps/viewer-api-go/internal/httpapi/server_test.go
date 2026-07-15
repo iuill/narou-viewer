@@ -4473,7 +4473,10 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 	if len(progressEvents) != 3 || progressEvents[0].Phase != "start" || progressEvents[1].Phase != "complete" || progressEvents[2].Phase != "start" {
 		t.Fatalf("checkpointed generation should emit per-batch start/complete progress: %+v", progressEvents)
 	}
-	checkpoint := server.loadExtractionCheckpoint("novel-1", "2")
+	checkpoint, err := server.extractionRuntime().LoadCheckpoint("novel-1", "2")
+	if err != nil {
+		t.Fatalf("load checkpoint: %v", err)
+	}
 	if len(checkpoint.ProcessedEpisodeIndexes) != 1 || checkpoint.ProcessedEpisodeIndexes[0] != "1" || len(checkpoint.Characters) != 1 {
 		t.Fatalf("checkpoint should preserve completed first episode: %+v", checkpoint)
 	}
@@ -4643,25 +4646,6 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 	}
 	if err := server.recordExtractionUsage(ai.UsageRun{}); err != nil {
 		t.Fatalf("nil store usage recorder should be a no-op: %v", err)
-	}
-
-	badCheckpointPath := server.extractionCheckpointPath("novel-1", "1")
-	if err := os.MkdirAll(filepath.Dir(badCheckpointPath), 0o755); err != nil {
-		t.Fatalf("mkdir checkpoint dir: %v", err)
-	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"novelId":"other","upToEpisodeIndex":"1","characters":[{"CanonicalName":"bad"}]}`), 0o644); err != nil {
-		t.Fatalf("write mismatched checkpoint: %v", err)
-	}
-	checkpoint := server.loadExtractionCheckpoint("novel-1", "1")
-	if len(checkpoint.Characters) != 0 || checkpoint.NovelID != "novel-1" {
-		t.Fatalf("mismatched checkpoint should reset to an empty checkpoint: %+v", checkpoint)
-	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":1,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
-		t.Fatalf("write unsupported schema checkpoint: %v", err)
-	}
-	checkpoint = server.loadExtractionCheckpoint("novel-1", "1")
-	if checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion || len(checkpoint.Characters) != 0 {
-		t.Fatalf("unsupported schema checkpoint should reset to current empty checkpoint: %+v", checkpoint)
 	}
 
 	blockedServer := &Server{dataDir: t.TempDir()}

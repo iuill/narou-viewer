@@ -477,6 +477,7 @@ func restoreTargets() []string {
 	targets := []string{
 		"novel-fetcher/library.sqlite",
 		"novel-fetcher/library.sqlite-wal",
+		"novel-fetcher/library.sqlite-shm",
 		"novel-fetcher/works",
 	}
 	for _, name := range []string{readingstate.FileName, bookmarks.FileName, preferences.FileName, novelsettings.FileName, aisettings.FileName, publications.FileName} {

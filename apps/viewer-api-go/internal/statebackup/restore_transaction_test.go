@@ -146,6 +146,47 @@ func TestRecoverCleansInterruptedStagingTransaction(t *testing.T) {
 	}
 }
 
+func TestRestoreTransactionRemovesAndCanRollbackStaleLibrarySHM(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := ensureRestoreRoots(dataDir); err != nil {
+		t.Fatalf("ensureRestoreRoots: %v", err)
+	}
+	transaction := newRestoreTransaction("library-shm-rollback-test")
+	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
+	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	if err := beginRestoreTransaction(dataDir, &transaction); err != nil {
+		t.Fatalf("beginRestoreTransaction: %v", err)
+	}
+	if err := createEmptyPrivateDirectory(stageRoot); err != nil {
+		t.Fatalf("create stage: %v", err)
+	}
+	if err := prepareStagingLayout(stageRoot); err != nil {
+		t.Fatalf("prepare stage: %v", err)
+	}
+	if err := createEmptyPrivateDirectory(rollbackRoot); err != nil {
+		t.Fatalf("create rollback: %v", err)
+	}
+	shmPath := filepath.Join(dataDir, "novel-fetcher", "library.sqlite-shm")
+	if err := os.WriteFile(shmPath, []byte("old shared memory"), 0o600); err != nil {
+		t.Fatalf("write stale shm: %v", err)
+	}
+	if err := buildRestoreTransactionPlan(dataDir, &transaction); err != nil {
+		t.Fatalf("buildRestoreTransactionPlan: %v", err)
+	}
+	if err := publishRestoreTransaction(context.Background(), dataDir, &transaction); err != nil {
+		t.Fatalf("publishRestoreTransaction: %v", err)
+	}
+	if _, err := os.Lstat(shmPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("publish should remove stale shm: %v", err)
+	}
+	if err := rollbackRestoreTransaction(context.Background(), dataDir, &transaction); err != nil {
+		t.Fatalf("rollbackRestoreTransaction: %v", err)
+	}
+	if raw, err := os.ReadFile(shmPath); err != nil || string(raw) != "old shared memory" {
+		t.Fatalf("rollback should restore stale shm: raw=%q err=%v", raw, err)
+	}
+}
+
 func TestRecoverFailsClosedOnMalformedJournal(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := ensureRestoreRoots(dataDir); err != nil {

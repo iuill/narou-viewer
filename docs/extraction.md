@@ -45,6 +45,8 @@
 
 character events と term profiles は生成正本、character profiles と job index は派生 view / index、extraction jobs は運用正本、checkpoint は再実行 cost を伴う一時 state として扱う。現行 version、未知 version、backup / restore、prune の横断方針は [`state-schema-policy.md`](state-schema-policy.md) に集約する。
 
+malformed job file は対象作品を安全に特定できないため、一覧・新規queue・起動時recovery・作品削除でlogしてskipせずfail-closedにする。未知versionでもtyped headerから対象を識別できるjobは`incompatible`として表示し、対応buildまたは明示復旧まで自動resume / overwriteしない。
+
 ## API
 
 - `GET /api/library/novels/{novelId}/characters?upToEpisodeIndex=...`

@@ -16,11 +16,8 @@ type archiveCandidate struct {
 }
 
 func PruneArchives(directory string, policy RetentionPolicy) ([]string, error) {
-	if policy.KeepGenerations < 1 {
-		return nil, errors.New("retention keep generations must be at least 1")
-	}
-	if policy.MaxAge < 0 {
-		return nil, errors.New("retention max age cannot be negative")
+	if err := validateRetentionPolicy(policy); err != nil {
+		return nil, err
 	}
 	now := time.Now
 	if policy.Now != nil {
@@ -56,7 +53,7 @@ func PruneArchives(directory string, policy RetentionPolicy) ([]string, error) {
 		if index < policy.KeepGenerations {
 			continue
 		}
-		if policy.MaxAge > 0 && now().Sub(candidate.modTime) <= policy.MaxAge {
+		if now().Sub(candidate.modTime) <= policy.MaxAge {
 			continue
 		}
 		if err := os.Remove(candidate.path); err != nil {
@@ -70,4 +67,14 @@ func PruneArchives(directory string, policy RetentionPolicy) ([]string, error) {
 		}
 	}
 	return removed, nil
+}
+
+func validateRetentionPolicy(policy RetentionPolicy) error {
+	if policy.KeepGenerations < 1 {
+		return errors.New("retention keep generations must be at least 1")
+	}
+	if policy.MaxAge <= 0 {
+		return errors.New("retention max age must be positive")
+	}
+	return nil
 }

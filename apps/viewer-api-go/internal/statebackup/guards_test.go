@@ -58,11 +58,15 @@ func TestBackupOptionAndDoctorGuards(t *testing.T) {
 	if err := os.Chmod(settingsPath, 0o600); err != nil {
 		t.Fatalf("restore settings mode: %v", err)
 	}
+	retentionOutput := filepath.Join(t.TempDir(), "backups")
 	if _, err := Backup(context.Background(), BackupOptions{
-		DataDir: dataDir, OutputDir: filepath.Join(t.TempDir(), "backups"), KeyReference: "local-test-key", Recipient: recipient,
+		DataDir: dataDir, OutputDir: retentionOutput, KeyReference: "local-test-key", Recipient: recipient,
 		GenerationID: func() (string, error) { return "retention-test", nil }, Retention: &RetentionPolicy{},
-	}); err == nil || !strings.Contains(err.Error(), "retention cleanup") {
-		t.Fatalf("Backup should report retention failure after archive completion: %v", err)
+	}); err == nil || !strings.Contains(err.Error(), "retention keep generations") {
+		t.Fatalf("Backup should reject invalid retention before archive creation: %v", err)
+	}
+	if archives, _ := filepath.Glob(filepath.Join(retentionOutput, "*"+ArchiveSuffix)); len(archives) != 0 {
+		t.Fatalf("invalid retention should not create an archive: %v", archives)
 	}
 	if generation, err := randomGenerationID(); err != nil || len(generation) != 24 {
 		t.Fatalf("randomGenerationID = %q err=%v", generation, err)
@@ -398,6 +402,9 @@ func TestRetentionAndPathHelperErrorBranches(t *testing.T) {
 	if _, err := PruneArchives(t.TempDir(), RetentionPolicy{KeepGenerations: 1, MaxAge: -time.Second}); err == nil {
 		t.Fatal("negative retention age should fail")
 	}
+	if _, err := PruneArchives(t.TempDir(), RetentionPolicy{KeepGenerations: 1}); err == nil {
+		t.Fatal("zero retention age should fail instead of deleting every generation beyond keep")
+	}
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")
 	if err := os.WriteFile(target, []byte("fixture"), 0o600); err != nil {
@@ -407,7 +414,7 @@ func TestRetentionAndPathHelperErrorBranches(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("symlink retention archive: %v", err)
 	}
-	if _, err := PruneArchives(directory, RetentionPolicy{KeepGenerations: 1}); err == nil {
+	if _, err := PruneArchives(directory, RetentionPolicy{KeepGenerations: 1, MaxAge: time.Hour}); err == nil {
 		t.Fatal("retention should reject a symlink archive")
 	}
 	if _, ok := groupForPayloadPath("state/unknown"); ok {

@@ -61,3 +61,9 @@ bun run state:doctor --data-dir ./data --apply --finding finding-0123456789abcde
 `--apply` は最初の走査より前に viewer-api の writer lock を取得し、全 repair と再走査が終わるまで保持します。viewer-api が稼働中、または restore recovery journal が残る状態では mutation を開始せず拒否します。dry-run は lock を取得せず read-only のまま実行できます。
 
 repair 後は同じ data tree を再走査した report を返します。正本側の finding が残る場合は recovery hint に従い、対応 build または同一 consistency group の backup を使って復旧します。
+
+malformed extraction job / checkpoint は `novel_id` を安全に特定できないため、1 fileでも残る間は全作品の削除をfail-closedで停止します。malformed jobはさらにjob一覧・新規queue・起動時recoveryを停止し、checkpointは対象生成・対応jobのrecoveryでprovider呼出し前に停止します。まず両writerを停止してcold backupを確保し、対応buildまたはsupported backupで正本を復旧してください。手動で退避する場合は自動repairとして扱わず、元bytesを保持したうえで、そのjobの再実行・重複cost・関連checkpointを運用者が確認します。
+
+## quarantine file の管理
+
+`.unsupported-*`、`.corrupt-*`、`.rebuild-*` は自動削除せず、state doctorの通常inventoryにも含めません。特に`reader_search.sqlite.*`は第三者作品本文を含み得ます。current stateの再生成とbackup / restoreを確認し、両writerを停止した状態で、schemaごとの復旧価値を判断して機微fileとして削除します。checkpoint quarantineは重複provider requestの判断材料、character profile quarantineはeventsに存在しないheuristic情報を含み得るため、一律の期間削除は行いません。

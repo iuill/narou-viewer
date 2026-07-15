@@ -43,6 +43,11 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	if pathWithin(dataDir, outputDir) || pathWithin(outputDir, dataDir) {
 		return BackupResult{}, errors.New("backup output directory must be separate from the data tree")
 	}
+	if options.Retention != nil {
+		if err := validateRetentionPolicy(*options.Retention); err != nil {
+			return BackupResult{}, err
+		}
+	}
 	if err := ensurePrivateDirectory(outputDir); err != nil {
 		return BackupResult{}, err
 	}
@@ -160,13 +165,17 @@ func newManifest(generation string, createdAt time.Time, build string, keyRefere
 
 func blockingDoctorFinding(report statedoctor.Report) (statedoctor.Finding, bool) {
 	for _, finding := range report.Findings {
-		if finding.Severity == statedoctor.SeverityError {
-			return finding, true
-		}
 		switch finding.Kind {
-		case "insecure_file_mode", "sensitive_file_outside_state", "frontier_inversion", "term_frontier_without_character_frontier", "multiple_active_jobs":
+		case "insecure_file_mode", "sensitive_symlink", "sensitive_file_outside_state", "frontier_inversion", "term_frontier_without_character_frontier", "multiple_active_jobs":
 			return finding, true
 		}
+		if finding.Severity != statedoctor.SeverityError {
+			continue
+		}
+		if group, known := groupForSchema(finding.SchemaID); known && group == GroupVACache {
+			continue
+		}
+		return finding, true
 	}
 	return statedoctor.Finding{}, false
 }

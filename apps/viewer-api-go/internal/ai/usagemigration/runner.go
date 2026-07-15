@@ -34,6 +34,10 @@ func Guard(db *sql.DB, databasePath string) error {
 	if err != nil {
 		return err
 	}
+	return guardObservedVersion(databasePath, exists, observed)
+}
+
+func guardObservedVersion(databasePath string, exists bool, observed int) error {
 	if !exists {
 		return nil
 	}
@@ -44,11 +48,11 @@ func Guard(db *sql.DB, databasePath string) error {
 }
 
 func Preflight(db *sql.DB, databasePath string) error {
-	if err := Guard(db, databasePath); err != nil {
+	exists, observed, err := migrationVersion(db)
+	if err != nil {
 		return err
 	}
-	_, observed, err := migrationVersion(db)
-	if err != nil {
+	if err := guardObservedVersion(databasePath, exists, observed); err != nil {
 		return err
 	}
 	present, err := baselineTablePresence(db)

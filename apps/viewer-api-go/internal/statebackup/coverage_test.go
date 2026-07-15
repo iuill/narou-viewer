@@ -349,6 +349,12 @@ func TestPayloadSelectionRejectsInvalidRootsAndExactStateFiles(t *testing.T) {
 	if finding, blocked := blockingDoctorFinding(statedoctor.Report{Findings: []statedoctor.Finding{{Severity: statedoctor.SeverityError, Kind: "synthetic"}}}); !blocked || finding.Kind != "synthetic" {
 		t.Fatalf("error doctor finding should block backup: finding=%+v blocked=%v", finding, blocked)
 	}
+	if finding, blocked := blockingDoctorFinding(statedoctor.Report{Findings: []statedoctor.Finding{{SchemaID: "VA-READER-SEARCH", Severity: statedoctor.SeverityError, Kind: "sqlite_integrity_error"}}}); blocked || finding.Kind != "" {
+		t.Fatalf("excluded cache errors should not block backup: finding=%+v blocked=%v", finding, blocked)
+	}
+	if finding, blocked := blockingDoctorFinding(statedoctor.Report{Findings: []statedoctor.Finding{{SchemaID: "VA-READER-SEARCH", Severity: statedoctor.SeverityError, Kind: "sensitive_symlink"}}}); !blocked || finding.Kind != "sensitive_symlink" {
+		t.Fatalf("cache security findings should still block backup: finding=%+v blocked=%v", finding, blocked)
+	}
 	if err := validateManifest(validEmptyManifest("count-mismatch"), map[string]FileRecord{"state/reading_state.yaml": {}}, "local-test-key"); err == nil {
 		t.Fatal("payload count mismatch should fail")
 	}
@@ -387,7 +393,7 @@ func TestBackupPropagatesCredentialInspectionAndArchiveCreationFailures(t *testi
 }
 
 func TestRetentionCoversMissingDirectoryEqualTimesAndFreshCandidates(t *testing.T) {
-	if _, err := PruneArchives(filepath.Join(t.TempDir(), "missing"), RetentionPolicy{KeepGenerations: 1}); err == nil {
+	if _, err := PruneArchives(filepath.Join(t.TempDir(), "missing"), RetentionPolicy{KeepGenerations: 1, MaxAge: time.Hour}); err == nil {
 		t.Fatal("retention should reject a missing directory")
 	}
 	directory := t.TempDir()
