@@ -17,6 +17,7 @@ type LibraryStore interface {
 	FindWorkBySiteKey(site string, siteWorkID string) (model.StoredWork, bool, error)
 	FindPotentialDuplicateWorks(work model.Work) ([]model.StoredWork, error)
 	ListEpisodes(workID int) ([]model.StoredEpisode, error)
+	PreflightWorkMutation(storedWork model.StoredWork, incomingWork model.Work) error
 	UpsertWorkToc(ctx context.Context, work model.Work, status string) (model.StoredWork, error)
 	SaveEpisodeBody(ctx context.Context, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int) (model.StoredEpisode, error)
 	MarkEpisodeFailed(ctx context.Context, workID int, episodeID string, fetchError error) error
@@ -76,8 +77,11 @@ func (s *Service) runDownload(ctx context.Context, next *taskqueue.Task) error {
 		if err := s.rejectDuplicateTitleAcrossSites(next.ID, work); err != nil {
 			return err
 		}
-		previousEpisodes, err := s.existingEpisodesForWork(work)
+		existingWork, previousEpisodes, err := s.existingStateForWork(work)
 		if err != nil {
+			return err
+		}
+		if err := s.store.PreflightWorkMutation(existingWork, work); err != nil {
 			return err
 		}
 		stored, err := s.store.UpsertWorkToc(ctx, work, storage.FetchStatusPartial)
@@ -143,6 +147,9 @@ func (s *Service) runUpdate(ctx context.Context, next *taskqueue.Task) error {
 		if err != nil {
 			return err
 		}
+		if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
+			return err
+		}
 		stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
 		if err != nil {
 			return err
@@ -172,6 +179,9 @@ func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
 			return err
 		}
 		s.reporter.SetTaskTarget(next.ID, fetched.Title)
+		if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
+			return err
+		}
 		stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
 		if err != nil {
 			return err
@@ -187,12 +197,13 @@ func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
 	return nil
 }
 
-func (s *Service) existingEpisodesForWork(work model.Work) ([]model.StoredEpisode, error) {
+func (s *Service) existingStateForWork(work model.Work) (model.StoredWork, []model.StoredEpisode, error) {
 	stored, ok, err := s.store.FindWorkBySiteKey(string(work.Site), work.SiteWorkID)
 	if err != nil || !ok {
-		return nil, err
+		return model.StoredWork{}, nil, err
 	}
-	return s.store.ListEpisodes(stored.ID)
+	episodes, err := s.store.ListEpisodes(stored.ID)
+	return stored, episodes, err
 }
 
 func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task, work model.Work, stored model.StoredWork, startIndex int, skipComplete bool, skipReferenceEpisodes []model.StoredEpisode) error {
@@ -235,6 +246,10 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 			return err
 		}
 		if _, err := s.store.SaveEpisodeBody(ctx, work, stored, fetched, index); err != nil {
+			var unsupportedSchema storage.ErrUnsupportedEpisodeSchema
+			if errors.As(err, &unsupportedSchema) {
+				return err
+			}
 			s.markEpisodeFailed(stored.ID, episodeID, err)
 			s.reporter.SetTaskFailureEpisode(next.ID, episodeID, episodeID)
 			return err

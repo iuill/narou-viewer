@@ -36,7 +36,7 @@ type dbtx interface {
 }
 
 func Run(db *sql.DB, databasePath string) error {
-	if err := rejectFutureSchema(db, databasePath); err != nil {
+	if err := CheckSupported(db, databasePath); err != nil {
 		return err
 	}
 
@@ -66,7 +66,7 @@ func Run(db *sql.DB, databasePath string) error {
 	return nil
 }
 
-func rejectFutureSchema(db *sql.DB, databasePath string) error {
+func CheckSupported(db *sql.DB, databasePath string) error {
 	var migrationTableExists int
 	if err := db.QueryRow(`
 		SELECT EXISTS(

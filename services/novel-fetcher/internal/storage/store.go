@@ -73,6 +73,9 @@ func NewStore(rootDir string) (*Store, error) {
 	}
 
 	databasePath := filepath.Join(rootDir, "library.sqlite")
+	if err := preflightLibrarySchema(databasePath); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, err
@@ -83,6 +86,32 @@ func NewStore(rootDir string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func preflightLibrarySchema(databasePath string) error {
+	if _, err := os.Stat(databasePath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	absolutePath, err := filepath.Abs(databasePath)
+	if err != nil {
+		return err
+	}
+	readOnlyURL := url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath)}
+	query := readOnlyURL.Query()
+	query.Set("mode", "ro")
+	readOnlyURL.RawQuery = query.Encode()
+
+	readOnlyDB, err := sql.Open("sqlite", readOnlyURL.String())
+	if err != nil {
+		return err
+	}
+	readOnlyDB.SetMaxOpenConns(1)
+	checkErr := migration.CheckSupported(readOnlyDB, databasePath)
+	closeErr := readOnlyDB.Close()
+	return errors.Join(checkErr, closeErr)
 }
 
 func (s *Store) Close() error {
@@ -377,8 +406,14 @@ func (s *Store) guardCanonicalEpisodeBeforeSave(workID int, episodeID string, ta
 	if err == nil && storedRelativePath != "" && storedRelativePath != targetRelativePath {
 		paths = append(paths, storedRelativePath)
 	}
+	return s.validateCanonicalEpisodeFiles(paths)
+}
 
-	for _, relativePath := range paths {
+func (s *Store) validateCanonicalEpisodeFiles(relativePaths []string) error {
+	for _, relativePath := range uniqueRelativePaths(relativePaths) {
+		if strings.TrimSpace(relativePath) == "" {
+			continue
+		}
 		path := filepath.Join(s.rootDir, relativePath)
 		document, readErr := os.ReadFile(path)
 		if errors.Is(readErr, os.ErrNotExist) {
@@ -394,11 +429,43 @@ func (s *Store) guardCanonicalEpisodeBeforeSave(workID int, episodeID string, ta
 	return nil
 }
 
+func (s *Store) PreflightWorkMutation(storedWork model.StoredWork, incomingWork model.Work) error {
+	episodes := []model.StoredEpisode{}
+	if storedWork.ID != 0 {
+		var err error
+		episodes, err = s.ListEpisodes(storedWork.ID)
+		if err != nil {
+			return err
+		}
+	}
+
+	paths := make([]string, 0, len(episodes)+len(incomingWork.Episodes))
+	for _, episode := range episodes {
+		paths = append(paths, episode.BodyPath)
+	}
+	nextDirectory := filepath.ToSlash(filepath.Join("works", string(incomingWork.Site), sanitizePathSegment(incomingWork.SiteWorkID)))
+	for index, episode := range incomingWork.Episodes {
+		episodeID := canonicalEpisodeID(episode, index)
+		paths = append(paths, filepath.ToSlash(filepath.Join(nextDirectory, "episodes", sanitizePathSegment(episodeID)+".json")))
+	}
+	return s.validateCanonicalEpisodeFiles(paths)
+}
+
 func (s *Store) UpsertWorkToc(ctx context.Context, work model.Work, status string) (stored model.StoredWork, err error) {
-	if err := os.MkdirAll(s.rootDir, 0o755); err != nil {
+	if err := validateUniqueEpisodeIDs(work.Episodes); err != nil {
 		return model.StoredWork{}, err
 	}
-	if err := validateUniqueEpisodeIDs(work.Episodes); err != nil {
+	existing, ok, err := s.FindWorkBySiteKey(string(work.Site), work.SiteWorkID)
+	if err != nil {
+		return model.StoredWork{}, err
+	}
+	if !ok {
+		existing = model.StoredWork{}
+	}
+	if err := s.PreflightWorkMutation(existing, work); err != nil {
+		return model.StoredWork{}, err
+	}
+	if err := os.MkdirAll(s.rootDir, 0o755); err != nil {
 		return model.StoredWork{}, err
 	}
 
