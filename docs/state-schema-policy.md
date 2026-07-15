@@ -134,7 +134,7 @@ viewer-api の YAML / JSON state は共通 guard で header を typed decode よ
 | extraction job / index | process-wide `jobsMu`、一部 novel lock、atomic file write | job と index の crash 差分を許容し、index は job file から rebuild する |
 | checkpoint | atomic JSON write。workflow が処理順を調停 | mismatch 後の再実行は外部 cost を伴い得る |
 | `ai_usage.sqlite` | process-wide write mutex、SQLite transaction、`schema_migrations`、`busy_timeout`、file mode `0600`、`journal_mode=DELETE` | 単一 main file の cold backup を前提に rollback journal を明示。複数 process writer は対象外 |
-| `reader_search.sqlite` | open 初期化 mutex、max open connections 1、SQLite transaction、`busy_timeout`、file mode `0600` | rebuildable cache。WAL は明示していない |
+| `reader_search.sqlite` | open 初期化 mutex、max open connections 1、SQLite transaction、`busy_timeout`、file mode `0600`、`PRAGMA user_version` | rebuildable cache。version / integrity mismatch は connection close 後に quarantine して新規作成 |
 | `novel-fetcher/library.sqlite` | SQLite transaction、WAL、foreign key、番号付き migration、work mutation 前の canonical file preflight | DB と `works/**` は単一 transactionではない。外部 process / 手動 file 変更との同時実行は対象外 |
 
 multi-instance を許可する場合は process 内 mutex を前提にせず、外部 lock または transactional store へ移行する。
@@ -195,7 +195,7 @@ path は `data/` からの相対 path を表す。
 | `VA-EXTRACTION-INDEX` | `schema_version: 2`、derived | mismatch / malformed / 未知 version を quarantine し、current job file から rebuild | job file から rebuild |
 | `VA-EXTRACTION-CHECKPOINT` | `schemaVersion: 4` + generation fingerprint、supported legacy なし | schema、typed payload、novel、boundary、fingerprint mismatch を quarantine し、provider 呼出し前に `incompatible` で停止。空 checkpoint として自動再実行しない | 重複 request / cost を確認し、対応 build または明示再実行を使う |
 | `VA-AI-USAGE` | `schema_migrations`、既知 latest `1` | migration 1 が既存3テーブルを検証・採用し、旧 request metadata 列を補完する。read / write / prune の open 時に future version を拒否し、自動 drop しない。transaction、process 内 write mutex、`journal_mode=DELETE` | 対応する新しい build または supported backup を使う。writer 停止・connection close 後に main DB を cold backup する |
-| `VA-READER-SEARCH` | version 管理なし | `CREATE TABLE IF NOT EXISTS`、transaction、single connection、`busy_timeout`。WAL は明示しない | cache version を導入し、close、quarantine / drop、rebuild（[#22](https://github.com/iuill/narou-viewer/issues/22)） |
+| `VA-READER-SEARCH` | `PRAGMA user_version = 1`（table schema + `BodyText` normalization contract） | open 時に version、required columns、`PRAGMA quick_check` を検査。不一致・破損は connection close 後に `.unsupported-*` / `.corrupt-*` へ quarantine し、current DB を新規作成。canonical reader document から lazy rebuild | cache のため履歴 migration は行わない。normalization 変更時は cache version と golden test を同時更新 |
 | `NF-LIBRARY` | `schema_migrations`、既知 latest `3` | read-only connection で ledger の最大 version を preflight し、RW connection でも PRAGMA・migration 直前に再検査する。supported latest 超過時は application-issued write / migration を行わず、論理 DB 内容を変更しない。番号付き migration、transaction、WAL、foreign key、incremental auto-vacuum | 対応する新しい build または supported backup を使う。DB 単独で normalize / restore しない |
 | `NF-CANONICAL-EPISODE` | JSON `schema_version: 1`。supported legacy version なし | work mutation の preflight で既存 `body_path` と新 target path を検査し、typed decode・API 応答・TOC metadata/status 更新・skip・prune・再保存より前に拒否する。field 欠落、`1` 以外、parse error では元 file と DB metadata を変更しない | 対応 build または supported backup を使う。`library.sqlite` と `works/**` を同じ consistency group で復旧する |
 | `NF-RAW-EPISODE` | version なし | opaque HTML | schema migration 対象外。DB metadata、source URL、hash で管理 |
@@ -262,7 +262,7 @@ novels:
 
 現行の読書AI snapshot は `message` / `history` / `answer` の本文を会話用の専用 field としては保存せず、件数・文字数を保存する。ただし、件数・深さ・文字列長を制限した tool request / result には、モデルが転記したユーザー文言・検索語や、作品本文の excerpt / snippet / passage 等が含まれ得る。この制限処理は内容の redaction ではなく、usage store に key 名・内容ベースの汎用 redaction はない。既知 producer は AI credential を構造へ含めず、自由記述を上限付き tool I/O に限定する契約を再帰的な構造 test で固定する。失敗 run の `error_message` は snapshot 外の列であり、provider 由来文言が含まれ得るため契約 test の対象を分ける。
 
-`reader_search.sqlite` は correctness に影響しない cache である。normalization contract または schema の mismatch、破損時は DB connection を close し、旧 DB を quarantine または削除してから lazy rebuild する。実装は [#22](https://github.com/iuill/narou-viewer/issues/22) で追跡する。
+`reader_search.sqlite` は correctness に影響しない cache である。`user_version = 1` は table schema と `BodyText` / 検索対象 text の normalization contract を一体で表す。version、required column、`quick_check` の mismatch / 破損時は DB connection を close し、旧 main DB と残存 journal / WAL / SHM を quarantine してから current DB を新規作成する。本文は canonical reader document の通常アクセスで lazy rebuild する。full rebuild と作品 prune は繰り返しても current cache の意味が変わらない。
 
 ### 4.5 novel-fetcher storage
 
@@ -300,13 +300,15 @@ Issue #17 の importer は strict shape / version validation、unknown field 拒
 
 reader preferences と AI settings は作品非依存なので prune しない。derived character profile / job index / reader search は正本の unknown version fence を妨げず削除できる。再 prune は reading tombstone の世代だけを加算し、他の削除対象を復活させない。複数 file / DB を跨ぐ全体 transaction はないため、preflight 後の I/O failure や process crash では先行変更を rollback しない。orphan / partial failure は state doctor で診断する。
 
-### 5.2 cache version（#22）
+### 5.2 cache version
 
-`reader_search.sqlite` は version mismatch を検出したら作品単位 mutation ではなく安全な cache quarantine / rebuild を選ぶ（[#22](https://github.com/iuill/narou-viewer/issues/22)）。再生成可能 cache のため、正本の operation-wide fence とは別に扱う。
+`reader_search.sqlite` は version mismatch を検出したら作品単位 mutation ではなく安全な cache quarantine / rebuild を選ぶ。再生成可能 cache のため、正本の operation-wide fence とは別に扱う。
 
-### 5.3 診断（#24・未実装）
+### 5.3 診断
 
-state doctor は orphan、job / index mismatch、frontier inversion、parse error、unknown version を read-only 既定で報告し、明示 apply なしに state を変更しない。この診断は現行 prune の保証ではなく、[#24](https://github.com/iuill/narou-viewer/issues/24) で実装する。
+[`state-doctor`](state-doctor.md) は schema inventory、parse / unknown version、SQLite integrity、orphan、job / index mismatch、frontier inversion、DB episode row と canonical file の欠落 / hash mismatch、機微 file mode / 配置、非空 legacy `api_key` を既定 read-only で報告する。exit code は clean `0`、finding あり `1`、実行エラー `2` とし、`--format json` は finding ID、schema / path、observed / supported、recovery hint を返す。
+
+自動 repair は `--apply` と dry-run report の finding ID 個別指定を必須とし、job index、character profile、reader search cache の quarantine / rebuild だけを許可する。正本・生成正本・監査履歴・unknown future version は diagnostic-only である。
 
 ## 6. backup・restore・rollback
 
@@ -387,6 +389,7 @@ arbitrary downgrade は保証しない。rollback 前に full snapshot を取得
 - [ ] credentials、第三者本文、model output、AI usage snapshot の file mode / credential 非包含または redaction / backup を確認した
 - [ ] backup / restore に影響する場合、archive / manifest / temporary file の暗号化、アクセス制御、legacy plaintext credential 検査、retention、失敗時 cleanup を確認した
 - [ ] `architecture.md` と機能仕様に矛盾しないことを確認した
+- [ ] novel-fetcher の migration / canonical episode version を変更した場合、viewer-api `state-doctor` の二重管理 contract 値と synthetic fixture を同時更新した
 - [ ] export / import なら malformed、unknown version / field、dry-run、zero-mutation failure を test した
 
 ## 8. follow-up
@@ -398,7 +401,7 @@ arbitrary downgrade は保証しない。rollback 前に full snapshot を取得
 | [#17](https://github.com/iuill/narou-viewer/issues/17) | `EX-LIBRARY-V1` strict importer、dry-run、atomic apply、conflict policy |
 | [#20](https://github.com/iuill/narou-viewer/issues/20) | 完了: viewer-api file state の version guard、write / prune fence、fixture / migration test、character profile schema |
 | [#21](https://github.com/iuill/narou-viewer/issues/21) | 完了: `ai_usage.sqlite` の番号付き migration、future-version guard、snapshot の credential・ユーザー文言・作品本文保持契約 |
-| [#22](https://github.com/iuill/narou-viewer/issues/22) | `reader_search.sqlite` の cache version と安全な rebuild |
+| [#22](https://github.com/iuill/narou-viewer/issues/22) | 完了: `reader_search.sqlite` の cache version と安全な quarantine / rebuild |
 | [#23](https://github.com/iuill/narou-viewer/issues/23) | 完了: novel-fetcher DB / canonical episode の future-version guard |
-| [#24](https://github.com/iuill/narou-viewer/issues/24) | #20・#21・#23 の schema identification / version contract を使う state doctor / reconciliation command |
+| [#24](https://github.com/iuill/narou-viewer/issues/24) | 完了: #20・#21・#23 の contract を使う read-only state doctor、JSON report、派生 state の限定 repair |
 | [#25](https://github.com/iuill/narou-viewer/issues/25) | #20・#21・#23 を前提とする consistent backup / restore tooling、archive 機密性、manifest、lifecycle |

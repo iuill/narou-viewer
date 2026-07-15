@@ -120,22 +120,11 @@ func preflightPruneNovelStateUnlocked(stateDir string, novelID string) error {
 	if err := terms.PreflightPruneNovelState(stateDir, novelID); err != nil {
 		return err
 	}
-
-	jobsDir := filepath.Join(stateDir, "extraction_jobs")
-	jobPaths, err := filepath.Glob(filepath.Join(jobsDir, "*.yaml"))
-	if err != nil {
+	if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
 		return err
 	}
-	for _, path := range jobPaths {
-		read := readJobDocument(path)
-		if read.err != nil {
-			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
-		}
-		if read.exists && read.incompatible && read.document.NovelID == novelID {
-			return read.guardError
-		}
-	}
 
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
 	checkpointPaths, err := filepath.Glob(filepath.Join(jobsDir, "checkpoints", "*.json"))
 	if err != nil {
 		return err
@@ -156,6 +145,24 @@ func preflightPruneNovelStateUnlocked(stateDir string, novelID string) error {
 		}
 		if checkpoint.NovelID == novelID && guardErr != nil {
 			return guardErr
+		}
+	}
+	return nil
+}
+
+func preflightJobDocumentsUnlocked(stateDir string, novelID string) error {
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	jobPaths, err := filepath.Glob(filepath.Join(jobsDir, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, path := range jobPaths {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
+		}
+		if read.exists && read.incompatible && read.document.NovelID == novelID {
+			return read.guardError
 		}
 	}
 	return nil
@@ -512,6 +519,35 @@ func loadOrRebuildJobIndex(stateDir string, novelID string, path string) (jobsIn
 		}
 	}
 	return rebuilt, nil
+}
+
+func RebuildJobIndex(stateDir string, novelID string) error {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	return novelstate.WithLock(novelID, func() error {
+		if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
+		path := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
+		if _, err := os.Stat(path); err == nil {
+			if _, err := filequarantine.Move(path, "rebuild"); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		doc, err := loadOrRebuildJobIndex(stateDir, novelID, path)
+		if err != nil {
+			return err
+		}
+		doc.Revision++
+		return writeYAMLAtomic(path, doc)
+	})
 }
 
 func prependUniqueJobID(jobIDs []string, jobID string) []string {
