@@ -60,24 +60,35 @@ func APIKeyVersions(raw []byte) ([]int, error) {
 }
 
 func containsNonEmptyAPIKey(node *yaml.Node) bool {
+	return containsNonEmptyAPIKeyNode(node, map[*yaml.Node]bool{})
+}
+
+func containsNonEmptyAPIKeyNode(node *yaml.Node, visited map[*yaml.Node]bool) bool {
 	if node == nil {
 		return false
+	}
+	if visited[node] {
+		return false
+	}
+	visited[node] = true
+	if node.Kind == yaml.AliasNode {
+		return containsNonEmptyAPIKeyNode(node.Alias, visited)
 	}
 	if node.Kind == yaml.MappingNode {
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			key := node.Content[index]
 			value := node.Content[index+1]
-			if strings.EqualFold(strings.TrimSpace(key.Value), "api_key") && yamlNodeHasNonEmptyScalar(value) {
+			if strings.EqualFold(strings.TrimSpace(yamlScalarValue(key)), "api_key") && yamlNodeHasNonEmptyScalar(value) {
 				return true
 			}
-			if containsNonEmptyAPIKey(value) {
+			if containsNonEmptyAPIKeyNode(value, visited) {
 				return true
 			}
 		}
 		return false
 	}
 	for _, child := range node.Content {
-		if containsNonEmptyAPIKey(child) {
+		if containsNonEmptyAPIKeyNode(child, visited) {
 			return true
 		}
 	}
@@ -85,6 +96,7 @@ func containsNonEmptyAPIKey(node *yaml.Node) bool {
 }
 
 func yamlNodeHasNonEmptyScalar(node *yaml.Node) bool {
+	node = resolvedYAMLNode(node, map[*yaml.Node]bool{})
 	if node == nil || node.Kind != yaml.ScalarNode || node.Tag == "!!null" {
 		return false
 	}
@@ -92,30 +104,61 @@ func yamlNodeHasNonEmptyScalar(node *yaml.Node) bool {
 }
 
 func collectAPIKeyVersions(node *yaml.Node, versions map[int]bool) error {
+	return collectAPIKeyVersionsNode(node, versions, map[*yaml.Node]bool{})
+}
+
+func collectAPIKeyVersionsNode(node *yaml.Node, versions map[int]bool, visited map[*yaml.Node]bool) error {
 	if node == nil {
 		return nil
+	}
+	if visited[node] {
+		return nil
+	}
+	visited[node] = true
+	if node.Kind == yaml.AliasNode {
+		return collectAPIKeyVersionsNode(node.Alias, versions, visited)
 	}
 	if node.Kind == yaml.MappingNode {
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			key := node.Content[index]
 			value := node.Content[index+1]
-			if key.Value == "api_key_version" {
+			if yamlScalarValue(key) == "api_key_version" {
 				var version int
-				if value.Kind != yaml.ScalarNode || value.Decode(&version) != nil {
+				resolved := resolvedYAMLNode(value, map[*yaml.Node]bool{})
+				if resolved == nil || resolved.Kind != yaml.ScalarNode || resolved.Decode(&version) != nil {
 					return fmt.Errorf("api_key_version must be an integer")
 				}
 				versions[version] = true
 			}
-			if err := collectAPIKeyVersions(value, versions); err != nil {
+			if err := collectAPIKeyVersionsNode(value, versions, visited); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for _, child := range node.Content {
-		if err := collectAPIKeyVersions(child, versions); err != nil {
+		if err := collectAPIKeyVersionsNode(child, versions, visited); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func yamlScalarValue(node *yaml.Node) string {
+	node = resolvedYAMLNode(node, map[*yaml.Node]bool{})
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return node.Value
+}
+
+func resolvedYAMLNode(node *yaml.Node, visited map[*yaml.Node]bool) *yaml.Node {
+	for node != nil && node.Kind == yaml.AliasNode {
+		if visited[node] {
+			return nil
+		}
+		visited[node] = true
+		node = node.Alias
+	}
+	return node
 }

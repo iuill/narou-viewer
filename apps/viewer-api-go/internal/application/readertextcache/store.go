@@ -402,7 +402,7 @@ func validateExistingCache(ctx context.Context, db *sql.DB) (string, error) {
 	if version != CacheVersion {
 		return "unsupported", fmt.Errorf("reader search cache version %d is unsupported; current version is %d", version, CacheVersion)
 	}
-	if err := validateCacheSchema(ctx, db); err != nil {
+	if err := ValidateSchema(ctx, db); err != nil {
 		return "corrupt", err
 	}
 	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
@@ -430,13 +430,14 @@ func validateExistingCache(ctx context.Context, db *sql.DB) (string, error) {
 	return "", nil
 }
 
-func validateCacheSchema(ctx context.Context, db *sql.DB) error {
+func ValidateSchema(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(reader_search_texts)`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	columns := map[string]bool{}
+	primaryKeyColumns := map[int]string{}
 	for rows.Next() {
 		var cid int
 		var name string
@@ -448,16 +449,112 @@ func validateCacheSchema(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 		columns[name] = true
+		if primaryKey > 0 {
+			primaryKeyColumns[primaryKey] = name
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	for _, column := range []string{"novel_id", "episode_index", "content_etag", "text", "plain_text_length", "updated_at"} {
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	requiredColumns := []string{"novel_id", "episode_index", "content_etag", "text", "plain_text_length", "updated_at"}
+	for _, column := range requiredColumns {
 		if !columns[column] {
 			return fmt.Errorf("reader search cache column %s is missing", column)
 		}
 	}
-	return nil
+	conflictColumns := []string{"novel_id", "episode_index", "content_etag"}
+	if primaryKeyMatches(primaryKeyColumns, conflictColumns) {
+		return nil
+	}
+	indexRows, err := db.QueryContext(ctx, `PRAGMA index_list(reader_search_texts)`)
+	if err != nil {
+		return err
+	}
+	defer indexRows.Close()
+	uniqueIndexes := []string{}
+	for indexRows.Next() {
+		var sequence int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := indexRows.Scan(&sequence, &name, &unique, &origin, &partial); err != nil {
+			return err
+		}
+		if unique == 0 || partial != 0 {
+			continue
+		}
+		uniqueIndexes = append(uniqueIndexes, name)
+	}
+	if err := indexRows.Err(); err != nil {
+		_ = indexRows.Close()
+		return err
+	}
+	if err := indexRows.Close(); err != nil {
+		return err
+	}
+	for _, name := range uniqueIndexes {
+		indexColumns, err := sqliteIndexColumns(ctx, db, name)
+		if err != nil {
+			return err
+		}
+		if sameColumnSet(indexColumns, conflictColumns) {
+			return nil
+		}
+	}
+	return errors.New("reader search cache requires a UNIQUE or PRIMARY KEY constraint on (novel_id, episode_index, content_etag)")
+}
+
+func primaryKeyMatches(columns map[int]string, expected []string) bool {
+	if len(columns) != len(expected) {
+		return false
+	}
+	actual := make([]string, 0, len(columns))
+	for ordinal := 1; ordinal <= len(columns); ordinal++ {
+		actual = append(actual, columns[ordinal])
+	}
+	return sameColumnSet(actual, expected)
+}
+
+func sqliteIndexColumns(ctx context.Context, db *sql.DB, indexName string) ([]string, error) {
+	query := `SELECT name FROM pragma_index_info('` + strings.ReplaceAll(indexName, `'`, `''`) + `') ORDER BY seqno`
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns := []string{}
+	for rows.Next() {
+		var name sql.NullString
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		if !name.Valid {
+			columns = append(columns, "")
+			continue
+		}
+		columns = append(columns, name.String)
+	}
+	return columns, rows.Err()
+}
+
+func sameColumnSet(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, value := range left {
+		seen[value] = true
+	}
+	for _, value := range right {
+		if !seen[value] {
+			return false
+		}
+	}
+	return true
 }
 
 func quarantineCacheFiles(dbPath string, label string) (string, error) {

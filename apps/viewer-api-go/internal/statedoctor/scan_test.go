@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/statebarrier"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 
@@ -203,6 +205,24 @@ func TestApplyRejectsDiagnosticOnlyAndStaleFindingIDs(t *testing.T) {
 	}
 	if _, err := Apply(context.Background(), dataDir, []string{"finding-does-not-exist"}); err == nil {
 		t.Fatal("Apply should reject stale IDs")
+	}
+}
+
+func TestApplyRejectsActiveViewerWriterWhileDryRunRemainsAvailable(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := store.New(dataDir).Initialize(); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	lock, err := statebarrier.AcquireViewerAPI(dataDir)
+	if err != nil {
+		t.Fatalf("AcquireViewerAPI: %v", err)
+	}
+	defer lock.Close()
+	if _, err := Scan(context.Background(), dataDir); err != nil {
+		t.Fatalf("dry-run Scan with active writer: %v", err)
+	}
+	if _, err := Apply(context.Background(), dataDir, []string{"finding-does-not-exist"}); !errors.Is(err, statebarrier.ErrWriterActive) {
+		t.Fatalf("Apply with active writer error = %v", err)
 	}
 }
 

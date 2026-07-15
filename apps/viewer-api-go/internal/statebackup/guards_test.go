@@ -356,8 +356,8 @@ func TestFilesystemAndPublishHelpersFailClosed(t *testing.T) {
 	if err := os.WriteFile(newLibrary, []byte("new library"), 0o600); err != nil {
 		t.Fatalf("write new library: %v", err)
 	}
-	if _, err := publishStagedRestore(dataDir, stageRoot, rollbackRoot); err == nil {
-		t.Fatal("publish should fail on a non-empty rollback conflict")
+	if err := createEmptyPrivateDirectory(rollbackRoot); err == nil {
+		t.Fatal("restore should reject a pre-existing rollback directory")
 	}
 	if raw, err := os.ReadFile(oldLibrary); err != nil || string(raw) != "old library" {
 		t.Fatalf("publish failure did not roll back library: raw=%q err=%v", raw, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -11,11 +12,32 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/statebarrier"
 )
 
 func Apply(ctx context.Context, dataDir string, findingIDs []string) (Report, error) {
 	if len(findingIDs) == 0 {
 		return Report{}, errors.New("--apply requires at least one --finding ID")
+	}
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return Report{}, errors.New("data directory is required")
+	}
+	dataDir = filepath.Clean(dataDir)
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		return Report{}, err
+	}
+	if !info.IsDir() {
+		return Report{}, fmt.Errorf("data path is not a directory: %s", dataDir)
+	}
+	writerLock, err := statebarrier.AcquireViewerAPI(dataDir)
+	if err != nil {
+		return Report{}, fmt.Errorf("state repair requires viewer-api to be stopped: %w", err)
+	}
+	defer writerLock.Close()
+	if err := statebarrier.EnsureNoRestoreInProgress(dataDir); err != nil {
+		return Report{}, err
 	}
 	report, err := Scan(ctx, dataDir)
 	if err != nil {

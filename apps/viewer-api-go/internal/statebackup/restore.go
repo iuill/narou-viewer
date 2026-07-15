@@ -41,7 +41,7 @@ type scannedArchive struct {
 
 type payloadDestination func(record FileRecord) (io.WriteCloser, error)
 
-func Restore(ctx context.Context, options RestoreOptions) (RestoreResult, error) {
+func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult, resultErr error) {
 	dataDir := filepath.Clean(strings.TrimSpace(options.DataDir))
 	archivePath := filepath.Clean(strings.TrimSpace(options.ArchivePath))
 	if dataDir == "." || archivePath == "." {
@@ -74,14 +74,33 @@ func Restore(ctx context.Context, options RestoreOptions) (RestoreResult, error)
 	if err := ensureRestoreRoots(dataDir); err != nil {
 		return RestoreResult{}, err
 	}
+	if _, err := recoverRestoreTransactionLocked(ctx, dataDir); err != nil {
+		return RestoreResult{}, fmt.Errorf("recover interrupted restore transaction: %w", err)
+	}
 
-	stageRoot := filepath.Join(dataDir, ".restore-staging-"+preflight.manifest.GenerationID)
-	rollbackRoot := filepath.Join(dataDir, ".restore-rollback-"+preflight.manifest.GenerationID)
+	transaction := newRestoreTransaction(preflight.manifest.GenerationID)
+	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
+	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	for _, path := range []string{stageRoot, rollbackRoot} {
+		if _, err := os.Lstat(path); err == nil {
+			return RestoreResult{}, fmt.Errorf("restore temporary path already exists without a transaction journal: %s", path)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return RestoreResult{}, err
+		}
+	}
+	if err := beginRestoreTransaction(dataDir, &transaction); err != nil {
+		return RestoreResult{}, err
+	}
+	transactionActive := true
+	defer func() {
+		if transactionActive {
+			_, recoveryErr := recoverRestoreTransactionLocked(context.Background(), dataDir)
+			resultErr = errors.Join(resultErr, recoveryErr)
+		}
+	}()
 	if err := createEmptyPrivateDirectory(stageRoot); err != nil {
 		return RestoreResult{}, err
 	}
-	defer os.RemoveAll(stageRoot)
-	defer os.RemoveAll(rollbackRoot)
 	if err := prepareStagingLayout(stageRoot); err != nil {
 		return RestoreResult{}, err
 	}
@@ -95,6 +114,9 @@ func Restore(ctx context.Context, options RestoreOptions) (RestoreResult, error)
 	if staged.manifest.GenerationID != preflight.manifest.GenerationID {
 		return RestoreResult{}, errors.New("archive manifest changed between preflight and staging")
 	}
+	if err := syncRestoreTree(stageRoot); err != nil {
+		return RestoreResult{}, fmt.Errorf("sync restore staging tree: %w", err)
+	}
 	stagedReport, err := statedoctor.Scan(ctx, stageRoot)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("staged restore state doctor: %w", err)
@@ -105,30 +127,24 @@ func Restore(ctx context.Context, options RestoreOptions) (RestoreResult, error)
 	if err := createEmptyPrivateDirectory(rollbackRoot); err != nil {
 		return RestoreResult{}, err
 	}
-	actions, err := publishStagedRestore(dataDir, stageRoot, rollbackRoot)
-	if err != nil {
+	if err := buildRestoreTransactionPlan(dataDir, &transaction); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := publishRestoreTransaction(ctx, dataDir, &transaction); err != nil {
 		return RestoreResult{}, err
 	}
 	report, scanErr := statedoctor.Scan(ctx, dataDir)
 	if scanErr != nil {
-		_ = rollbackPublishedRestore(dataDir, rollbackRoot, actions)
 		return RestoreResult{}, fmt.Errorf("post-restore state doctor: %w", scanErr)
 	}
 	if finding, blocked := firstDoctorError(report); blocked {
-		rollbackErr := rollbackPublishedRestore(dataDir, rollbackRoot, actions)
-		return RestoreResult{}, errors.Join(fmt.Errorf("post-restore state doctor rejected restored generation: %s %s %s", finding.SchemaID, finding.Path, finding.Kind), rollbackErr)
+		return RestoreResult{}, fmt.Errorf("post-restore state doctor rejected restored generation: %s %s %s", finding.SchemaID, finding.Path, finding.Kind)
 	}
-	if err := os.RemoveAll(rollbackRoot); err != nil {
-		return RestoreResult{}, fmt.Errorf("remove restore rollback data: %w", err)
+	if err := commitRestoreTransaction(dataDir, &transaction); err != nil {
+		return RestoreResult{}, err
 	}
-	if err := os.RemoveAll(stageRoot); err != nil {
-		return RestoreResult{}, fmt.Errorf("remove restore staging data: %w", err)
-	}
-	finalReport, err := statedoctor.Scan(ctx, dataDir)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("final post-restore state doctor: %w", err)
-	}
-	return RestoreResult{Manifest: staged.manifest, Report: finalReport}, nil
+	transactionActive = false
+	return RestoreResult{Manifest: staged.manifest, Report: report}, nil
 }
 
 func scanEncryptedArchive(ctx context.Context, archivePath string, identities []age.Identity, destination payloadDestination) (scannedArchive, error) {
@@ -437,7 +453,10 @@ func createEmptyPrivateDirectory(path string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Mkdir(path, 0o700)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		return err
+	}
+	return errors.Join(syncDirectory(path), syncDirectory(filepath.Dir(path)))
 }
 
 func prepareStagingLayout(stageRoot string) error {
@@ -452,74 +471,6 @@ func prepareStagingLayout(stageRoot string) error {
 		}
 	}
 	return nil
-}
-
-type publishAction struct {
-	relative  string
-	hadOld    bool
-	placedNew bool
-}
-
-func publishStagedRestore(dataDir string, stageRoot string, rollbackRoot string) ([]publishAction, error) {
-	targets := restoreTargets()
-	actions := make([]publishAction, 0, len(targets))
-	for _, relative := range targets {
-		destination := filepath.Join(dataDir, filepath.FromSlash(relative))
-		staged := filepath.Join(stageRoot, filepath.FromSlash(relative))
-		rollback := filepath.Join(rollbackRoot, filepath.FromSlash(relative))
-		action := publishAction{relative: relative}
-		if _, err := os.Lstat(destination); err == nil {
-			if err := os.MkdirAll(filepath.Dir(rollback), 0o700); err != nil {
-				return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-			}
-			if err := os.Rename(destination, rollback); err != nil {
-				return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-			}
-			action.hadOld = true
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-		}
-		if _, err := os.Lstat(staged); err == nil {
-			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-				actions = append(actions, action)
-				return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-			}
-			if err := os.Rename(staged, destination); err != nil {
-				actions = append(actions, action)
-				return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-			}
-			action.placedNew = true
-		} else if !errors.Is(err, os.ErrNotExist) {
-			actions = append(actions, action)
-			return failPublishedRestore(dataDir, rollbackRoot, actions, err)
-		}
-		actions = append(actions, action)
-	}
-	return actions, nil
-}
-
-func failPublishedRestore(dataDir string, rollbackRoot string, actions []publishAction, publishErr error) ([]publishAction, error) {
-	return nil, errors.Join(publishErr, rollbackPublishedRestore(dataDir, rollbackRoot, actions))
-}
-
-func rollbackPublishedRestore(dataDir string, rollbackRoot string, actions []publishAction) error {
-	var result error
-	for index := len(actions) - 1; index >= 0; index-- {
-		action := actions[index]
-		destination := filepath.Join(dataDir, filepath.FromSlash(action.relative))
-		rollback := filepath.Join(rollbackRoot, filepath.FromSlash(action.relative))
-		if action.placedNew {
-			result = errors.Join(result, os.RemoveAll(destination))
-		}
-		if action.hadOld {
-			if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-				result = errors.Join(result, err)
-				continue
-			}
-			result = errors.Join(result, os.Rename(rollback, destination))
-		}
-	}
-	return result
 }
 
 func restoreTargets() []string {

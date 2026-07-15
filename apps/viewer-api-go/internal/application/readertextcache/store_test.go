@@ -411,10 +411,51 @@ func TestCacheHelpersPropagateDirectDatabaseAndFilesystemErrors(t *testing.T) {
 	if label, err := validateExistingCache(cancelled, db); !errors.Is(err, context.Canceled) || label != "corrupt" {
 		t.Fatalf("cancelled validateExistingCache label=%q err=%v", label, err)
 	}
-	if err := validateCacheSchema(cancelled, db); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled validateCacheSchema error = %v", err)
+	if err := ValidateSchema(cancelled, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ValidateSchema error = %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close direct sqlite: %v", err)
+	}
+}
+
+func TestValidateSchemaRequiresConflictKeyAndAcceptsEquivalentUniqueIndex(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		constraint string
+		wantError  bool
+	}{
+		{name: "missing conflict key", wantError: true},
+		{name: "equivalent unique index", constraint: `CREATE UNIQUE INDEX reader_search_conflict_key ON reader_search_texts(novel_id, episode_index, content_etag);`},
+		{name: "equivalent unique order", constraint: `CREATE UNIQUE INDEX reader_search_reordered_key ON reader_search_texts(episode_index, novel_id, content_etag);`},
+		{name: "non-equivalent unique superset", constraint: `CREATE UNIQUE INDEX reader_search_wide_key ON reader_search_texts(novel_id, episode_index, content_etag, text);`, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "schema.sqlite"))
+			if err != nil {
+				t.Fatalf("open sqlite: %v", err)
+			}
+			defer db.Close()
+			_, err = db.Exec(`
+CREATE TABLE reader_search_texts (
+	novel_id TEXT NOT NULL,
+	episode_index TEXT NOT NULL,
+	content_etag TEXT NOT NULL,
+	text TEXT NOT NULL,
+	plain_text_length INTEGER NOT NULL,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+` + testCase.constraint)
+			if err != nil {
+				t.Fatalf("seed schema: %v", err)
+			}
+			err = ValidateSchema(context.Background(), db)
+			if testCase.wantError && err == nil {
+				t.Fatal("ValidateSchema unexpectedly accepted a cache without the required conflict key")
+			}
+			if !testCase.wantError && err != nil {
+				t.Fatalf("ValidateSchema rejected equivalent unique index: %v", err)
+			}
+		})
 	}
 }

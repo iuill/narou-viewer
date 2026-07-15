@@ -106,3 +106,30 @@ func TestAcquireRejectsSymlinkParentWithoutCreatingExternalLock(t *testing.T) {
 		t.Fatalf("external lock should not be created: %v", err)
 	}
 }
+
+func TestEnsureNoRestoreInProgressFailsClosed(t *testing.T) {
+	dataDir := t.TempDir()
+	journal := filepath.Join(dataDir, RestoreJournalRelativePath)
+	if err := os.WriteFile(journal, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+	if err := EnsureNoRestoreInProgress(dataDir); !errors.Is(err, ErrRestoreInProgress) {
+		t.Fatalf("journal check error = %v", err)
+	}
+	if err := os.Remove(journal); err != nil {
+		t.Fatalf("remove journal: %v", err)
+	}
+	if err := EnsureNoRestoreInProgress(dataDir); err != nil {
+		t.Fatalf("journal-free check: %v", err)
+	}
+	target := filepath.Join(dataDir, "target")
+	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write journal target: %v", err)
+	}
+	if err := os.Symlink(target, journal); err != nil {
+		t.Fatalf("symlink journal: %v", err)
+	}
+	if err := EnsureNoRestoreInProgress(dataDir); !errors.Is(err, ErrRestoreInProgress) {
+		t.Fatalf("symlink journal check error = %v", err)
+	}
+}

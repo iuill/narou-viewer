@@ -51,6 +51,9 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 		return BackupResult{}, fmt.Errorf("cold snapshot requires viewer-api and novel-fetcher to be stopped: %w", err)
 	}
 	defer locks.Close()
+	if err := statebarrier.EnsureNoRestoreInProgress(dataDir); err != nil {
+		return BackupResult{}, err
+	}
 
 	settingsPath := filepath.Join(dataDir, "state", aisettings.FileName)
 	if found, _, err := statesecurity.HasLegacyPlaintextAPIKeyIfExists(settingsPath); err != nil {

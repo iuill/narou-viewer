@@ -27,6 +27,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer writerLock.Close()
+	if err := writerlock.EnsureNoRestoreInProgress(cfg.DataDir); err != nil {
+		logger.Error("restore transaction recovery is required", "error", err)
+		os.Exit(1)
+	}
 
 	store, err := storage.NewStore(cfg.DataDir)
 	if err != nil {

@@ -58,4 +58,6 @@ bun run state:doctor --data-dir ./data --apply --finding finding-0123456789abcde
 - current character events を正本とする derived character profile の quarantine / rebuild
 - `reader_search.sqlite` の connection close、quarantine、新規 cache 作成。本文は通常アクセス時に lazy rebuild
 
+`--apply` は最初の走査より前に viewer-api の writer lock を取得し、全 repair と再走査が終わるまで保持します。viewer-api が稼働中、または restore recovery journal が残る状態では mutation を開始せず拒否します。dry-run は lock を取得せず read-only のまま実行できます。
+
 repair 後は同じ data tree を再走査した report を返します。正本側の finding が残る場合は recovery hint に従い、対応 build または同一 consistency group の backup を使って復旧します。

@@ -279,7 +279,11 @@ func TestRestoreFilesystemHelpersCoverBlockedParentsAndRollbackErrors(t *testing
 	if err := os.WriteFile(filepath.Join(root, "rollback-data"), []byte("blocked data root"), 0o600); err != nil {
 		t.Fatalf("write blocked rollback data: %v", err)
 	}
-	err := rollbackPublishedRestore(dataDir, rollbackRoot, []publishAction{{relative: "novel-fetcher/library.sqlite", hadOld: true}})
+	err := rollbackRestoreTransaction(context.Background(), dataDir, &restoreTransaction{
+		StageDirectory:    "stage",
+		RollbackDirectory: filepath.Base(rollbackRoot),
+		Actions:           []restoreTransactionAction{{Relative: "novel-fetcher/library.sqlite", HadOld: true}},
+	})
 	if err == nil {
 		t.Fatal("rollback should report a blocked destination parent")
 	}
@@ -295,8 +299,11 @@ func TestRestoreFilesystemHelpersCoverBlockedParentsAndRollbackErrors(t *testing
 			t.Fatalf("write blocked publish parent: %v", err)
 		}
 	}
-	if _, err := publishStagedRestore(publishData, publishStage, publishRollback); err == nil {
-		t.Fatal("publish should fail when destination parent is a file")
+	transaction := newRestoreTransaction("blocked-parent")
+	transaction.StageDirectory = filepath.Base(publishStage)
+	transaction.RollbackDirectory = filepath.Base(publishRollback)
+	if err := buildRestoreTransactionPlan(publishData, &transaction); err == nil {
+		t.Fatal("publish planning should fail when destination parent is a file")
 	}
 }
 

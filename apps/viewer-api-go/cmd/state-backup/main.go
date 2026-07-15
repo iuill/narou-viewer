@@ -8,23 +8,28 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"filippo.io/age"
+	"golang.org/x/sys/unix"
 
 	"narou-viewer/apps/viewer-api-go/internal/statebackup"
 )
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
+	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(run(runCtx, os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: state-backup <backup|restore|prune> [options]")
+		fmt.Fprintln(stderr, "usage: state-backup <backup|restore|recover|prune> [options]")
 		return 2
 	}
 	var err error
@@ -33,6 +38,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		err = runBackup(ctx, args[1:], stdout, stderr)
 	case "restore":
 		err = runRestore(ctx, args[1:], stdout, stderr)
+	case "recover":
+		err = runRecover(ctx, args[1:], stdout, stderr)
 	case "prune":
 		err = runPrune(args[1:], stdout, stderr)
 	default:
@@ -44,6 +51,28 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 	return 0
+}
+
+func runRecover(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
+	flags := flag.NewFlagSet("state-backup recover", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dataDir := flags.String("data-dir", defaultDataDir(), "viewer data directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("recover does not accept positional arguments")
+	}
+	recovered, err := statebackup.Recover(ctx, *dataDir)
+	if err != nil {
+		return err
+	}
+	if recovered {
+		fmt.Fprintln(stdout, "interrupted restore rolled back and temporary data removed")
+	} else {
+		fmt.Fprintln(stdout, "no interrupted restore transaction found")
+	}
+	return nil
 }
 
 func runBackup(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -185,10 +214,7 @@ func restoreIdentities(identityFile string, passphraseFile string) ([]age.Identi
 		}
 		return []age.Identity{identity}, nil
 	}
-	if err := validateSecretFile(identityFile); err != nil {
-		return nil, err
-	}
-	file, err := os.Open(identityFile)
+	file, err := openPrivateRegularFile(identityFile)
 	if err != nil {
 		return nil, err
 	}
@@ -215,10 +241,7 @@ func restoreIdentities(identityFile string, passphraseFile string) ([]age.Identi
 }
 
 func readSecretFile(path string) (string, error) {
-	if err := validateSecretFile(path); err != nil {
-		return "", err
-	}
-	file, err := os.Open(path)
+	file, err := openPrivateRegularFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -237,18 +260,30 @@ func readSecretFile(path string) (string, error) {
 	return value, nil
 }
 
-func validateSecretFile(path string) error {
-	info, err := os.Lstat(path)
+func openPrivateRegularFile(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return errors.New("secret or identity file must be a regular non-symlink file")
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("invalid secret or identity file descriptor")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("secret or identity file mode must be 0600 or stricter, got %04o", info.Mode().Perm())
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
 	}
-	return nil
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("secret or identity file must be a regular non-symlink file")
+	}
+	if info.Mode().Perm()&0o177 != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("secret or identity file mode must be 0600 or stricter, got %04o", info.Mode().Perm())
+	}
+	return file, nil
 }
 
 func defaultDataDir() string {

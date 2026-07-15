@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,41 @@ func TestRunRejectsUnknownAndIncompleteCommands(t *testing.T) {
 		if code := run(context.Background(), args, &stdout, &stderr); code == 0 {
 			t.Fatalf("run(%v) unexpectedly succeeded: stdout=%s", args, stdout.String())
 		}
+	}
+}
+
+func TestPrivateSecretReadUsesValidatedFileDescriptor(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "secret")
+	replacement := filepath.Join(root, "replacement")
+	if err := os.WriteFile(path, []byte("validated fixture"), 0o600); err != nil {
+		t.Fatalf("write validated fixture: %v", err)
+	}
+	if err := os.WriteFile(replacement, []byte("replacement fixture"), 0o600); err != nil {
+		t.Fatalf("write replacement fixture: %v", err)
+	}
+	file, err := openPrivateRegularFile(path)
+	if err != nil {
+		t.Fatalf("openPrivateRegularFile: %v", err)
+	}
+	defer file.Close()
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatalf("replace path after open: %v", err)
+	}
+	raw, err := io.ReadAll(file)
+	if err != nil || string(raw) != "validated fixture" {
+		t.Fatalf("validated descriptor content=%q err=%v", raw, err)
+	}
+}
+
+func TestRunRecoverReportsCleanDataTree(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := run(context.Background(), []string{"recover", "--data-dir", t.TempDir()}, &stdout, &stderr); code != 0 {
+		t.Fatalf("recover code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("no interrupted restore")) {
+		t.Fatalf("recover output=%q", stdout.String())
 	}
 }
 
@@ -44,6 +80,12 @@ func TestCredentialInputsRequirePrivateRegularFiles(t *testing.T) {
 	}
 	if _, err := readSecretFile(passphrasePath); err == nil {
 		t.Fatal("readSecretFile should reject group-readable files")
+	}
+	if err := os.Chmod(passphrasePath, 0o700); err != nil {
+		t.Fatalf("chmod passphrase executable: %v", err)
+	}
+	if _, err := readSecretFile(passphrasePath); err == nil {
+		t.Fatal("readSecretFile should reject executable files")
 	}
 	link := filepath.Join(root, "passphrase-link")
 	if err := os.Symlink(passphrasePath, link); err != nil {

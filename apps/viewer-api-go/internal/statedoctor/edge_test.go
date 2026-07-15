@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 )
 
@@ -243,7 +244,7 @@ func TestSQLiteDiagnosticsCoverCancellationLedgerAndStorageFailures(t *testing.T
 	if _, _, err := sqliteMigrationVersion(context.Background(), ledgerDB); err == nil {
 		t.Fatal("closed migration database should fail table discovery")
 	}
-	if readerSearchSchemaValid(context.Background(), ledgerDB) {
+	if readertextcache.ValidateSchema(context.Background(), ledgerDB) == nil {
 		t.Fatal("closed database should not have a valid reader schema")
 	}
 	if s.scanQuickCheck(context.Background(), "VA-READER-SEARCH", ledgerPath, ledgerDB) {
@@ -357,7 +358,14 @@ func TestSQLiteDiagnosticsCoverInvalidCurrentSchemasAndRowShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open reader schema fixture: %v", err)
 	}
-	if _, err := readerDB.Exec(`CREATE TABLE incomplete (value TEXT); PRAGMA user_version = 1`); err != nil {
+	if _, err := readerDB.Exec(`CREATE TABLE reader_search_texts (
+		novel_id TEXT NOT NULL,
+		episode_index TEXT NOT NULL,
+		content_etag TEXT NOT NULL,
+		text TEXT NOT NULL,
+		plain_text_length INTEGER NOT NULL,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	); PRAGMA user_version = 1`); err != nil {
 		t.Fatalf("seed reader schema fixture: %v", err)
 	}
 	if err := readerDB.Close(); err != nil {
@@ -366,7 +374,7 @@ func TestSQLiteDiagnosticsCoverInvalidCurrentSchemasAndRowShapes(t *testing.T) {
 	readerScanner := newScanner(readerRoot)
 	readerScanner.scanReaderSearchSQLite(context.Background())
 	if !reportHasKind(readerScanner.report, "cache_schema_mismatch") {
-		t.Fatalf("current version with incomplete reader schema should mismatch: %+v", readerScanner.report.Findings)
+		t.Fatalf("current version without the conflict key should mismatch: %+v", readerScanner.report.Findings)
 	}
 
 	emptyNFRoot := t.TempDir()

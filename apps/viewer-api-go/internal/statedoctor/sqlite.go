@@ -86,7 +86,7 @@ func (s *scanner) scanReaderSearchSQLite(ctx context.Context) {
 		s.add(Finding{SchemaID: "VA-READER-SEARCH", Path: s.rel(path), Kind: "cache_version_error", Severity: SeverityWarning, Observed: "unreadable", Supported: strconv.Itoa(readertextcache.CacheVersion), RecoveryHint: "connection を閉じて cache を quarantine / rebuild してください。", RepairKind: repairReaderSearch, RepairTarget: path})
 		return
 	}
-	schemaOK := readerSearchSchemaValid(ctx, db)
+	schemaOK := readertextcache.ValidateSchema(ctx, db) == nil
 	if version != readertextcache.CacheVersion || !quickOK || !schemaOK {
 		kind := "cache_version_mismatch"
 		if version == readertextcache.CacheVersion && !schemaOK {
@@ -96,36 +96,6 @@ func (s *scanner) scanReaderSearchSQLite(ctx context.Context) {
 		return
 	}
 	s.add(Finding{SchemaID: "VA-READER-SEARCH", Path: s.rel(path), Kind: "schema_current", Severity: SeverityInfo, Observed: strconv.Itoa(version), Supported: strconv.Itoa(readertextcache.CacheVersion), RecoveryHint: "table schema と text normalization contract は current です。"})
-}
-
-func readerSearchSchemaValid(ctx context.Context, db *sql.DB) bool {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(reader_search_texts)`)
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name string
-		var columnType string
-		var notNull int
-		var defaultValue sql.NullString
-		var primaryKey int
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false
-		}
-		columns[name] = true
-	}
-	if rows.Err() != nil {
-		return false
-	}
-	for _, column := range []string{"novel_id", "episode_index", "content_etag", "text", "plain_text_length", "updated_at"} {
-		if !columns[column] {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *scanner) scanNovelFetcherSQLite(ctx context.Context) {

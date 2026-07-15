@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestHasLegacyPlaintextAPIKeyFindsNestedNonEmptyValues(t *testing.T) {
@@ -26,6 +28,39 @@ func TestHasLegacyPlaintextAPIKeyFindsNestedNonEmptyValues(t *testing.T) {
 				t.Fatalf("HasLegacyPlaintextAPIKey = %v err=%v, want %v", got, err, testCase.want)
 			}
 		})
+	}
+}
+
+func TestCredentialScansResolveYAMLAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	raw := `
+secret_value: &secret_value synthetic-value
+crypto_version: &crypto_version 99
+shared_providers:
+  openrouter:
+    api_key: *secret_value
+    api_key_version: *crypto_version
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write alias fixture: %v", err)
+	}
+	if found, err := HasLegacyPlaintextAPIKey(path); err != nil || !found {
+		t.Fatalf("alias plaintext scan: found=%v err=%v", found, err)
+	}
+	versions, err := APIKeyVersions([]byte(raw))
+	if err != nil || len(versions) != 1 || versions[0] != 99 {
+		t.Fatalf("alias version scan: versions=%v err=%v", versions, err)
+	}
+}
+
+func TestCredentialScansTerminateOnCyclicAliasNodes(t *testing.T) {
+	alias := &yaml.Node{Kind: yaml.AliasNode}
+	alias.Alias = alias
+	if containsNonEmptyAPIKey(alias) {
+		t.Fatal("cyclic alias should not synthesize an API key")
+	}
+	if err := collectAPIKeyVersions(alias, map[int]bool{}); err != nil {
+		t.Fatalf("cyclic alias version scan: %v", err)
 	}
 }
 
