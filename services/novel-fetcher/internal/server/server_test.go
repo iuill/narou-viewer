@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -361,6 +363,60 @@ func TestReadEndpointsReturnValidationErrors(t *testing.T) {
 		if payload["success"] != false {
 			t.Fatalf("error payload = %#v", payload)
 		}
+	}
+}
+
+func TestEpisodeReadDoesNotReturnFutureCanonicalSchema(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := storage.NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	stored, err := saveWorkFully(t, store, model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "future-schema-api",
+		SourceURL:  "https://example.invalid/future-schema-api/",
+		Title:      "Synthetic future schema API work",
+		Author:     "Synthetic author",
+		FetchedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Episodes: []model.Episode{{
+			Index:     "1",
+			Title:     "Synthetic episode",
+			FetchedAt: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+			Element:   model.EpisodeElement{DataType: "html", Body: "<p>Synthetic body.</p>"},
+		}},
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatalf("saveWorkFully returned error: %v", err)
+	}
+	episode, found, err := store.FindEpisode(stored.ID, "1")
+	if err != nil || !found {
+		_ = store.Close()
+		t.Fatalf("FindEpisode = %#v/%v/%v", episode, found, err)
+	}
+	const futureDocument = `{"schema_version":99,"episode_id":"synthetic-future","future_body":"must-not-be-returned"}`
+	if err := os.WriteFile(filepath.Join(rootDir, episode.BodyPath), []byte(futureDocument), 0o644); err != nil {
+		_ = store.Close()
+		t.Fatalf("seed future canonical episode: %v", err)
+	}
+
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
+	startApp(t, app)
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+
+	recorder := performRequest(app, http.MethodGet, "/api/v1/works/"+storedID(stored.ID)+"/episodes/1", "")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d: %s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+	payload := decodeObject(t, recorder)
+	if payload["success"] != false || payload["canonical"] != nil {
+		t.Fatalf("error payload = %#v", payload)
+	}
+	if strings.Contains(recorder.Body.String(), "must-not-be-returned") {
+		t.Fatalf("future canonical content leaked in response: %s", recorder.Body.String())
 	}
 }
 

@@ -3,7 +3,25 @@ package migration
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 )
+
+const SupportedLatestVersion = 3
+
+type ErrFutureSchema struct {
+	Path      string
+	Observed  int
+	Supported int
+}
+
+func (e ErrFutureSchema) Error() string {
+	return fmt.Sprintf(
+		"unsupported future NF-LIBRARY schema at %q: observed migration %d, supported through %d; use a compatible newer build or restore a supported backup",
+		e.Path,
+		e.Observed,
+		e.Supported,
+	)
+}
 
 type Migration struct {
 	Version int
@@ -17,7 +35,11 @@ type dbtx interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-func Run(db *sql.DB) error {
+func Run(db *sql.DB, databasePath string) error {
+	if err := rejectFutureSchema(db, databasePath); err != nil {
+		return err
+	}
+
 	statements := []string{
 		`PRAGMA auto_vacuum = INCREMENTAL`,
 		`PRAGMA journal_mode = WAL`,
@@ -39,6 +61,35 @@ func Run(db *sql.DB) error {
 	for _, migration := range migrations {
 		if err := runMigration(db, migration); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func rejectFutureSchema(db *sql.DB, databasePath string) error {
+	var migrationTableExists int
+	if err := db.QueryRow(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM sqlite_master
+			WHERE type = 'table' AND name = 'schema_migrations'
+		)
+	`).Scan(&migrationTableExists); err != nil {
+		return err
+	}
+	if migrationTableExists == 0 {
+		return nil
+	}
+
+	var observed int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&observed); err != nil {
+		return err
+	}
+	if observed > SupportedLatestVersion {
+		return ErrFutureSchema{
+			Path:      databasePath,
+			Observed:  observed,
+			Supported: SupportedLatestVersion,
 		}
 	}
 	return nil

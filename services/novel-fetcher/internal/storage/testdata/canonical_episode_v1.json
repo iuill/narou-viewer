@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "episode_id": "synthetic-1",
+  "site_episode_id": "synthetic-1",
+  "sort_order": 0,
+  "display_index": "1",
+  "title": "Synthetic current episode",
+  "blocks": [
+    {
+      "type": "html",
+      "section": "body",
+      "html": "<p>Synthetic body.</p>"
+    }
+  ],
+  "fetched_at": "2026-01-01T00:00:00Z"
+}

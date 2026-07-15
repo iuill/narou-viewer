@@ -196,8 +196,8 @@ path は `data/` からの相対 path を表す。
 | `VA-EXTRACTION-CHECKPOINT` | `schemaVersion: 4` + generation fingerprint | schema、novel、boundary、fingerprint 不一致または read error は empty checkpoint として先頭から再実行 | mismatch は auto-resume せず quarantine。重複 request / cost を #16 で保護 |
 | `VA-AI-USAGE` | version 管理なし | `CREATE TABLE IF NOT EXISTS` と一部 column fallback。transaction と process 内 write mutex。WAL は明示しない | 番号付き migration と future-version guard。自動 drop しない（[#21](https://github.com/iuill/narou-viewer/issues/21)） |
 | `VA-READER-SEARCH` | version 管理なし | `CREATE TABLE IF NOT EXISTS`、transaction、single connection、`busy_timeout`。WAL は明示しない | cache version を導入し、close、quarantine / drop、rebuild（[#22](https://github.com/iuill/narou-viewer/issues/22)） |
-| `NF-LIBRARY` | `schema_migrations`、既知 latest `3` | 番号付き migration、transaction、WAL、foreign key、incremental auto-vacuum。未知将来 migration の明示 guard なし | supported latest 超過は startup write 前に停止（[#23](https://github.com/iuill/narou-viewer/issues/23)） |
-| `NF-CANONICAL-EPISODE` | JSON `schema_version: 1` | write は v1。read は typed unmarshal 後に version を検査しない | header を先に検査し、未知 version を本文として返却・再保存しない（#23） |
+| `NF-LIBRARY` | `schema_migrations`、既知 latest `3` | startup の PRAGMA・migration より前に ledger の最大 version を read-only 検査。supported latest 超過時は DB を変更せず停止。番号付き migration、transaction、WAL、foreign key、incremental auto-vacuum | 対応する新しい build または supported backup を使う。DB 単独で normalize / restore しない |
+| `NF-CANONICAL-EPISODE` | JSON `schema_version: 1` | typed decode・API 応答・既存 episode の再保存より前に header を検査。field 欠落、`1` 以外、parse error を拒否し、元 file を変更しない | 対応 build または supported backup を使う。`library.sqlite` と `works/**` を同じ consistency group で復旧する |
 | `NF-RAW-EPISODE` | version なし | opaque HTML | schema migration 対象外。DB metadata、source URL、hash で管理 |
 | `NF-ASSETS` | file format 固有、索引は DB | opaque binary | schema migration 対象外。DB metadata と hash の整合を検査 |
 | `NF-TASKS` | 未定 | queue は memory only | #15 で version、状態遷移、idempotency、queue order、起動 recovery、未知 version 停止規則を定義 |
@@ -265,10 +265,10 @@ novels:
 ### 4.5 novel-fetcher storage
 
 - `library.sqlite` と `works/**` は1つの logical consistency group である。
-- `library.sqlite` は WAL と番号付き migration を使う。未知の将来 migration を検出した場合は既知 migration の適用前に停止する。
-- canonical episode JSON は read 時にも `schema_version` を検証する。
+- `library.sqlite` は WAL と番号付き migration を使う。未知の将来 migration を検出した場合は、WAL / auto-vacuum 等の PRAGMA と既知 migration の適用前に停止し、path、observed / supported version、復旧案を報告する。
+- canonical episode JSON は typed decode、API 応答、既存 file の再保存より前に `schema_version` を検証する。現行 writer が常に v1 を保存するため、field 欠落は legacy とみなさず拒否する。
 - raw HTML と asset は再取得可能な場合があっても同一 bytes を保証できないため、履歴保存を重視する backup から自動除外しない。
-- #15 の task state は novel-fetcher owner 内に置き、work state との照合規則を registry に追加する。
+- #15 の task state は novel-fetcher owner 内に置き、同じ future-version write fence と work state との照合規則を registry に追加する。
 
 ### 4.6 library export
 

@@ -15,6 +15,7 @@ import (
 
 	"narou-viewer/services/novel-fetcher/internal/fetcher"
 	"narou-viewer/services/novel-fetcher/internal/model"
+	"narou-viewer/services/novel-fetcher/internal/storage/migration"
 )
 
 type fakeAssetFetcher struct {
@@ -178,6 +179,174 @@ func TestStoreSavesSQLiteAndCanonicalEpisode(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(rootDir, episodes[0].RawPath)); err != nil {
 		t.Fatalf("raw html was not written: %v", err)
 	}
+}
+
+func TestReadCanonicalEpisodeValidatesSchemaFixtureBeforeTypedDecode(t *testing.T) {
+	tests := []struct {
+		name         string
+		fixture      string
+		wantObserved *int
+		wantTitle    string
+	}{
+		{
+			name:      "current v1",
+			fixture:   "canonical_episode_v1.json",
+			wantTitle: "Synthetic current episode",
+		},
+		{
+			name:         "future v99",
+			fixture:      "canonical_episode_v99.json",
+			wantObserved: intPointer(99),
+		},
+		{
+			name:    "missing version",
+			fixture: "canonical_episode_missing_version.json",
+		},
+	}
+
+	store := &Store{rootDir: "."}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			document, err := store.ReadCanonicalEpisode(model.StoredEpisode{
+				BodyPath: filepath.Join("testdata", test.fixture),
+			})
+			if test.wantTitle != "" {
+				if err != nil {
+					t.Fatalf("ReadCanonicalEpisode returned error: %v", err)
+				}
+				if document.Title != test.wantTitle || document.SchemaVersion != canonicalEpisodeSchemaVersion {
+					t.Fatalf("document = %#v", document)
+				}
+				return
+			}
+
+			var unsupported ErrUnsupportedEpisodeSchema
+			if !errors.As(err, &unsupported) {
+				t.Fatalf("ReadCanonicalEpisode error = %v, want ErrUnsupportedEpisodeSchema", err)
+			}
+			if unsupported.Supported != canonicalEpisodeSchemaVersion {
+				t.Fatalf("supported version = %d", unsupported.Supported)
+			}
+			if test.wantObserved == nil {
+				if unsupported.Observed != nil {
+					t.Fatalf("observed version = %v, want missing", *unsupported.Observed)
+				}
+				return
+			}
+			if unsupported.Observed == nil || *unsupported.Observed != *test.wantObserved {
+				t.Fatalf("observed version = %v, want %d", unsupported.Observed, *test.wantObserved)
+			}
+		})
+	}
+}
+
+func TestSaveEpisodeBodyDoesNotOverwriteFutureCanonicalEpisode(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	defer store.Close()
+
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "future-schema-work",
+		SourceURL:  "https://example.invalid/future-schema-work/",
+		Title:      "Synthetic schema guard work",
+		Author:     "Synthetic author",
+		FetchedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Episodes: []model.Episode{{
+			Index:     "1",
+			Title:     "Synthetic episode",
+			FetchedAt: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+			Element: model.EpisodeElement{
+				DataType: "html",
+				Body:     "<p>Synthetic current body.</p>",
+			},
+		}},
+	}
+	stored, err := saveWorkFully(t, store, work)
+	if err != nil {
+		t.Fatalf("saveWorkFully returned error: %v", err)
+	}
+	episodes, err := store.ListEpisodes(stored.ID)
+	if err != nil || len(episodes) != 1 {
+		t.Fatalf("ListEpisodes = %#v, %v", episodes, err)
+	}
+
+	futureBytes, err := os.ReadFile(filepath.Join("testdata", "canonical_episode_v99.json"))
+	if err != nil {
+		t.Fatalf("read future fixture: %v", err)
+	}
+	canonicalPath := filepath.Join(rootDir, episodes[0].BodyPath)
+	if err := os.WriteFile(canonicalPath, futureBytes, 0o644); err != nil {
+		t.Fatalf("seed future canonical episode: %v", err)
+	}
+	contentHashBefore := episodes[0].ContentHash
+
+	work.Episodes[0].Element.Body = "<p>This update must be rejected.</p>"
+	_, err = store.SaveEpisodeBody(context.Background(), work, stored, work.Episodes[0], 0)
+	var unsupported ErrUnsupportedEpisodeSchema
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("SaveEpisodeBody error = %v, want ErrUnsupportedEpisodeSchema", err)
+	}
+
+	afterBytes, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatalf("read canonical episode after rejected save: %v", err)
+	}
+	if !bytes.Equal(afterBytes, futureBytes) {
+		t.Fatal("future canonical episode bytes changed after rejected save")
+	}
+	updatedEpisodes, err := store.ListEpisodes(stored.ID)
+	if err != nil || len(updatedEpisodes) != 1 {
+		t.Fatalf("ListEpisodes after rejected save = %#v, %v", updatedEpisodes, err)
+	}
+	if updatedEpisodes[0].ContentHash != contentHashBefore {
+		t.Fatalf("content hash changed from %q to %q", contentHashBefore, updatedEpisodes[0].ContentHash)
+	}
+}
+
+func TestNewStoreDoesNotModifyFutureLibraryDatabase(t *testing.T) {
+	rootDir := t.TempDir()
+	store, err := NewStore(rootDir)
+	if err != nil {
+		t.Fatalf("NewStore returned error: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future migration: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close seeded store: %v", err)
+	}
+
+	databasePath := filepath.Join(rootDir, "library.sqlite")
+	beforeBytes, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database before guarded open: %v", err)
+	}
+
+	_, err = NewStore(rootDir)
+	var futureSchema migration.ErrFutureSchema
+	if !errors.As(err, &futureSchema) {
+		t.Fatalf("NewStore error = %v, want migration.ErrFutureSchema", err)
+	}
+	if futureSchema.Path != databasePath || futureSchema.Observed != 99 || futureSchema.Supported != migration.SupportedLatestVersion {
+		t.Fatalf("future schema error = %#v", futureSchema)
+	}
+
+	afterBytes, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read database after guarded open: %v", err)
+	}
+	if !bytes.Equal(afterBytes, beforeBytes) {
+		t.Fatal("future library database bytes changed during guarded open")
+	}
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func TestNewStoreReturnsErrorWhenRootIsFile(t *testing.T) {

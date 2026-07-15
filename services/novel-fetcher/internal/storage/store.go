@@ -31,6 +31,27 @@ type Store struct {
 	assetMaterializer *storageassets.Materializer
 }
 
+const canonicalEpisodeSchemaVersion = 1
+
+type ErrUnsupportedEpisodeSchema struct {
+	Path      string
+	Observed  *int
+	Supported int
+}
+
+func (e ErrUnsupportedEpisodeSchema) Error() string {
+	observed := "missing"
+	if e.Observed != nil {
+		observed = strconv.Itoa(*e.Observed)
+	}
+	return fmt.Sprintf(
+		"unsupported NF-CANONICAL-EPISODE schema at %q: observed %s, supported %d; use a compatible build or restore a supported backup",
+		e.Path,
+		observed,
+		e.Supported,
+	)
+}
+
 const (
 	FetchStatusComplete = "complete"
 	FetchStatusPartial  = "partial"
@@ -51,7 +72,8 @@ func NewStore(rootDir string) (*Store, error) {
 		return nil, err
 	}
 
-	db, err := sql.Open("sqlite", filepath.Join(rootDir, "library.sqlite"))
+	databasePath := filepath.Join(rootDir, "library.sqlite")
+	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +97,7 @@ func (s *Store) SetAssetFetcher(assetFetcher AssetFetcher, policy fetcher.FetchP
 }
 
 func (s *Store) initialize() error {
-	return migration.Run(s.db)
+	return migration.Run(s.db, filepath.Join(s.rootDir, "library.sqlite"))
 }
 
 func (s *Store) ListWorks() ([]model.StoredWork, error) {
@@ -308,8 +330,12 @@ func (s *Store) findEpisodeRequired(workID int, episodeID string) (model.StoredE
 }
 
 func (s *Store) ReadCanonicalEpisode(episode model.StoredEpisode) (model.CanonicalEpisode, error) {
-	bytes, err := os.ReadFile(filepath.Join(s.rootDir, episode.BodyPath))
+	path := filepath.Join(s.rootDir, episode.BodyPath)
+	bytes, err := os.ReadFile(path)
 	if err != nil {
+		return model.CanonicalEpisode{}, err
+	}
+	if err := validateCanonicalEpisodeSchema(path, bytes); err != nil {
 		return model.CanonicalEpisode{}, err
 	}
 
@@ -318,6 +344,54 @@ func (s *Store) ReadCanonicalEpisode(episode model.StoredEpisode) (model.Canonic
 		return model.CanonicalEpisode{}, err
 	}
 	return document, nil
+}
+
+func validateCanonicalEpisodeSchema(path string, document []byte) error {
+	var header struct {
+		SchemaVersion *int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(document, &header); err != nil {
+		return fmt.Errorf("parse NF-CANONICAL-EPISODE schema header at %q: %w", path, err)
+	}
+	if header.SchemaVersion == nil || *header.SchemaVersion != canonicalEpisodeSchemaVersion {
+		return ErrUnsupportedEpisodeSchema{
+			Path:      path,
+			Observed:  header.SchemaVersion,
+			Supported: canonicalEpisodeSchemaVersion,
+		}
+	}
+	return nil
+}
+
+func (s *Store) guardCanonicalEpisodeBeforeSave(workID int, episodeID string, targetRelativePath string) error {
+	paths := []string{targetRelativePath}
+	var storedRelativePath string
+	err := s.db.QueryRow(`
+		SELECT body_path
+		FROM episodes
+		WHERE work_id = ? AND episode_id = ?
+	`, workID, episodeID).Scan(&storedRelativePath)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && storedRelativePath != "" && storedRelativePath != targetRelativePath {
+		paths = append(paths, storedRelativePath)
+	}
+
+	for _, relativePath := range paths {
+		path := filepath.Join(s.rootDir, relativePath)
+		document, readErr := os.ReadFile(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return readErr
+		}
+		if err := validateCanonicalEpisodeSchema(path, document); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpsertWorkToc(ctx context.Context, work model.Work, status string) (stored model.StoredWork, err error) {
@@ -445,6 +519,12 @@ func (s *Store) UpsertWorkToc(ctx context.Context, work model.Work, status strin
 }
 
 func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int) (stored model.StoredEpisode, err error) {
+	episodeID := canonicalEpisodeID(episode, sortOrder)
+	bodyRelPath := filepath.ToSlash(filepath.Join(storedWork.Directory, "episodes", sanitizePathSegment(episodeID)+".json"))
+	if err := s.guardCanonicalEpisodeBeforeSave(storedWork.ID, episodeID, bodyRelPath); err != nil {
+		return model.StoredEpisode{}, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.StoredEpisode{}, err
@@ -466,8 +546,6 @@ func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork
 	}()
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	episodeID := canonicalEpisodeID(episode, sortOrder)
-	bodyRelPath := filepath.ToSlash(filepath.Join(storedWork.Directory, "episodes", sanitizePathSegment(episodeID)+".json"))
 	rawRelPath := ""
 	if episode.RawHTML != "" {
 		rawRelPath = filepath.ToSlash(filepath.Join(storedWork.Directory, "raw", "episodes", sanitizePathSegment(episodeID)+".html"))
@@ -942,7 +1020,7 @@ func toCanonicalEpisode(episode model.Episode, episodeID string, sortOrder int) 
 	appendHTML("postscript", episode.Element.Postscript)
 
 	return model.CanonicalEpisode{
-		SchemaVersion: 1,
+		SchemaVersion: canonicalEpisodeSchemaVersion,
 		EpisodeID:     episodeID,
 		SiteEpisodeID: episode.Index,
 		SourceURL:     episode.SourceURL,
