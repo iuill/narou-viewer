@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"narou-viewer/apps/viewer-api-go/internal/ai"
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
 	"narou-viewer/apps/viewer-api-go/internal/application/extractionruntime"
@@ -47,6 +48,7 @@ func NewHandler(dataDir string) HandlerResult {
 	usageDBPath := filepath.Join(stateDir, "ai_usage.sqlite")
 	stateStore := store.New(dataDir)
 	initErr := stateStore.Initialize()
+	usageInitErr := ai.EnsureUsageDB(usageDBPath)
 	publicationService := publications.NewService(stateDir)
 	publicationInitErr := publicationService.Ensure()
 	characterInitErr := characters.EnsureStateDirs(stateDir)
@@ -77,7 +79,7 @@ func NewHandler(dataDir string) HandlerResult {
 	})
 	extractionJobsService := extractionjobs.NewService(stateDir, libraryService, stateStore)
 	characterJobCoordinator := appextraction.NewJobCoordinator(stateDir, extractionRuntime.ProcessJob)
-	joinedInitErr := errors.Join(initErr, publicationInitErr, characterInitErr, extractionInitErr, termInitErr)
+	joinedInitErr := errors.Join(initErr, usageInitErr, publicationInitErr, characterInitErr, extractionInitErr, termInitErr)
 	handler := httpapi.NewServerWithDependencies(httpapi.ServerDependencies{
 		DataDir:                  dataDir,
 		Library:                  libraryService,

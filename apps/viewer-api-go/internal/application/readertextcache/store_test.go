@@ -1,9 +1,13 @@
 package readertextcache
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/library"
@@ -58,6 +62,10 @@ func TestStoreSavesAndReadsByContentEtag(t *testing.T) {
 	}
 	if mode := info.Mode().Perm(); mode != 0o600 {
 		t.Fatalf("reader search sqlite mode = %o, want 600", mode)
+	}
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != CacheVersion {
+		t.Fatalf("reader search cache version = %d err=%v", version, err)
 	}
 }
 
@@ -146,11 +154,308 @@ func TestBodyTextMatchesReaderAssistantSearchTarget(t *testing.T) {
 	if text != "first\nsecond" {
 		t.Fatalf("BodyText = %q", text)
 	}
+	if NormalizationContractVersion != CacheVersion {
+		t.Fatalf("BodyText normalization contract version %d must move with cache version %d", NormalizationContractVersion, CacheVersion)
+	}
 }
 
 func TestReaderSearchSQLiteDSNUsesFileURI(t *testing.T) {
 	path := filepath.Join("tmp", "reader_search.sqlite")
 	if got := readerSearchSQLiteDSN(path); got != "file:tmp/reader_search.sqlite?_pragma=busy_timeout(5000)" {
 		t.Fatalf("unexpected DSN: %s", got)
+	}
+}
+
+func TestFutureCacheIsQuarantinedBeforeLazyRebuild(t *testing.T) {
+	stateDir := t.TempDir()
+	dbPath := filepath.Join(stateDir, FileName)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open future cache fixture: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE future_cache (value TEXT);
+		INSERT INTO future_cache(value) VALUES ('synthetic');
+		PRAGMA user_version = 99;
+	`); err != nil {
+		t.Fatalf("seed future cache fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future cache fixture: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read future cache fixture: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o640); err != nil {
+		t.Fatalf("chmod future cache fixture: %v", err)
+	}
+
+	store := New(stateDir)
+	if entry, ok, err := store.Get(context.Background(), "novel-1", "1", "etag-1"); err != nil || ok || entry.Text != "" {
+		t.Fatalf("future cache should rebuild to an empty cache: entry=%+v ok=%v err=%v", entry, ok, err)
+	}
+	quarantined, err := filepath.Glob(dbPath + ".unsupported-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("future cache quarantine = %v err=%v", quarantined, err)
+	}
+	after, err := os.ReadFile(quarantined[0])
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("future cache quarantine changed bytes: err=%v", err)
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("rebuilt cache mode = %v err=%v", info, err)
+	}
+	if err := store.Save(context.Background(), "novel-1", "1", "etag-1", "再構築本文"); err != nil {
+		t.Fatalf("lazy cache population after rebuild: %v", err)
+	}
+}
+
+func TestCorruptCacheIsQuarantinedAndRebuilt(t *testing.T) {
+	stateDir := t.TempDir()
+	dbPath := filepath.Join(stateDir, FileName)
+	corrupt := []byte("synthetic non-sqlite cache")
+	if err := os.WriteFile(dbPath, corrupt, 0o600); err != nil {
+		t.Fatalf("write corrupt cache: %v", err)
+	}
+	store := New(stateDir)
+	if err := store.Save(context.Background(), "novel-1", "1", "etag-1", "本文"); err != nil {
+		t.Fatalf("Save should rebuild corrupt cache: %v", err)
+	}
+	quarantined, err := filepath.Glob(dbPath + ".corrupt-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("corrupt cache quarantine = %v err=%v", quarantined, err)
+	}
+	if raw, err := os.ReadFile(quarantined[0]); err != nil || !bytes.Equal(raw, corrupt) {
+		t.Fatalf("corrupt quarantine bytes = %q err=%v", raw, err)
+	}
+}
+
+func TestValidateExistingCacheChecksVersionSchemaAndIntegrity(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), FileName)
+	db, err := openSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	if err := initSchema(context.Background(), db); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+	if label, err := validateExistingCache(context.Background(), db); err != nil || label != "" {
+		t.Fatalf("current cache validation: label=%q err=%v", label, err)
+	}
+	if _, err := db.Exec(`DROP TABLE reader_search_texts`); err != nil {
+		t.Fatalf("drop cache table: %v", err)
+	}
+	if label, err := validateExistingCache(context.Background(), db); err == nil || label != "corrupt" {
+		t.Fatalf("missing cache schema should be corrupt: label=%q err=%v", label, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close cache: %v", err)
+	}
+}
+
+func TestQuarantineCacheFilesMovesSQLiteSidecars(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), FileName)
+	paths := []string{dbPath, dbPath + "-journal", dbPath + "-wal", dbPath + "-shm"}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("synthetic cache artifact"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	quarantined, err := quarantineCacheFiles(dbPath, "test")
+	if err != nil || !strings.Contains(filepath.Base(quarantined), FileName+".test-") {
+		t.Fatalf("quarantine main cache: path=%q err=%v", quarantined, err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cache artifact should move: %s err=%v", path, err)
+		}
+		matches, err := filepath.Glob(path + ".test-*")
+		if err != nil || len(matches) != 1 {
+			t.Fatalf("quarantined artifact %s: %v err=%v", path, matches, err)
+		}
+	}
+}
+
+func TestFullRebuildAndPruneAreIdempotent(t *testing.T) {
+	stateDir := t.TempDir()
+	store := New(stateDir)
+	if err := store.Save(context.Background(), "novel-1", "1", "etag-1", "本文"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	for iteration := 0; iteration < 2; iteration++ {
+		quarantined, err := store.Rebuild(context.Background())
+		if err != nil || !strings.Contains(filepath.Base(quarantined), FileName+".rebuild-") {
+			t.Fatalf("Rebuild %d: quarantined=%q err=%v", iteration, quarantined, err)
+		}
+		if entry, ok, err := store.Get(context.Background(), "novel-1", "1", "etag-1"); err != nil || ok || entry.Text != "" {
+			t.Fatalf("rebuilt cache %d should be empty: entry=%+v ok=%v err=%v", iteration, entry, ok, err)
+		}
+	}
+	for iteration := 0; iteration < 2; iteration++ {
+		if deleted, err := store.PruneByNovelID(context.Background(), "novel-1"); err != nil || deleted != 0 {
+			t.Fatalf("idempotent prune %d: deleted=%d err=%v", iteration, deleted, err)
+		}
+	}
+}
+
+func TestRebuildHandlesNilAndMissingCache(t *testing.T) {
+	if quarantined, err := (*Store)(nil).Rebuild(context.Background()); err != nil || quarantined != "" {
+		t.Fatalf("nil Rebuild: quarantined=%q err=%v", quarantined, err)
+	}
+	stateDir := t.TempDir()
+	store := New(stateDir)
+	if quarantined, err := store.Rebuild(context.Background()); err != nil || quarantined != "" {
+		t.Fatalf("missing Rebuild: quarantined=%q err=%v", quarantined, err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, FileName)); err != nil {
+		t.Fatalf("Rebuild should create an empty current cache: %v", err)
+	}
+}
+
+func TestStorePropagatesOpenAndClosedDatabaseErrors(t *testing.T) {
+	root := t.TempDir()
+	blockedParent := filepath.Join(root, "blocked")
+	if err := os.WriteFile(blockedParent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocked parent: %v", err)
+	}
+	newBlockedStore := func() *Store {
+		return NewAtPath(filepath.Join(blockedParent, FileName))
+	}
+	if _, _, err := newBlockedStore().Get(context.Background(), "novel", "1", "etag"); err == nil {
+		t.Fatal("Get should propagate open error")
+	}
+	if _, err := newBlockedStore().GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); err == nil {
+		t.Fatal("GetMany should propagate open error")
+	}
+	if err := newBlockedStore().Save(context.Background(), "novel", "1", "etag", "text"); err == nil {
+		t.Fatal("Save should propagate open error")
+	}
+	if _, err := newBlockedStore().PruneByNovelID(context.Background(), "novel"); err == nil {
+		t.Fatal("PruneByNovelID should propagate stat error")
+	}
+	if _, err := newBlockedStore().Rebuild(context.Background()); err == nil {
+		t.Fatal("Rebuild should propagate stat error")
+	}
+
+	store := New(t.TempDir())
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	if err := store.db.Close(); err != nil {
+		t.Fatalf("close cache: %v", err)
+	}
+	if _, _, err := store.Get(context.Background(), "novel", "1", "etag"); err == nil {
+		t.Fatal("Get should propagate closed database error")
+	}
+	if _, err := store.GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); err == nil {
+		t.Fatal("GetMany should propagate closed database error")
+	}
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err == nil {
+		t.Fatal("Save should propagate closed database error")
+	}
+	if _, err := store.PruneByNovelID(context.Background(), "novel"); err == nil {
+		t.Fatal("PruneByNovelID should propagate closed database error")
+	}
+}
+
+func TestStoreContextCancellationAndEmptyNormalizedLookup(t *testing.T) {
+	store := New(t.TempDir())
+	if err := store.Save(context.Background(), "novel", "1", "etag", "text"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+	entries, err := store.GetMany(context.Background(), "novel", []LookupKey{{EpisodeIndex: " ", ContentEtag: "etag"}})
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("empty normalized lookup = %+v err=%v", entries, err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := store.Get(cancelled, "novel", "1", "etag"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Get error = %v", err)
+	}
+	if _, err := store.GetMany(cancelled, "novel", []LookupKey{{EpisodeIndex: "1", ContentEtag: "etag"}}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled GetMany error = %v", err)
+	}
+	if err := store.Save(cancelled, "novel", "1", "etag-new", "text"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Save error = %v", err)
+	}
+	if _, err := store.PruneByNovelID(cancelled, "novel"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled PruneByNovelID error = %v", err)
+	}
+}
+
+func TestCacheHelpersPropagateDirectDatabaseAndFilesystemErrors(t *testing.T) {
+	if entries, err := getManyWithDB(context.Background(), nil, "novel", nil); err != nil || len(entries) != 0 {
+		t.Fatalf("empty direct lookup = %+v err=%v", entries, err)
+	}
+	if db, err := (*Store)(nil).open(context.Background()); err != nil || db != nil {
+		t.Fatalf("nil store open = %v err=%v", db, err)
+	}
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write blocked parent: %v", err)
+	}
+	if err := ensureDBFileMode(filepath.Join(blocked, FileName)); err == nil {
+		t.Fatal("ensureDBFileMode should fail below a regular file")
+	}
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "direct.sqlite"))
+	if err != nil {
+		t.Fatalf("open direct sqlite: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := initSchema(cancelled, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled initSchema error = %v", err)
+	}
+	if label, err := validateExistingCache(cancelled, db); !errors.Is(err, context.Canceled) || label != "corrupt" {
+		t.Fatalf("cancelled validateExistingCache label=%q err=%v", label, err)
+	}
+	if err := ValidateSchema(cancelled, db); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled ValidateSchema error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close direct sqlite: %v", err)
+	}
+}
+
+func TestValidateSchemaRequiresConflictKeyAndAcceptsEquivalentUniqueIndex(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		constraint string
+		wantError  bool
+	}{
+		{name: "missing conflict key", wantError: true},
+		{name: "equivalent unique index", constraint: `CREATE UNIQUE INDEX reader_search_conflict_key ON reader_search_texts(novel_id, episode_index, content_etag);`},
+		{name: "equivalent unique order", constraint: `CREATE UNIQUE INDEX reader_search_reordered_key ON reader_search_texts(episode_index, novel_id, content_etag);`},
+		{name: "non-equivalent unique superset", constraint: `CREATE UNIQUE INDEX reader_search_wide_key ON reader_search_texts(novel_id, episode_index, content_etag, text);`, wantError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "schema.sqlite"))
+			if err != nil {
+				t.Fatalf("open sqlite: %v", err)
+			}
+			defer db.Close()
+			_, err = db.Exec(`
+CREATE TABLE reader_search_texts (
+	novel_id TEXT NOT NULL,
+	episode_index TEXT NOT NULL,
+	content_etag TEXT NOT NULL,
+	text TEXT NOT NULL,
+	plain_text_length INTEGER NOT NULL,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+` + testCase.constraint)
+			if err != nil {
+				t.Fatalf("seed schema: %v", err)
+			}
+			err = ValidateSchema(context.Background(), db)
+			if testCase.wantError && err == nil {
+				t.Fatal("ValidateSchema unexpectedly accepted a cache without the required conflict key")
+			}
+			if !testCase.wantError && err != nil {
+				t.Fatalf("ValidateSchema rejected equivalent unique index: %v", err)
+			}
+		})
 	}
 }

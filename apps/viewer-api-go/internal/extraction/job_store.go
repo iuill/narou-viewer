@@ -4,13 +4,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
-	"narou-viewer/apps/viewer-api-go/internal/novelstate"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+
+	"narou-viewer/apps/viewer-api-go/internal/characters"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
+	"narou-viewer/apps/viewer-api-go/internal/novelstate"
+	"narou-viewer/apps/viewer-api-go/internal/state/filequarantine"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
+	"narou-viewer/apps/viewer-api-go/internal/terms"
+
+	"gopkg.in/yaml.v3"
 )
 
 var jobsMu sync.Mutex
@@ -43,17 +52,39 @@ func LoadAllJobs(stateDir string) ([]JobWithNovel, error) {
 	return loadJobRecords(stateDir)
 }
 
+// LoadJobsForExecution excludes every current job owned by a novel that also
+// has an incompatible canonical job. An incompatible document whose owner
+// cannot be identified blocks background execution globally.
+func LoadJobsForExecution(stateDir string) ([]JobWithNovel, error) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	return loadJobRecordsForExecution(stateDir)
+}
+
 func PruneNovelState(stateDir string, novelID string) (NovelStatePruneResult, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 
 	var result NovelStatePruneResult
 	err := novelstate.WithLock(novelID, func() error {
+		if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
 		var err error
 		result, err = pruneNovelStateUnlocked(stateDir, novelID)
 		return err
 	})
 	return result, err
+}
+
+func PreflightPruneNovelState(stateDir string, novelID string) error {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	return novelstate.WithLock(novelID, func() error {
+		return preflightPruneNovelStateUnlocked(stateDir, novelID)
+	})
 }
 
 func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePruneResult, bool, error) {
@@ -63,6 +94,9 @@ func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePrune
 	novelID = strings.TrimSpace(novelID)
 	if novelID == "" {
 		return NovelStatePruneResult{}, false, nil
+	}
+	if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+		return NovelStatePruneResult{}, false, err
 	}
 	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
 	if err != nil {
@@ -75,11 +109,76 @@ func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePrune
 	}
 	var result NovelStatePruneResult
 	err = novelstate.WithLock(novelID, func() error {
+		if err := preflightPruneNovelStateUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
 		var err error
 		result, err = pruneNovelStateUnlocked(stateDir, novelID)
 		return err
 	})
 	return result, false, err
+}
+
+func preflightPruneNovelStateUnlocked(stateDir string, novelID string) error {
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	if err := characters.PreflightPruneNovelState(stateDir, novelID); err != nil {
+		return err
+	}
+	if err := terms.PreflightPruneNovelState(stateDir, novelID); err != nil {
+		return err
+	}
+	if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
+		return err
+	}
+
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	checkpointPaths, err := filepath.Glob(filepath.Join(jobsDir, "checkpoints", "*.json"))
+	if err != nil {
+		return err
+	}
+	for _, path := range checkpointPaths {
+		raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		_, guardErr := schemaguard.CheckJSON(raw, checkpointstore.SchemaContract)
+		var checkpoint checkpointstore.Checkpoint
+		if err := json.Unmarshal(raw, &checkpoint); err != nil {
+			_, malformedErr := schemaguard.Malformed(checkpointstore.SchemaContract, err)
+			return fmt.Errorf("preflight extraction checkpoint %s: %w", path, malformedErr)
+		}
+		if checkpoint.NovelID == novelID && guardErr != nil {
+			return guardErr
+		}
+	}
+	return nil
+}
+
+func preflightJobDocumentsUnlocked(stateDir string, novelID string) error {
+	jobsDir := filepath.Join(stateDir, "extraction_jobs")
+	jobPaths, err := filepath.Glob(filepath.Join(jobsDir, "*.yaml"))
+	if err != nil {
+		return err
+	}
+	for _, path := range jobPaths {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
+		}
+		if read.exists && read.incompatible {
+			owner := read.document.NovelID
+			if !safeFutureJobOwner(owner) || owner == novelID {
+				return read.guardError
+			}
+		}
+	}
+	return nil
 }
 
 func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneResult, error) {
@@ -123,11 +222,10 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		return NovelStatePruneResult{}, err
 	}
 	for _, path := range jobPaths {
-		var doc jobDocument
-		if ok, err := readYAMLIfExists(path, &doc); err != nil {
-			log.Printf("extraction: skipping unreadable extraction job during prune %s: %v", path, err)
-			continue
-		} else if !ok || doc.NovelID != novelID {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return NovelStatePruneResult{}, fmt.Errorf("read extraction job during prune %s: %w", path, read.err)
+		} else if !read.exists || read.incompatible || read.document.NovelID != novelID {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -141,7 +239,7 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		return NovelStatePruneResult{}, err
 	}
 	for _, path := range checkpointPaths {
-		raw, err := os.ReadFile(path)
+		raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -169,19 +267,198 @@ func loadJobRecords(stateDir string) ([]JobWithNovel, error) {
 	}
 	records := []JobWithNovel{}
 	for _, path := range paths {
-		var doc jobDocument
-		if ok, err := readYAMLIfExists(path, &doc); err != nil {
-			log.Printf("extraction: skipping unreadable extraction job %s: %v", path, err)
-			continue
-		} else if !ok {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return nil, fmt.Errorf("read extraction job %s: %w", path, read.err)
+		} else if !read.exists {
 			continue
 		}
-		records = append(records, JobWithNovel{NovelID: doc.NovelID, Job: doc.toJob()})
+		records = append(records, JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()})
 	}
+	sortJobRecords(records)
+	return records, nil
+}
+
+func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
+	paths, err := filepath.Glob(filepath.Join(stateDir, "extraction_jobs", "*.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	records := []JobWithNovel{}
+	blockedNovelIDs := map[string]struct{}{}
+	activeCounts := map[string]int{}
+	for _, path := range paths {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return nil, fmt.Errorf("read extraction job %s for execution: %w", path, read.err)
+		}
+		if !read.exists {
+			continue
+		}
+		if read.incompatible {
+			owner := read.document.NovelID
+			if !safeFutureJobOwner(owner) {
+				return nil, fmt.Errorf("incompatible extraction job owner cannot be identified; background execution is blocked: %w", read.guardError)
+			}
+			blockedNovelIDs[owner] = struct{}{}
+			continue
+		}
+		record := JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()}
+		records = append(records, record)
+		if record.Job.Status == "queued" || record.Job.Status == "running" {
+			activeCounts[record.NovelID]++
+		}
+	}
+	for novelID, count := range activeCounts {
+		if count > 1 {
+			blockedNovelIDs[novelID] = struct{}{}
+		}
+	}
+	filtered := records[:0]
+	for _, record := range records {
+		if _, blocked := blockedNovelIDs[record.NovelID]; !blocked {
+			filtered = append(filtered, record)
+		}
+	}
+	sortJobRecords(filtered)
+	return filtered, nil
+}
+
+func sortJobRecords(records []JobWithNovel) {
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].Job.CreatedAt > records[j].Job.CreatedAt
 	})
-	return records, nil
+}
+
+type jobDocumentRead struct {
+	document     jobDocument
+	exists       bool
+	incompatible bool
+	guardError   error
+	err          error
+}
+
+func readJobDocument(path string) jobDocumentRead {
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return jobDocumentRead{}
+	}
+	if err != nil {
+		return jobDocumentRead{err: err}
+	}
+	_, guardErr := schemaguard.CheckYAML(raw, JobSchemaContract)
+	var doc jobDocument
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		_, malformedErr := schemaguard.Malformed(JobSchemaContract, err)
+		return jobDocumentRead{exists: true, err: malformedErr}
+	}
+	if guardErr == nil {
+		if err := validateCurrentJobDocument(doc, path); err != nil {
+			_, malformedErr := schemaguard.Malformed(JobSchemaContract.WithPath(path), err)
+			return jobDocumentRead{exists: true, err: malformedErr}
+		}
+		return jobDocumentRead{document: doc, exists: true}
+	}
+	guardError, ok := schemaguard.AsGuardError(guardErr)
+	if !ok || guardError.Result.Status == schemaguard.StatusMalformed {
+		return jobDocumentRead{exists: true, err: guardErr}
+	}
+	doc.NovelID = probeFutureJobOwner(raw)
+	if strings.TrimSpace(doc.JobID) == "" {
+		doc.JobID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	doc.Status = "incompatible"
+	message := "この抽出 job は現在の build と互換性がないため、変更せず保持されています。"
+	doc.ErrorMessage = &message
+	return jobDocumentRead{document: doc, exists: true, incompatible: true, guardError: guardErr}
+}
+
+func ValidateCurrentJobDocument(raw []byte, path string) (JobWithNovel, error) {
+	contract := JobSchemaContract.WithPath(path)
+	if _, err := schemaguard.CheckYAML(raw, contract); err != nil {
+		return JobWithNovel{}, err
+	}
+	var document jobDocument
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		_, malformedErr := schemaguard.Malformed(contract, err)
+		return JobWithNovel{}, malformedErr
+	}
+	if err := validateCurrentJobDocument(document, path); err != nil {
+		_, malformedErr := schemaguard.Malformed(contract, err)
+		return JobWithNovel{}, malformedErr
+	}
+	return JobWithNovel{NovelID: document.NovelID, Job: document.toJob()}, nil
+}
+
+func validateCurrentJobDocument(document jobDocument, path string) error {
+	jobID, err := safeJobFileName(document.JobID)
+	if err != nil || jobID != document.JobID {
+		return errors.Join(err, errors.New("extraction job_id is not canonical"))
+	}
+	if filepath.Base(path) != jobID+".yaml" {
+		return errors.New("extraction job_id does not match its canonical filename")
+	}
+	if !safeNovelID(document.NovelID) {
+		return errors.New("extraction novel_id must be a single safe path component")
+	}
+	if !isNonNegativeIntegerString(document.RequestedUpToEpisodeIndex) {
+		return errors.New("extraction requested boundary must be a non-negative integer string")
+	}
+	switch document.Status {
+	case "queued", "running", "completed", "failed", "incompatible":
+	default:
+		return fmt.Errorf("extraction job status is invalid: %q", document.Status)
+	}
+	return nil
+}
+
+func safeNovelID(value string) bool {
+	return value != "" &&
+		value == strings.TrimSpace(value) &&
+		value != "." &&
+		value != ".." &&
+		filepath.Base(value) == value &&
+		!strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, `/\`)
+}
+
+func isNonNegativeIntegerString(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func probeFutureJobOwner(raw []byte) string {
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil || document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
+		return ""
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return ""
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		key := root.Content[index]
+		value := root.Content[index+1]
+		if key.Kind != yaml.ScalarNode || key.Value != "novel_id" {
+			continue
+		}
+		if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!str" {
+			return ""
+		}
+		return value.Value
+	}
+	return ""
+}
+
+func safeFutureJobOwner(value string) bool {
+	return safeNovelID(value)
 }
 
 func (d jobDocument) toJob() Job {
@@ -220,6 +497,9 @@ func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, err
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 
+	if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
+		return Job{}, false, err
+	}
 	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
 	if err != nil {
 		return Job{}, false, err
@@ -239,7 +519,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 
-	records, err := loadJobRecords(stateDir)
+	records, err := loadJobRecordsForExecution(stateDir)
 	if err != nil {
 		return 0, err
 	}
@@ -249,6 +529,26 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 			continue
 		}
 		job := record.Job
+		checkpointStore := checkpointstore.NewFileStore(stateDir)
+		if checkpointStore.Exists(record.NovelID, job.RequestedUpToEpisodeIndex) {
+			if _, checkpointErr := checkpointStore.Load(record.NovelID, job.RequestedUpToEpisodeIndex); checkpointErr != nil {
+				if _, ok := schemaguard.AsGuardError(checkpointErr); !ok {
+					return recovered, checkpointErr
+				}
+				// Persist the fail-stop state before moving the checkpoint. If
+				// the following quarantine fails or the process exits, startup
+				// must not requeue a checkpoint-free running job.
+				job = failStopCheckpointIncompatibleJob(job)
+				if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
+					return recovered, err
+				}
+				incompatibleErr := checkpointStore.Quarantine(record.NovelID, job.RequestedUpToEpisodeIndex, "schema or payload validation failed", checkpointErr)
+				if !checkpointstore.IsIncompatible(incompatibleErr) {
+					return recovered, incompatibleErr
+				}
+				continue
+			}
+		}
 		job.Status = "queued"
 		job.StartedAt = nil
 		job.FinishedAt = nil
@@ -271,9 +571,17 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 	return recovered, nil
 }
 
+func failStopCheckpointIncompatibleJob(job Job) Job {
+	job.Status = "incompatible"
+	message := "抽出チェックポイントが現在の build と互換性がないため自動再開を停止しました。内容を確認してから再実行してください。"
+	job.ErrorMessage = &message
+	job.ActiveWorkers = nil
+	return job
+}
+
 func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	doc := jobDocument{
-		SchemaVersion:             2,
+		SchemaVersion:             jobSchemaVersion,
 		Revision:                  1,
 		JobID:                     job.JobID,
 		NovelID:                   novelID,
@@ -297,11 +605,35 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		FinishedAt:                job.FinishedAt,
 		ErrorMessage:              job.ErrorMessage,
 	}
+	if err := validateCurrentJobDocument(doc, filepath.Join(stateDir, "extraction_jobs", job.JobID+".yaml")); err != nil {
+		return err
+	}
 	fileName, err := safeJobFileName(job.JobID)
 	if err != nil {
 		return err
 	}
-	if err := writeYAMLAtomic(filepath.Join(stateDir, "extraction_jobs", fileName+".yaml"), doc); err != nil {
+	path := filepath.Join(stateDir, "extraction_jobs", fileName+".yaml")
+	read := readJobDocument(path)
+	if read.err != nil {
+		return read.err
+	}
+	if read.incompatible {
+		return read.guardError
+	}
+	if job.Status == "queued" || job.Status == "running" {
+		records, err := loadJobRecords(stateDir)
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			if record.NovelID == novelID &&
+				record.Job.JobID != job.JobID &&
+				(record.Job.Status == "queued" || record.Job.Status == "running") {
+				return fmt.Errorf("extraction novel %q already has active job %q", novelID, record.Job.JobID)
+			}
+		}
+	}
+	if err := writeYAMLAtomic(path, doc); err != nil {
 		return err
 	}
 	return saveJobIndex(stateDir, novelID, job)
@@ -309,14 +641,12 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 
 func saveJobIndex(stateDir string, novelID string, job Job) error {
 	path := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
-	doc := jobsIndexDocument{SchemaVersion: 2, NovelID: novelID, JobIDs: []string{}}
-	if ok, err := readYAMLIfExists(path, &doc); err != nil {
+	doc, err := loadOrRebuildJobIndex(stateDir, novelID, path)
+	if err != nil {
 		return err
-	} else if !ok {
-		doc = jobsIndexDocument{SchemaVersion: 2, NovelID: novelID, JobIDs: []string{}}
 	}
 	doc.Revision++
-	doc.SchemaVersion = 2
+	doc.SchemaVersion = jobIndexSchemaVersion
 	doc.NovelID = novelID
 	if job.Status == "queued" || job.Status == "running" {
 		doc.ActiveJobID = &job.JobID
@@ -325,6 +655,79 @@ func saveJobIndex(stateDir string, novelID string, job Job) error {
 	}
 	doc.JobIDs = prependUniqueJobID(doc.JobIDs, job.JobID)
 	return writeYAMLAtomic(path, doc)
+}
+
+func loadOrRebuildJobIndex(stateDir string, novelID string, path string) (jobsIndexDocument, error) {
+	var doc jobsIndexDocument
+	_, err := yamlfile.ReadGuarded(path, JobIndexSchemaContract, &doc)
+	if err == nil && doc.NovelID == novelID {
+		if doc.JobIDs == nil {
+			doc.JobIDs = []string{}
+		}
+		return doc, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		if _, ok := schemaguard.AsGuardError(err); !ok {
+			return jobsIndexDocument{}, err
+		}
+		if _, moveErr := filequarantine.Move(path, "unsupported"); moveErr != nil {
+			return jobsIndexDocument{}, moveErr
+		}
+	} else if err == nil {
+		if _, moveErr := filequarantine.Move(path, "unsupported"); moveErr != nil {
+			return jobsIndexDocument{}, moveErr
+		}
+	}
+	records, loadErr := loadJobRecords(stateDir)
+	if loadErr != nil {
+		return jobsIndexDocument{}, loadErr
+	}
+	rebuilt := jobsIndexDocument{
+		SchemaVersion: jobIndexSchemaVersion,
+		Revision:      0,
+		NovelID:       novelID,
+		JobIDs:        []string{},
+	}
+	for _, record := range records {
+		if record.NovelID != novelID || strings.TrimSpace(record.Job.JobID) == "" {
+			continue
+		}
+		rebuilt.JobIDs = append(rebuilt.JobIDs, record.Job.JobID)
+		if rebuilt.ActiveJobID == nil && (record.Job.Status == "queued" || record.Job.Status == "running") {
+			jobID := record.Job.JobID
+			rebuilt.ActiveJobID = &jobID
+		}
+	}
+	return rebuilt, nil
+}
+
+func RebuildJobIndex(stateDir string, novelID string) error {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	novelID = strings.TrimSpace(novelID)
+	if novelID == "" {
+		return nil
+	}
+	return novelstate.WithLock(novelID, func() error {
+		if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
+			return err
+		}
+		path := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
+		if _, err := os.Stat(path); err == nil {
+			if _, err := filequarantine.Move(path, "rebuild"); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		doc, err := loadOrRebuildJobIndex(stateDir, novelID, path)
+		if err != nil {
+			return err
+		}
+		doc.Revision++
+		return writeYAMLAtomic(path, doc)
+	})
 }
 
 func prependUniqueJobID(jobIDs []string, jobID string) []string {

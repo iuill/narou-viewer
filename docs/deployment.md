@@ -59,7 +59,7 @@ GOOGLE_BOOKS_API_KEY=...
 - `docker-compose.prod.yml` 自体は TLS や認証を終端せず、既定では `127.0.0.1` に bind する。
 - インターネットへ公開する場合は、Caddy、Traefik、Nginx、Cloudflare Tunnel、VPN など任意の前段で TLS と認証を設定する。
 - `novel-fetcher` の `33006` は publish しない。取得 sidecar 操作は `viewer-api` の `/api/fetcher/*` 経由に限定する。
-- runtime data の backup 方針は利用者の配置先に合わせて決める。最低限、`shared-data` volume の `novel-fetcher/` と `state/` を対象にする。
+- runtime data は file / SQLite を個別に copy せず、[`state-backup`](state-backup.md) で viewer-api / novel-fetcher を停止した 1 generation の暗号化 archive として取得・復元する。
 
 ## 確認
 

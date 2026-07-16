@@ -21,7 +21,7 @@ export type ExtractionJobSummary = {
   generationMode: "openrouter" | "heuristic" | "disabled" | null;
   generationStrategy?: ExtractionGenerationStrategy | null;
   modelId: string | null;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "incompatible";
   progress?: number;
   progressStage?:
     | "preparing"

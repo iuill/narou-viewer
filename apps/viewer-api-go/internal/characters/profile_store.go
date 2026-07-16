@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"narou-viewer/apps/viewer-api-go/internal/novelstate"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 )
 
 func LoadSummary(stateDir string, novelID string, upToEpisodeIndex string) (SummaryResponse, bool, error) {
@@ -15,9 +16,22 @@ func LoadSummary(stateDir string, novelID string, upToEpisodeIndex string) (Summ
 func LoadSummaryForEpisodes(stateDir string, novelID string, upToEpisodeIndex string, episodeIndexes []string) (SummaryResponse, bool, error) {
 	path := filepath.Join(stateDir, "character_profiles", novelID+".yaml")
 	var doc profilesDocument
-	ok, err := readYAMLIfExists(path, &doc)
+	ok, _, err := readCharacterProfilesIfExists(path, &doc)
 	if err != nil {
-		return SummaryResponse{}, false, err
+		if _, isGuardError := schemaguard.AsGuardError(err); !isGuardError {
+			return SummaryResponse{}, false, err
+		}
+		materialized, materializeErr := MaterializeGeneratedSummary(stateDir, novelID)
+		if materializeErr != nil {
+			return SummaryResponse{}, false, materializeErr
+		}
+		if !materialized {
+			return SummaryResponse{}, false, nil
+		}
+		ok, _, err = readCharacterProfilesIfExists(path, &doc)
+		if err != nil {
+			return SummaryResponse{}, false, err
+		}
 	}
 	if shouldMaterializeGeneratedSummary(stateDir, novelID, upToEpisodeIndex, ok, doc) {
 		materialized, err := MaterializeGeneratedSummary(stateDir, novelID)
@@ -25,7 +39,7 @@ func LoadSummaryForEpisodes(stateDir string, novelID string, upToEpisodeIndex st
 			return SummaryResponse{}, false, err
 		}
 		if materialized {
-			ok, err = readYAMLIfExists(path, &doc)
+			ok, _, err = readCharacterProfilesIfExists(path, &doc)
 			if err != nil {
 				return SummaryResponse{}, false, err
 			}
@@ -98,12 +112,19 @@ func shouldMaterializeGeneratedSummary(stateDir string, novelID string, upToEpis
 }
 
 func SaveHeuristicSummary(stateDir string, novelID string, processedUpToEpisodeIndex string, episodes []HeuristicEpisode) error {
-	doc := profilesDocument{
-		NovelID:                   novelID,
-		ProcessedUpToEpisodeIndex: &processedUpToEpisodeIndex,
-		Characters:                buildHeuristicProfiles(novelID, processedUpToEpisodeIndex, episodes),
-	}
-	return writeYAMLAtomic(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), doc)
+	return novelstate.WithLock(novelID, func() error {
+		path := filepath.Join(stateDir, "character_profiles", novelID+".yaml")
+		if err := prepareCharacterProfileForWrite(path); err != nil {
+			return err
+		}
+		doc := profilesDocument{
+			SchemaVersion:             characterProfilesSchemaVersion,
+			NovelID:                   novelID,
+			ProcessedUpToEpisodeIndex: &processedUpToEpisodeIndex,
+			Characters:                buildHeuristicProfiles(novelID, processedUpToEpisodeIndex, episodes),
+		}
+		return writeYAMLAtomic(path, doc)
+	})
 }
 
 func SaveGeneratedSummary(stateDir string, novelID string, processedUpToEpisodeIndex string, generated []GeneratedCharacter) error {
@@ -145,33 +166,43 @@ func SaveGeneratedSummaryWithOptions(stateDir string, novelID string, processedU
 		eventsDoc.EpisodeEtags = mergeEpisodeEtags(eventsDoc.EpisodeEtags, episodes)
 		materializedProfiles := eventRecordsToProfiles(eventsDoc.Characters)
 		doc := profilesDocument{
+			SchemaVersion:             characterProfilesSchemaVersion,
 			NovelID:                   novelID,
 			ProcessedUpToEpisodeIndex: &processedUpToEpisodeIndex,
 			IdentityMergeEvents:       append([]identityMergeEvent{}, eventsDoc.IdentityMergeEvents...),
 			Characters:                materializedProfiles,
 		}
+		profilePath := filepath.Join(stateDir, "character_profiles", novelID+".yaml")
+		if err := prepareCharacterProfileForWrite(profilePath); err != nil {
+			return err
+		}
 		if err := writeYAMLAtomic(filepath.Join(stateDir, "character_events", novelID+".yaml"), eventsDoc); err != nil {
 			return err
 		}
-		return writeYAMLAtomic(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), doc)
+		return writeYAMLAtomic(profilePath, doc)
 	})
 }
 
 func MaterializeGeneratedSummary(stateDir string, novelID string) (bool, error) {
 	materialized := false
 	err := novelstate.WithLock(novelID, func() error {
+		profilePath := filepath.Join(stateDir, "character_profiles", novelID+".yaml")
+		if err := prepareCharacterProfileForWrite(profilePath); err != nil {
+			return err
+		}
 		doc, ok, err := loadCharacterEventsDocument(stateDir, novelID)
 		if err != nil || !ok || doc.ProcessedUpToEpisodeIndex == nil {
 			return err
 		}
 		profiles := eventRecordsToProfiles(doc.Characters)
 		profileDoc := profilesDocument{
+			SchemaVersion:             characterProfilesSchemaVersion,
 			NovelID:                   novelID,
 			ProcessedUpToEpisodeIndex: doc.ProcessedUpToEpisodeIndex,
 			IdentityMergeEvents:       append([]identityMergeEvent{}, doc.IdentityMergeEvents...),
 			Characters:                profiles,
 		}
-		if err := writeYAMLAtomic(filepath.Join(stateDir, "character_profiles", novelID+".yaml"), profileDoc); err != nil {
+		if err := writeYAMLAtomic(profilePath, profileDoc); err != nil {
 			return err
 		}
 		materialized = true

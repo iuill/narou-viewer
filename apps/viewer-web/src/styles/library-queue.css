@@ -115,6 +115,7 @@
 }
 
 .queue-task-badge.status-failed,
+.queue-task-badge.status-incompatible,
 .queue-task-badge.status-canceled {
   background: rgba(171, 47, 41, 0.12);
   color: #8a251f;

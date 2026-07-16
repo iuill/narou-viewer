@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -347,6 +348,42 @@ func TestStorePruneNovelStateDeletesReaderStateAndBookmarks(t *testing.T) {
 	}
 	if revivedState.StateVersion != 1 || revivedState.Position != 0 || revivedState.LastReadEpisodeIndex != nil {
 		t.Fatalf("stale version 0 write should not revive missing tombstone: %+v", revivedState)
+	}
+}
+
+func TestStorePrunePreflightPreservesReadingStateWhenBookmarksAreFuture(t *testing.T) {
+	dataDir := t.TempDir()
+	stateStore := New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	episodeIndex := "1"
+	if _, err := stateStore.PutReadingState(ReadingStatePutInput{ReadingState: ReadingState{
+		NovelID:              "novel-1",
+		LastReadEpisodeIndex: &episodeIndex,
+		Position:             10,
+	}}); err != nil {
+		t.Fatalf("PutReadingState returned error: %v", err)
+	}
+	readingPath := filepath.Join(dataDir, "state", readingStateFile)
+	before, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state before prune: %v", err)
+	}
+	bookmarksPath := filepath.Join(dataDir, "state", bookmarksFile)
+	if err := os.WriteFile(bookmarksPath, []byte("schema_version: 99\nrevision: 1\nbookmarks: []\n"), 0o644); err != nil {
+		t.Fatalf("write future bookmarks: %v", err)
+	}
+
+	if result, err := stateStore.PruneNovelState("novel-1"); err == nil || result.ReadingStateDeleted {
+		t.Fatalf("future bookmarks should stop core prune preflight: result=%+v err=%v", result, err)
+	}
+	after, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read reading state after prune: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("reading state changed before the future bookmarks rejection")
 	}
 }
 

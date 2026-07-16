@@ -40,6 +40,8 @@
     "verify:api-go": "bash ./scripts/verify-viewer-api-go.sh",
     "verify:api-go:contract": "bash ./scripts/verify-viewer-api-go-contract.sh",
     "dev:api-go": "cd apps/viewer-api-go && go run ./cmd/viewer-api",
+    "state:doctor": "cd apps/viewer-api-go && go run ./cmd/state-doctor",
+    "state:backup": "cd apps/viewer-api-go && go run ./cmd/state-backup",
     "verify:fast": "bun run test:unit && bun run build",
     "verify": "bun run verify:fast && bun run e2e:test:container",
     "build": "bun run build:api-go && bun run build:web",

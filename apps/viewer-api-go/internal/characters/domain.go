@@ -1,6 +1,7 @@
 package characters
 
 type profilesDocument struct {
+	SchemaVersion             int                  `yaml:"schema_version"`
 	NovelID                   string               `yaml:"novel_id"`
 	ProcessedUpToEpisodeIndex *string              `yaml:"processed_up_to_episode_index"`
 	IdentityMergeEvents       []identityMergeEvent `yaml:"identity_merge_events,omitempty"`

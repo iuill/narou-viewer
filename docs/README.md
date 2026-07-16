@@ -19,6 +19,8 @@
 ## 運用
 
 - [`deployment.md`](deployment.md): 汎用 self-host とデプロイ方針
+- [`state-doctor.md`](state-doctor.md): 永続 state の read-only 診断、JSON report、派生 state の限定 repair
+- [`state-backup.md`](state-backup.md): writer barrier、暗号化 cold backup、full-generation restore、retention
 
 ## ライセンス・報告・貢献
 

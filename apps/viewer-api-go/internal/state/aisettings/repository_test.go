@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestAIGenerationSettingsReadAndPersist(t *testing.T) {
@@ -275,6 +278,64 @@ character_summary_strategy_models:
 	}
 	if settings.Settings.ExtractionStrategyModels.NameDiscoveryModelID != nil {
 		t.Fatalf("legacy strategy model should be ignored: %+v", settings.Settings.ExtractionStrategyModels)
+	}
+}
+
+func TestAIGenerationSettingsSchemaGuardRejectsMutationWithoutTouchingFile(t *testing.T) {
+	tests := []struct {
+		name       string
+		document   string
+		wantStatus schemaguard.Status
+	}{
+		{name: "future", document: "schema_version: 99\nrevision: 7\n", wantStatus: schemaguard.StatusFutureUnknown},
+		{name: "missing", document: "revision: 7\n", wantStatus: schemaguard.StatusUnsupportedLegacy},
+		{name: "malformed", document: "schema_version: [\n", wantStatus: schemaguard.StatusMalformed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(stateDir, FileName)
+			if err := os.WriteFile(path, []byte(test.document), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			repository := NewRepository(stateDir)
+			err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+				_, err := repository.PutAIGenerationPreferredMode("llm")
+				return err
+			})
+			var guardError *schemaguard.GuardError
+			if !errors.As(err, &guardError) || guardError.Result.Status != test.wantStatus {
+				t.Fatalf("error = %#v, want GuardError status %s", err, test.wantStatus)
+			}
+		})
+	}
+}
+
+func TestAIGenerationSettingsRejectsUnknownCryptoVersionWithoutTouchingFile(t *testing.T) {
+	stateDir := t.TempDir()
+	path := filepath.Join(stateDir, FileName)
+	document := []byte(`schema_version: 2
+revision: 7
+preferred_mode: heuristic
+shared_providers:
+  openrouter:
+    api_key_encrypted: opaque-payload
+    api_key_salt: opaque-salt
+    api_key_iv: opaque-iv
+    api_key_tag: opaque-tag
+    api_key_version: 99
+profiles: []
+`)
+	if err := os.WriteFile(path, document, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	repository := NewRepository(stateDir)
+	err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+		_, err := repository.PutAIGenerationPreferredMode("llm")
+		return err
+	})
+	if !IsAIGenerationSettingsCryptoError(err) {
+		t.Fatalf("error = %#v, want AIGenerationSettingsCryptoError", err)
 	}
 }
 

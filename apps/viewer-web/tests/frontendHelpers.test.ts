@@ -639,17 +639,21 @@ describe("frontend helper modules", () => {
       { status: "queued" },
       { status: "running" },
       { status: "failed" },
+      { status: "incompatible" },
       { status: "completed" }
     ];
 
     expect(partitionAiGenerationJobs(jobs)).toEqual({
       active: [{ status: "queued" }, { status: "running" }],
-      failed: [{ status: "failed" }],
+      failed: [{ status: "failed" }, { status: "incompatible" }],
       completed: [{ status: "completed" }]
     });
 
     expect(getVisibleAiGenerationJobs({ jobs, filter: "active" })).toEqual([{ status: "queued" }, { status: "running" }]);
-    expect(getVisibleAiGenerationJobs({ jobs, filter: "failed" })).toEqual([{ status: "failed" }]);
+    expect(getVisibleAiGenerationJobs({ jobs, filter: "failed" })).toEqual([
+      { status: "failed" },
+      { status: "incompatible" }
+    ]);
     expect(getVisibleAiGenerationJobs({ jobs, filter: "completed" })).toEqual([{ status: "completed" }]);
 
     expect(

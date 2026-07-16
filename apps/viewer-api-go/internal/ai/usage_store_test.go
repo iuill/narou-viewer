@@ -1,11 +1,15 @@
 package ai
 
 import (
+	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/ai/usagemigration"
 
 	_ "modernc.org/sqlite"
 )
@@ -67,9 +71,9 @@ func TestUsageSQLiteDSNIncludesBusyTimeout(t *testing.T) {
 	if dsn != "file:tmp/ai_usage.sqlite?_pragma=busy_timeout(5000)" {
 		t.Fatalf("unexpected usage sqlite dsn: %s", dsn)
 	}
-	readDSN := usageSQLiteReadDSN(filepath.Join("tmp", "ai_usage.sqlite"))
-	if readDSN != "file:tmp/ai_usage.sqlite?mode=ro&_pragma=busy_timeout(5000)" {
-		t.Fatalf("unexpected usage sqlite read dsn: %s", readDSN)
+	readOnlyDSN := usageReadOnlySQLiteDSN(filepath.Join("tmp", "ai_usage.sqlite"))
+	if readOnlyDSN != "file:tmp/ai_usage.sqlite?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)" {
+		t.Fatalf("unexpected read-only usage sqlite dsn: %s", readOnlyDSN)
 	}
 }
 
@@ -134,6 +138,24 @@ func TestSaveUsageRunCreatesReadableSQLiteUsage(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("usage database should be owner-only: mode=%o", info.Mode().Perm())
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open migrated usage database: %v", err)
+	}
+	var migrationVersion int
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&migrationVersion); err != nil {
+		t.Fatalf("read usage migration version: %v", err)
+	}
+	var journalMode string
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+		t.Fatalf("read usage journal mode: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close migrated usage database: %v", err)
+	}
+	if migrationVersion != usagemigration.SupportedLatestVersion || journalMode != "delete" {
+		t.Fatalf("usage database contract: migration=%d journal=%q", migrationVersion, journalMode)
 	}
 	usage, ok, err := LoadUsage(dbPath)
 	if err != nil {
@@ -378,6 +400,9 @@ func TestLoadUsageHandlesOlderRequestMetadataSchema(t *testing.T) {
 		}
 	}
 	db.Close()
+	if err := EnsureUsageDB(dbPath); err != nil {
+		t.Fatalf("EnsureUsageDB returned error: %v", err)
+	}
 
 	usage, ok, err := LoadUsage(dbPath)
 	if err != nil {
@@ -390,6 +415,20 @@ func TestLoadUsageHandlesOlderRequestMetadataSchema(t *testing.T) {
 	if request.Kind != "other" || request.ParentRequestIndex != nil || len(request.ToolNames) != 0 || len(request.ToolSummaries) != 0 {
 		t.Fatalf("old request metadata should use defaults: %+v", request)
 	}
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open migrated request database: %v", err)
+	}
+	defer db.Close()
+	for _, column := range []string{"kind", "parent_request_index", "tool_names", "tool_summaries"} {
+		var found int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('ai_usage_requests') WHERE name = ?`, column).Scan(&found); err != nil {
+			t.Fatalf("inspect migrated column %s: %v", column, err)
+		}
+		if found != 1 {
+			t.Fatalf("legacy request column %s was not migrated", column)
+		}
+	}
 
 	detail, ok, err := LoadUsageRun(dbPath, "run-1")
 	if err != nil {
@@ -397,6 +436,88 @@ func TestLoadUsageHandlesOlderRequestMetadataSchema(t *testing.T) {
 	}
 	if !ok || len(detail.Requests) != 1 || detail.Requests[0].Kind != "other" {
 		t.Fatalf("unexpected detail defaults: ok=%v detail=%+v", ok, detail)
+	}
+}
+
+func TestLoadUsageDoesNotMutateCurrentDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ai_usage.sqlite")
+	if err := SaveUsageRun(dbPath, UsageRun{RunID: "read-only", StartedAt: "2026-01-01T00:00:00Z", FinishedAt: "2026-01-01T00:00:00Z"}); err != nil {
+		t.Fatalf("SaveUsageRun: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o640); err != nil {
+		t.Fatalf("chmod current database: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read current database: %v", err)
+	}
+	if _, ok, err := LoadUsage(dbPath); err != nil || !ok {
+		t.Fatalf("LoadUsage: ok=%v err=%v", ok, err)
+	}
+	after, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("reread current database: %v", err)
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat current database: %v", err)
+	}
+	if !bytes.Equal(before, after) || info.Mode().Perm() != 0o640 {
+		t.Fatalf("read mutated current database: bytesEqual=%v mode=%o", bytes.Equal(before, after), info.Mode().Perm())
+	}
+}
+
+func TestFutureUsageSchemaStopsReadWriteAndPruneWithoutChangingFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ai_usage.sqlite")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open future fixture: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close future fixture: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o640); err != nil {
+		t.Fatalf("set future fixture mode: %v", err)
+	}
+	before, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("read future fixture: %v", err)
+	}
+
+	actions := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "list", run: func() error { _, _, err := LoadUsage(dbPath); return err }},
+		{name: "detail", run: func() error { _, _, err := LoadUsageRun(dbPath, "run"); return err }},
+		{name: "write", run: func() error { return SaveUsageRun(dbPath, UsageRun{RunID: "run"}) }},
+		{name: "prune", run: func() error { _, err := PruneUsageByNovelID(dbPath, "novel"); return err }},
+	}
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			err := action.run()
+			var future *usagemigration.FutureSchemaError
+			if !errors.As(err, &future) || future.Observed != 99 {
+				t.Fatalf("error = %v, want future schema error", err)
+			}
+			after, err := os.ReadFile(dbPath)
+			if err != nil {
+				t.Fatalf("read rejected future fixture: %v", err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Fatal("future usage database bytes changed during rejected action")
+			}
+			info, err := os.Stat(dbPath)
+			if err != nil {
+				t.Fatalf("stat rejected future fixture: %v", err)
+			}
+			if info.Mode().Perm() != 0o640 {
+				t.Fatalf("future usage database mode changed to %o", info.Mode().Perm())
+			}
+		})
 	}
 }
 

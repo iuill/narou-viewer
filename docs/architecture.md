@@ -177,7 +177,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `viewer-api` 内では `FileStateStore` facade が state 更新を直列化し、`reading_state.yaml` / `bookmarks.yaml` / `reader_preferences.yaml` / `novel_reader_settings.yaml` の schema と単一 file 更新は各 Repository が所有する。
 - reader state / reader preferences / bookmarks のような単一 state file に閉じた薄い CRUD は、route handler 近くで request validation を行い `FileStateStore` facade を呼ぶ。取得 backend 削除後の state pruning、publication cover 合成、reader correction 適用、AI usage coordination のように複数 domain を跨ぐ処理は application service へ切り出す。
 - YAML / JSON などの file state 書き込みは、共通の atomic file helper を通して「最新読込 -> メモリ上で変更 -> temp file -> fsync -> rename -> parent dir fsync」で行う。
-- `state/ai_usage.sqlite` は AI 利用履歴専用の例外であり、`AiUsageStore` が SQLite transaction と process 内 write mutex で更新する。現行実装は WAL を明示的に有効化していない。`state/reader_search.sqlite` は読書AI検索用の派生キャッシュであり、本文検索時に viewer-api が SQLite へ読み書きする。
+- `state/ai_usage.sqlite` は AI 利用履歴専用の例外であり、`AiUsageStore` が SQLite transaction と process 内 write mutex で更新する。既存 DB の supported migration は viewer-api 起動時に適用し、read path は read-only connection で version と schema を検証する。未知の将来 version では startup / read / write / prune を停止する。cold backup を単一 main file に保つため `journal_mode=DELETE` を明示する。`state/reader_search.sqlite` は `PRAGMA user_version` で table schema と本文正規化 contract を一体管理する再生成可能 cache であり、version mismatch / corruption は connection close 後に旧 DB を quarantine して lazy rebuild する。
 - `viewer-api` を複数インスタンスに増やす場合、YAML 単体および単一 SQLite ファイルでは整合性保証が不足するため、外部ロックまたは外部ストアへ移行する。
 - 個別 schema の version、互換性、migration、prune、backup / restore は [`state-schema-policy.md`](state-schema-policy.md) を単一正本とする。
 
@@ -323,6 +323,8 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - 起動時に designated singleton state がなければ `viewer-api` が初期ファイルを生成する。per-novel state の欠落、既存 file の parse error、未知 schema version は別に扱う。
 - core singleton YAML は `FileStateStore` facade と各 repository の mutex 内で更新する。その他は schema ごとに lock または workflow の調停境界が異なり、いずれも共通 atomic file helper で更新する。現行差異は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - `state/ai_usage.sqlite` は現在値の正本ではないが、再生成不能な監査・利用履歴として扱う。`state/reader_search.sqlite` は読書AI検索用の再生成可能 cache とする。
+- `cmd/state-doctor` は `data/` 全体を既定 read-only で走査し、schema / SQLite integrity、orphan、frontier、DB-file mismatch、機微 file mode を human / JSON report にする。明示 `--apply --finding <id>` で許可する repair は derived profile / index / cache の quarantine・rebuild だけで、正本や未知 version は変更しない。
+- `cmd/state-backup` は viewer-api / novel-fetcher が保持する OS writer lock を cold barrier として取得し、4 consistency group と暗号化 manifest を age archive に stream 保存する。restore は暗号・hash・schema を二段階 preflight し、private staging、順序付き publish、doctor、rollback を経て full generation だけを公開する。
 - backup は `novel-fetcher/library.sqlite` と `novel-fetcher/works/**`、viewer-api の正本、生成正本、監査履歴を consistency group ごとに取得する。稼働中 SQLite と file tree の単純な順次 copy を一貫した snapshot とみなさない。詳細は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - 取得 backend の更新タスク中に対象作品の本文読込が不整合になった場合は、`409` を返しクライアントがリトライする。
 - ブラウザキャッシュが消えても、既読位置・栞は `state/*.yaml` から復元できる。

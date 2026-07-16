@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 )
 
@@ -15,6 +16,13 @@ const (
 	SchemaVersion = 3
 	FileName      = "novel_reader_settings.yaml"
 )
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-NOVEL-SETTINGS",
+	Path:          FileName,
+	Current:       SchemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type Settings struct {
 	NovelID    string     `json:"novelId"`
@@ -173,7 +181,7 @@ func (r *Repository) PruneNovel(novelID string) (bool, error) {
 
 func (r *Repository) readDocument() (document, error) {
 	var raw document
-	if err := yamlfile.Read(r.path, &raw); err != nil {
+	if _, err := yamlfile.ReadGuarded(r.path, SchemaContract, &raw); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return emptyDocument(), nil
 		}

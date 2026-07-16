@@ -329,6 +329,9 @@ func (s *Server) handleExtractionClear(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 	result, err := s.extractionJobQueue.Clear(r.Context(), novelID)
+	if writeStateSchemaError(w, err) {
+		return
+	}
 	if errors.Is(err, extractionjobs.ErrNovelNotFound) {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
@@ -388,6 +391,9 @@ func (s *Server) handleExtractionJobs(w http.ResponseWriter, r *http.Request, no
 }
 
 func (s *Server) writeCharacterJobsResult(w http.ResponseWriter, result extractionjobs.JobsResponse, err error) {
+	if writeStateSchemaError(w, err) {
+		return
+	}
 	if errors.Is(err, extractionjobs.ErrNovelNotFound) {
 		writeError(w, http.StatusNotFound, "Novel not found.")
 		return
@@ -400,6 +406,9 @@ func (s *Server) writeCharacterJobsResult(w http.ResponseWriter, result extracti
 }
 
 func (s *Server) writeCharacterJobEnqueueResult(w http.ResponseWriter, result extractionjobs.EnqueueResponse, created bool, err error) bool {
+	if writeStateSchemaError(w, err) {
+		return false
+	}
 	switch {
 	case errors.Is(err, extractionjobs.ErrInvalidUpToEpisodeIndex):
 		writeError(w, http.StatusBadRequest, "upToEpisodeIndex is required and must be a non-negative integer string.")
@@ -939,6 +948,9 @@ func matchesContentEtag(values []string, contentEtag string) bool {
 
 func writeResult(w http.ResponseWriter, value any, err error) {
 	if err != nil {
+		if writeStateSchemaError(w, err) {
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "Internal server error.")
 		return
 	}

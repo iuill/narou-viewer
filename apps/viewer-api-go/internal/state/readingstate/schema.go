@@ -1,11 +1,20 @@
 package readingstate
 
+import "narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+
 const (
 	SchemaVersion = 3
 	FileName      = "reading_state.yaml"
 
 	timestampLayout = "2006-01-02T15:04:05.000Z07:00"
 )
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-READING",
+	Path:          FileName,
+	Current:       SchemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type ScrollState struct {
 	Type  string  `json:"type" yaml:"type"`

@@ -1,10 +1,14 @@
 package characters
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestLoadSummaryReadsCharacterProfiles(t *testing.T) {
@@ -14,8 +18,7 @@ func TestLoadSummaryReadsCharacterProfiles(t *testing.T) {
 		t.Fatalf("mkdir profile dir: %v", err)
 	}
 	writeFile(t, filepath.Join(profileDir, "novel-1.yaml"), `
-schema_version: 2
-revision: 1
+schema_version: 1
 novel_id: novel-1
 processed_up_to_episode_index: "3"
 characters:
@@ -98,6 +101,10 @@ func TestSaveHeuristicSummaryWritesReadableProfiles(t *testing.T) {
 	}
 	if len(summary.Characters) != 1 || summary.Characters[0].CanonicalName != "アリス" || summary.Characters[0].Summary == nil {
 		t.Fatalf("heuristic summary should include repeated candidate only: %+v", summary.Characters)
+	}
+	var document profilesDocument
+	if ok, _, err := readCharacterProfilesIfExists(filepath.Join(stateDir, "character_profiles", "novel-1.yaml"), &document); err != nil || !ok || document.SchemaVersion != characterProfilesSchemaVersion {
+		t.Fatalf("heuristic profile schema = %d, ok=%v err=%v", document.SchemaVersion, ok, err)
 	}
 }
 
@@ -1258,14 +1265,98 @@ func TestCharacterHelpersCoverEmptyAndComparisonCases(t *testing.T) {
 	}
 }
 
-func TestLoadSummaryRejectsInvalidYAML(t *testing.T) {
+func TestLoadSummaryQuarantinesInvalidYAML(t *testing.T) {
 	stateDir := t.TempDir()
 	profileDir := filepath.Join(stateDir, "character_profiles")
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatalf("mkdir profile dir: %v", err)
 	}
-	writeFile(t, filepath.Join(profileDir, "novel-1.yaml"), "characters: [")
-	if _, ok, err := LoadSummary(stateDir, "novel-1", "1"); err == nil || ok {
-		t.Fatalf("invalid yaml should fail with ok=false, ok=%v err=%v", ok, err)
+	path := filepath.Join(profileDir, "novel-1.yaml")
+	writeFile(t, path, "characters: [")
+	if _, ok, err := LoadSummary(stateDir, "novel-1", "1"); err != nil || ok {
+		t.Fatalf("invalid derived profile should be quarantined, ok=%v err=%v", ok, err)
+	}
+	quarantined, err := filepath.Glob(path + ".unsupported-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined profiles = %v, err=%v", quarantined, err)
+	}
+	raw, err := os.ReadFile(quarantined[0])
+	if err != nil || string(raw) != "characters: [" {
+		t.Fatalf("quarantined bytes = %q, err=%v", raw, err)
+	}
+}
+
+func TestLoadSummaryQuarantinesFutureProfileAndRebuildsFromEvents(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := SaveGeneratedSummary(stateDir, "novel-future-profile", "1", []GeneratedCharacter{{
+		CharacterID:                 "character-1",
+		CanonicalName:               "合成人物",
+		CanonicalEpisodeIndex:       "1",
+		FirstAppearanceEpisodeIndex: "1",
+	}}); err != nil {
+		t.Fatalf("SaveGeneratedSummary: %v", err)
+	}
+	path := filepath.Join(stateDir, "character_profiles", "novel-future-profile.yaml")
+	future := []byte("schema_version: 99\nnovel_id: novel-future-profile\ncharacters: []\n")
+	if err := os.WriteFile(path, future, 0o644); err != nil {
+		t.Fatalf("write future profile: %v", err)
+	}
+
+	summary, ok, err := LoadSummary(stateDir, "novel-future-profile", "1")
+	if err != nil || !ok || len(summary.Characters) != 1 || summary.Characters[0].CanonicalName != "合成人物" {
+		t.Fatalf("rebuilt summary = %+v, ok=%v err=%v", summary, ok, err)
+	}
+	quarantined, err := filepath.Glob(path + ".unsupported-*")
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined profiles = %v, err=%v", quarantined, err)
+	}
+	raw, err := os.ReadFile(quarantined[0])
+	if err != nil || string(raw) != string(future) {
+		t.Fatalf("quarantined future bytes = %q, err=%v", raw, err)
+	}
+	var rebuilt profilesDocument
+	if ok, _, err := readCharacterProfilesIfExists(path, &rebuilt); err != nil || !ok || rebuilt.SchemaVersion != characterProfilesSchemaVersion {
+		t.Fatalf("rebuilt profile = %+v, ok=%v err=%v", rebuilt, ok, err)
+	}
+}
+
+func TestCharacterEventsSchemaGuardRejectsMutationWithoutTouchingFile(t *testing.T) {
+	stateDir := t.TempDir()
+	eventsDir := filepath.Join(stateDir, "character_events")
+	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
+		t.Fatalf("mkdir events: %v", err)
+	}
+	path := filepath.Join(eventsDir, "novel-future-events.yaml")
+	if err := os.WriteFile(path, []byte("schema_version: 99\nnovel_id: novel-future-events\ncharacters: []\n"), 0o644); err != nil {
+		t.Fatalf("write future events: %v", err)
+	}
+	err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+		return SaveGeneratedSummary(stateDir, "novel-future-events", "1", []GeneratedCharacter{{CanonicalName: "合成人物"}})
+	})
+	var guardError *schemaguard.GuardError
+	if !errors.As(err, &guardError) || guardError.Result.Status != schemaguard.StatusFutureUnknown {
+		t.Fatalf("error = %#v, want future GuardError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(stateDir, "character_profiles", "novel-future-events.yaml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("profile should not be written after event rejection: %v", statErr)
+	}
+}
+
+func TestCharacterEventsLegacyVersionZeroMigratesOnWrite(t *testing.T) {
+	stateDir := t.TempDir()
+	eventsDir := filepath.Join(stateDir, "character_events")
+	if err := os.MkdirAll(eventsDir, 0o755); err != nil {
+		t.Fatalf("mkdir events: %v", err)
+	}
+	path := filepath.Join(eventsDir, "novel-legacy-events.yaml")
+	if err := os.WriteFile(path, []byte("novel_id: novel-legacy-events\nnext_character_ordinal: 1\ncharacters: []\n"), 0o644); err != nil {
+		t.Fatalf("write legacy events: %v", err)
+	}
+	if err := SaveGeneratedSummary(stateDir, "novel-legacy-events", "1", []GeneratedCharacter{{CanonicalName: "合成人物"}}); err != nil {
+		t.Fatalf("SaveGeneratedSummary: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(raw), "schema_version: 1") {
+		t.Fatalf("migrated event bytes = %q, err=%v", raw, err)
 	}
 }

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestNewHandlerInitializesRuntime(t *testing.T) {
@@ -75,6 +78,30 @@ func TestNewHandlerReportsStateInitializationError(t *testing.T) {
 		Shutdown(context.Context) error
 	}); ok {
 		_ = shutdownHandler.Shutdown(context.Background())
+	}
+}
+
+func TestNewHandlerRejectsFutureUsageSchemaDuringStartup(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	dbPath := filepath.Join(stateDir, "ai_usage.sqlite")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open usage fixture: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY); INSERT INTO schema_migrations(version) VALUES (99)`); err != nil {
+		t.Fatalf("seed future usage fixture: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close usage fixture: %v", err)
+	}
+
+	result := NewHandler(dataDir)
+	if result.InitErr == nil {
+		t.Fatal("NewHandler should reject a future AI usage schema during startup")
 	}
 }
 

@@ -243,7 +243,8 @@ func ensureYAML(path string, value any) error {
 }
 
 func readYAML(path string, target any) error {
-	return yamlfile.Read(path, target)
+	_, err := yamlfile.ReadGuarded(path, SchemaContract, target)
+	return err
 }
 
 func writeYAMLAtomic(path string, value any) error {

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 )
 
@@ -18,6 +19,13 @@ const (
 	DefaultFontFamily  = "mincho"
 	DefaultTheme       = "classic"
 )
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-PREFERENCES",
+	Path:          FileName,
+	Current:       SchemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type Preferences struct {
 	ReadingMode string  `json:"readingMode"`
@@ -94,7 +102,7 @@ func (r *Repository) Put(input Preferences) (Preferences, error) {
 
 func (r *Repository) readDocument() (document, error) {
 	var raw document
-	if err := yamlfile.Read(r.path, &raw); err != nil {
+	if _, err := yamlfile.ReadGuarded(r.path, SchemaContract, &raw); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return emptyDocument(), nil
 		}

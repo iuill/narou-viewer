@@ -22,6 +22,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/fetcher"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
@@ -1679,7 +1680,7 @@ job_ids:
 	}
 }
 
-func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.T) {
+func TestServerFetcherRemoveKeepsAcceptedAndDoesNotPartiallyPruneWhenViewerStatePreflightFails(t *testing.T) {
 	var removeCalled bool
 	fetcherServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v2/novels/remove" {
@@ -1714,8 +1715,8 @@ func TestServerFetcherRemoveKeepsAcceptedWhenViewerStateCleanupFails(t *testing.
 		t.Fatalf("cleanup failure should be reported without failing remove: %+v", response)
 	}
 	cleanup := response["viewerStateCleanup"].(map[string]any)
-	if cleanup["characterProfilesDeleted"] != float64(1) || cleanup["extractionJobsDeleted"] != float64(1) {
-		t.Fatalf("cleanup response should keep successful partial counts: %+v", cleanup)
+	if cleanup["characterProfilesDeleted"] != float64(0) || cleanup["extractionJobsDeleted"] != float64(0) {
+		t.Fatalf("operation-wide preflight failure should report zero mutations: %+v", cleanup)
 	}
 }
 
@@ -2187,7 +2188,7 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
-	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":3,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":4,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 
@@ -4472,7 +4473,10 @@ func TestOpenRouterExtractionCheckpointResume(t *testing.T) {
 	if len(progressEvents) != 3 || progressEvents[0].Phase != "start" || progressEvents[1].Phase != "complete" || progressEvents[2].Phase != "start" {
 		t.Fatalf("checkpointed generation should emit per-batch start/complete progress: %+v", progressEvents)
 	}
-	checkpoint := server.loadExtractionCheckpoint("novel-1", "2")
+	checkpoint, err := server.extractionRuntime().LoadCheckpoint("novel-1", "2")
+	if err != nil {
+		t.Fatalf("load checkpoint: %v", err)
+	}
 	if len(checkpoint.ProcessedEpisodeIndexes) != 1 || checkpoint.ProcessedEpisodeIndexes[0] != "1" || len(checkpoint.Characters) != 1 {
 		t.Fatalf("checkpoint should preserve completed first episode: %+v", checkpoint)
 	}
@@ -4576,17 +4580,15 @@ func TestOpenRouterExtractionCheckpointRejectsGenerationInputMismatch(t *testing
 	}
 
 	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), newConfig, "novel-1", "1", nil, batches, nil)
-	if err != nil {
-		t.Fatalf("generation with mismatched checkpoint returned error: %v", err)
+	if !checkpointstore.IsIncompatible(err) {
+		t.Fatalf("generation with mismatched checkpoint error = %v, want incompatible", err)
 	}
-	if requests != 1 {
-		t.Fatalf("mismatched checkpoint should not skip the provider request, requests=%d", requests)
+	if requests != 0 || len(generated) != 0 || len(usageRequests) != 0 {
+		t.Fatalf("mismatched checkpoint should stop before provider request: requests=%d generated=%+v usage=%+v", requests, generated, usageRequests)
 	}
-	if len(generated) != 1 || generated[0].CanonicalName != "新モデル" {
-		t.Fatalf("mismatched checkpoint should be discarded before merging: %+v", generated)
-	}
-	if len(usageRequests) != 1 || usageRequests[0].OutputTokens != 5 || usageRequests[0].TotalTokens != 14 {
-		t.Fatalf("provider token usage should be retained: %+v", usageRequests)
+	quarantined, globErr := filepath.Glob(server.extractionCheckpointPath("novel-1", "1") + ".unsupported-*")
+	if globErr != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined checkpoints = %v, err=%v", quarantined, globErr)
 	}
 }
 
@@ -4629,17 +4631,11 @@ func TestOpenRouterExtractionLibraryCheckpointRejectsBatchInputMismatch(t *testi
 	}
 
 	generated, _, usageRequests, err := server.generateOpenRouterExtractionWithCheckpoint(context.Background(), config, novelID, "1", nil, inputs.Batches, nil)
-	if err != nil {
-		t.Fatalf("library checkpoint generation returned error: %v", err)
+	if !checkpointstore.IsIncompatible(err) {
+		t.Fatalf("library checkpoint generation error = %v, want incompatible", err)
 	}
-	if providerCalls != 1 {
-		t.Fatalf("library checkpoint should be discarded when batch inputs differ, calls=%d", providerCalls)
-	}
-	if len(generated) != 1 || generated[0].CanonicalName != "新本文" {
-		t.Fatalf("library checkpoint should not reuse stale characters: %+v", generated)
-	}
-	if len(usageRequests) != 1 || usageRequests[0].OutputTokens != 5 {
-		t.Fatalf("library generation should retain usage for regenerated batch: %+v", usageRequests)
+	if providerCalls != 0 || len(generated) != 0 || len(usageRequests) != 0 {
+		t.Fatalf("library checkpoint mismatch should stop before provider call: calls=%d generated=%+v usage=%+v", providerCalls, generated, usageRequests)
 	}
 }
 
@@ -4650,25 +4646,6 @@ func TestExtractionInternalHelperErrorBranches(t *testing.T) {
 	}
 	if err := server.recordExtractionUsage(ai.UsageRun{}); err != nil {
 		t.Fatalf("nil store usage recorder should be a no-op: %v", err)
-	}
-
-	badCheckpointPath := server.extractionCheckpointPath("novel-1", "1")
-	if err := os.MkdirAll(filepath.Dir(badCheckpointPath), 0o755); err != nil {
-		t.Fatalf("mkdir checkpoint dir: %v", err)
-	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"novelId":"other","upToEpisodeIndex":"1","characters":[{"CanonicalName":"bad"}]}`), 0o644); err != nil {
-		t.Fatalf("write mismatched checkpoint: %v", err)
-	}
-	checkpoint := server.loadExtractionCheckpoint("novel-1", "1")
-	if len(checkpoint.Characters) != 0 || checkpoint.NovelID != "novel-1" {
-		t.Fatalf("mismatched checkpoint should reset to an empty checkpoint: %+v", checkpoint)
-	}
-	if err := os.WriteFile(badCheckpointPath, []byte(`{"schemaVersion":1,"novelId":"novel-1","upToEpisodeIndex":"1","characters":[{"canonicalName":"bad"}]}`), 0o600); err != nil {
-		t.Fatalf("write unsupported schema checkpoint: %v", err)
-	}
-	checkpoint = server.loadExtractionCheckpoint("novel-1", "1")
-	if checkpoint.SchemaVersion != appextraction.CheckpointSchemaVersion || len(checkpoint.Characters) != 0 {
-		t.Fatalf("unsupported schema checkpoint should reset to current empty checkpoint: %+v", checkpoint)
 	}
 
 	blockedServer := &Server{dataDir: t.TempDir()}
@@ -4820,10 +4797,10 @@ func TestServerAIGenerationSettingsStoreErrors(t *testing.T) {
 	}
 	stateStore := store.New(dataDir)
 	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
-	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusInternalServerError)
+	requestJSON(t, handler, http.MethodGet, "/api/ai-generation/settings", nil, http.StatusConflict)
 	requestJSON(t, handler, http.MethodPut, "/api/ai-generation/settings/preferred-mode", map[string]any{
 		"preferredMode": "heuristic",
-	}, http.StatusInternalServerError)
+	}, http.StatusConflict)
 
 	dataDir = newHTTPAPITestData(t)
 	stateStore = store.New(dataDir)
@@ -4981,7 +4958,7 @@ func TestServerGoogleBooksRuntimeStatusService(t *testing.T) {
 	}
 }
 
-func TestServerAIGenerationProfileReadErrors(t *testing.T) {
+func TestServerAIGenerationQuarantinesCorruptDerivedProfile(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	novels := requestJSON(t, newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), store.New(dataDir)), http.MethodGet, "/api/library/novels", nil, http.StatusOK)
 	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
@@ -4996,13 +4973,17 @@ func TestServerAIGenerationProfileReadErrors(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
-	}, http.StatusServiceUnavailable)
+	}, http.StatusOK)
 	stream := requestRaw(t, handler, http.MethodPost, "/api/ai-generation/playground/extraction/stream", map[string]any{
 		"novelId":          novelID,
 		"upToEpisodeIndex": "1",
 	}, http.StatusOK)
-	if !strings.Contains(stream, `"type":"error"`) {
-		t.Fatalf("expected stream error event, got %s", stream)
+	if !strings.Contains(stream, `"type":"result"`) {
+		t.Fatalf("expected recovered stream result, got %s", stream)
+	}
+	quarantined, err := filepath.Glob(filepath.Join(dataDir, "state", "character_profiles", novelID+".yaml.unsupported-*"))
+	if err != nil || len(quarantined) != 1 {
+		t.Fatalf("quarantined profiles = %v, err=%v", quarantined, err)
 	}
 }
 
@@ -5867,6 +5848,8 @@ characters:
         text: テスト人物。
 `)
 	writeHTTPFixtureFile(t, filepath.Join(stateDir, "extraction_jobs", "job-1.yaml"), `
+schema_version: 2
+revision: 1
 job_id: job-1
 novel_id: `+novelID+`
 requested_up_to_episode_index: "1"

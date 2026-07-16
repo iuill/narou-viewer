@@ -93,7 +93,7 @@ export type ExtractionRuntimeDraft = {
   parallelRequestConcurrency: number;
 };
 
-export type AiGenerationJobStatus = "queued" | "running" | "completed" | "failed";
+export type AiGenerationJobStatus = "queued" | "running" | "completed" | "failed" | "incompatible";
 export type AiGenerationJobFilter = "active" | "failed" | "completed";
 export type AiGenerationHelpKey =
   | "preferredMode"
@@ -336,7 +336,7 @@ export function partitionAiGenerationJobs<T extends AiGenerationJobLike>(jobs: T
 
   return {
     active: nextJobs.filter((job) => job.status === "queued" || job.status === "running"),
-    failed: nextJobs.filter((job) => job.status === "failed"),
+    failed: nextJobs.filter((job) => job.status === "failed" || job.status === "incompatible"),
     completed: nextJobs.filter((job) => job.status === "completed")
   };
 }

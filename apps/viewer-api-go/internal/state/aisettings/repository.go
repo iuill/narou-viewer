@@ -2,6 +2,7 @@ package aisettings
 
 import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 	"os"
 	"path/filepath"
@@ -11,9 +12,17 @@ import (
 
 const (
 	FileName           = "ai_generation_settings.yaml"
+	SchemaVersion      = 2
 	defaultAIProfileID = "default"
 	timestampFormat    = "2006-01-02T15:04:05.000Z07:00"
 )
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-AI-SETTINGS",
+	Path:          FileName,
+	Current:       SchemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type Repository struct {
 	stateDir string

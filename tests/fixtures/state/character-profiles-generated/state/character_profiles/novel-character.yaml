@@ -1,8 +1,6 @@
-schema_version: 2
-revision: 5
+schema_version: 1
 novel_id: novel-character
 processed_up_to_episode_index: 3
-updated_at: 2026-01-03T00:00:00.000Z
 characters:
   - character_id: char_alice
     canonical_name:

@@ -1,9 +1,12 @@
 package yamlfile
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 )
 
 type testDocument struct {
@@ -59,5 +62,33 @@ func TestBlockedParentReturnsError(t *testing.T) {
 	}
 	if err := WriteAtomic(filepath.Join(t.TempDir(), "bad.yaml"), map[string]any{"bad": make(chan int)}); err == nil {
 		t.Fatal("WriteAtomic should report marshal errors")
+	}
+}
+
+func TestReadGuardedChecksSchemaBeforeTypedDecode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.yaml")
+	if err := os.WriteFile(path, []byte("schema_version: 99\nnovels: invalid\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	var document testDocument
+	result, err := ReadGuarded(path, schemaguard.Contract{ID: "TEST", Current: 3}, &document)
+	if err == nil || result.Status != schemaguard.StatusFutureUnknown {
+		t.Fatalf("ReadGuarded result/error = %#v/%v", result, err)
+	}
+	var guardError *schemaguard.GuardError
+	if !errors.As(err, &guardError) {
+		t.Fatalf("error = %T, want GuardError", err)
+	}
+	if guardError.Result.Contract.Path != path {
+		t.Fatalf("guard path = %q, want %q", guardError.Result.Contract.Path, path)
+	}
+}
+
+func TestReadGuardedPreservesMissingFileError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+	_, err := ReadGuarded(path, schemaguard.Contract{ID: "TEST", Current: 3}, &testDocument{})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ReadGuarded error = %v, want os.ErrNotExist", err)
 	}
 }

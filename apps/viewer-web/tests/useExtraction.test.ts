@@ -453,6 +453,50 @@ describe("useExtraction", () => {
     });
   });
 
+  it("keeps incompatible jobs visible as non-active recovery history", async () => {
+    installDom();
+    const incompatibleJob = {
+      jobId: "future-job",
+      requestedUpToEpisodeIndex: "",
+      generationMode: null,
+      generationStrategy: null,
+      modelId: null,
+      status: "incompatible" as const,
+      createdAt: "",
+      startedAt: null,
+      finishedAt: null,
+      errorMessage: "この抽出 job は現在の build と互換性がないため、変更せず保持されています。",
+    };
+    vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [incompatibleJob] });
+    vi.mocked(fetchCharacterSummary).mockResolvedValue(createReadySummary("2"));
+    vi.mocked(fetchTerms).mockResolvedValue(createReadyTerms("2"));
+
+    let latest: HookResult | null = null;
+    let root: Root | null = null;
+    await act(async () => {
+      root = renderHookHarness({
+        currentTocEpisodeIndex: 2,
+        onRender: (result) => {
+          latest = result;
+        },
+      });
+      await flushAsyncWork();
+    });
+
+    await act(async () => {
+      await latest?.handleOpen();
+      await flushAsyncWork();
+    });
+
+    expect(latest?.activeJobs).toEqual([]);
+    expect(latest?.completedJobs).toEqual([incompatibleJob]);
+    expect(latest?.completedJobs[0]?.errorMessage).toContain("互換性がない");
+
+    await act(async () => {
+      root?.unmount();
+    });
+  });
+
   it("submits a character summary job and refreshes the panel", async () => {
     installDom();
     vi.mocked(fetchExtractionJobs).mockResolvedValue({ jobs: [] });

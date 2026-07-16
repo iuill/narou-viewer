@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 )
 
@@ -22,6 +23,13 @@ const (
 
 var ErrNotFound = errors.New("bookmark not found")
 var ErrInvalidBookmark = errors.New("invalid bookmark")
+
+var SchemaContract = schemaguard.Contract{
+	ID:            "VA-BOOKMARKS",
+	Path:          FileName,
+	Current:       SchemaVersion,
+	MissingPolicy: schemaguard.MissingReject,
+}
 
 type Bookmark struct {
 	ID           string  `json:"id"`
@@ -167,7 +175,7 @@ func (r *Repository) PruneNovel(novelID string) (int, error) {
 
 func (r *Repository) readDocument() (document, error) {
 	var raw document
-	if err := yamlfile.Read(r.path, &raw); err != nil {
+	if _, err := yamlfile.ReadGuarded(r.path, SchemaContract, &raw); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return emptyDocument(), nil
 		}

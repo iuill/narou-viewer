@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	aiAPIKeyCryptoVersion = 1
+	APIKeyCryptoVersion   = 1
+	aiAPIKeyCryptoVersion = APIKeyCryptoVersion
 	aiAPIKeySaltBytes     = 16
 	aiAPIKeyIVBytes       = 12
 	aiAPIKeyTagBytes      = 16
@@ -44,6 +45,22 @@ func (e *AIGenerationSettingsCryptoError) Unwrap() error {
 func IsAIGenerationSettingsCryptoError(err error) bool {
 	var cryptoError *AIGenerationSettingsCryptoError
 	return errors.As(err, &cryptoError)
+}
+
+func validateAIGenerationAPIKeyVersions(doc aiGenerationSettingsDocument) error {
+	values := []aiAPIKeyDocument{
+		doc.SharedProviders.OpenRouter,
+		doc.SharedProviders.GoogleBooks,
+	}
+	for _, profile := range doc.Profiles {
+		values = append(values, profile.Credentials.aiAPIKeyDocument)
+	}
+	for _, value := range values {
+		if value.APIKeyVersion != 0 && value.APIKeyVersion != aiAPIKeyCryptoVersion {
+			return &AIGenerationSettingsCryptoError{Message: fmt.Sprintf("unsupported AI API key version: %d", value.APIKeyVersion)}
+		}
+	}
+	return nil
 }
 
 func migratePlaintextAIGenerationAPIKeys(doc aiGenerationSettingsDocument) (aiGenerationSettingsDocument, bool, error) {

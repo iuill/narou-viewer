@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
+	"narou-viewer/apps/viewer-api-go/internal/state/schemaguardtest"
 )
 
 func TestRepositoryGetPutConflictAndTombstone(t *testing.T) {
@@ -226,6 +229,46 @@ func TestRepositoryHandlesMissingAndCorruptDocuments(t *testing.T) {
 	}
 	if _, err := repo.IsDeleted("novel"); err == nil {
 		t.Fatal("corrupt reading state should make IsDeleted return error")
+	}
+}
+
+func TestRepositoryRejectsUnsupportedSchemasWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		document   string
+		wantStatus schemaguard.Status
+	}{
+		{name: "future", document: "schema_version: 999\nrevision: 4\nnovels: {}\n", wantStatus: schemaguard.StatusFutureUnknown},
+		{name: "missing version", document: "revision: 4\nnovels: {}\n", wantStatus: schemaguard.StatusUnsupportedLegacy},
+		{name: "malformed", document: "schema_version: [\n", wantStatus: schemaguard.StatusMalformed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(stateDir, FileName)
+			if err := os.WriteFile(path, []byte(test.document), 0o644); err != nil {
+				t.Fatalf("write guarded fixture: %v", err)
+			}
+			repo := NewRepository(stateDir)
+			err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+				_, err := repo.Put(PutInput{State: State{NovelID: "novel"}})
+				return err
+			})
+			assertGuardStatus(t, err, test.wantStatus)
+			err = schemaguardtest.AssertFileUntouched(t, path, func() error {
+				_, err := repo.Prune("novel")
+				return err
+			})
+			assertGuardStatus(t, err, test.wantStatus)
+		})
+	}
+}
+
+func assertGuardStatus(t *testing.T, err error, want schemaguard.Status) {
+	t.Helper()
+	guardError, ok := schemaguard.AsGuardError(err)
+	if !ok || guardError.Result.Status != want {
+		t.Fatalf("guard error = %#v, want status %s", err, want)
 	}
 }
 
