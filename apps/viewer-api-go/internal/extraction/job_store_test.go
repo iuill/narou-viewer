@@ -453,6 +453,12 @@ func TestMalformedJobStopsReadsAndNewJobMutation(t *testing.T) {
 	if _, created, err := SaveJobIfNoActive(stateDir, "novel-1", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
 		t.Fatalf("invalid job yaml should stop new job mutation: created=%v err=%v", created, err)
 	}
+	if records, err := LoadJobsForExecution(stateDir); err == nil || len(records) != 0 {
+		t.Fatalf("invalid job yaml should stop background execution: records=%+v err=%v", records, err)
+	}
+	if recovered, err := RecoverRunningJobs(stateDir); err == nil || recovered != 0 {
+		t.Fatalf("invalid job yaml should stop recovery: recovered=%d err=%v", recovered, err)
+	}
 }
 
 func TestFutureJobIsListedAsIncompatibleAndNeverRequeuedOrOverwritten(t *testing.T) {
@@ -499,6 +505,54 @@ created_at: 2026-01-01T00:00:00Z
 	}
 	if _, statErr := os.Stat(filepath.Join(jobDir, "different-job.yaml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("blocked enqueue created a new job file: %v", statErr)
+	}
+}
+
+func TestFutureJobBlocksRecoveryAndExecutionForSameNovel(t *testing.T) {
+	stateDir := t.TempDir()
+	running := Job{JobID: "current-running", RequestedUpToEpisodeIndex: "2", Status: "running", CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := SaveJob(stateDir, "novel-mixed", running); err != nil {
+		t.Fatalf("SaveJob current: %v", err)
+	}
+	jobDir := filepath.Join(stateDir, "extraction_jobs")
+	futurePath := filepath.Join(jobDir, "future-job.yaml")
+	future := []byte("schema_version: 99\njob_id: future-job\nnovel_id: novel-mixed\nstatus: running\n")
+	if err := os.WriteFile(futurePath, future, 0o600); err != nil {
+		t.Fatalf("write future job: %v", err)
+	}
+
+	if recovered, err := RecoverRunningJobs(stateDir); err != nil || recovered != 0 {
+		t.Fatalf("RecoverRunningJobs = %d, err=%v", recovered, err)
+	}
+	executable, err := LoadJobsForExecution(stateDir)
+	if err != nil || len(executable) != 0 {
+		t.Fatalf("LoadJobsForExecution = %+v, err=%v", executable, err)
+	}
+	jobs, ok, err := LoadJobs(stateDir, "novel-mixed")
+	if err != nil || !ok || len(jobs) != 2 {
+		t.Fatalf("LoadJobs = %+v, ok=%v err=%v", jobs, ok, err)
+	}
+	for _, job := range jobs {
+		if job.JobID == running.JobID && job.Status != "running" {
+			t.Fatalf("current running job was mutated during blocked recovery: %+v", job)
+		}
+	}
+}
+
+func TestOwnerlessFutureJobBlocksAllExecutionAndEnqueue(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", Status: "queued"}); err != nil {
+		t.Fatalf("SaveJob current: %v", err)
+	}
+	jobDir := filepath.Join(stateDir, "extraction_jobs")
+	if err := os.WriteFile(filepath.Join(jobDir, "ownerless-future.yaml"), []byte("schema_version: 99\njob_id: ownerless-future\nstatus: running\n"), 0o600); err != nil {
+		t.Fatalf("write ownerless future job: %v", err)
+	}
+	if records, err := LoadJobsForExecution(stateDir); err == nil || len(records) != 0 {
+		t.Fatalf("ownerless future job should block execution globally: records=%+v err=%v", records, err)
+	}
+	if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
+		t.Fatalf("ownerless future job should block enqueue globally: created=%v err=%v", created, err)
 	}
 }
 

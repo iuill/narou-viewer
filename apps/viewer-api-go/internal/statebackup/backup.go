@@ -27,6 +27,7 @@ import (
 )
 
 var referencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$`)
+var generationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	dataDir := filepath.Clean(strings.TrimSpace(options.DataDir))
@@ -39,6 +40,12 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	}
 	if !referencePattern.MatchString(options.KeyReference) {
 		return BackupResult{}, errors.New("key reference must be a non-secret identifier using safe characters")
+	}
+	if err := rejectFilesystemRoot(dataDir, "data directory"); err != nil {
+		return BackupResult{}, err
+	}
+	if err := rejectFilesystemRoot(outputDir, "backup output directory"); err != nil {
+		return BackupResult{}, err
 	}
 	overlap, err := pathsOverlapPhysically(dataDir, outputDir)
 	if err != nil {
@@ -93,8 +100,8 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	if err != nil {
 		return BackupResult{}, fmt.Errorf("generate snapshot generation ID: %w", err)
 	}
-	if !referencePattern.MatchString(generation) {
-		return BackupResult{}, errors.New("snapshot generation ID contains unsafe characters")
+	if err := validateGenerationID(generation); err != nil {
+		return BackupResult{}, err
 	}
 	createdAt := now().UTC()
 	build := strings.TrimSpace(options.ApplicationBuild)
@@ -278,15 +285,11 @@ func publishArchiveNoReplace(partialPath string, archivePath string) error {
 }
 
 func openSourceFile(path string) (*os.File, os.FileInfo, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, nil, errors.New("invalid backup source file descriptor")
-	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
@@ -305,6 +308,13 @@ func randomGenerationID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
+}
+
+func validateGenerationID(generationID string) error {
+	if !generationIDPattern.MatchString(generationID) || filepath.Base(generationID) != generationID || generationID == "." || generationID == ".." {
+		return errors.New("snapshot generation ID must be a single safe path component")
+	}
+	return nil
 }
 
 func ensurePrivateDirectory(path string) error {
@@ -327,7 +337,24 @@ func pathWithin(root string, path string) bool {
 	if errRoot != nil || errPath != nil {
 		return false
 	}
-	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func rejectFilesystemRoot(path string, label string) error {
+	physical, err := physicalPath(path)
+	if err != nil {
+		// The caller's normal path-resolution/opening flow owns diagnostic
+		// errors. This guard only adds a defense for a successfully resolved root.
+		return nil
+	}
+	if filepath.Dir(physical) == physical {
+		return fmt.Errorf("%s must not be a filesystem root", label)
+	}
+	return nil
 }
 
 func pathsOverlapPhysically(left string, right string) (bool, error) {

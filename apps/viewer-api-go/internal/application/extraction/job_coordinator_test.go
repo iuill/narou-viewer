@@ -2,6 +2,8 @@ package extraction
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -43,6 +45,27 @@ func TestJobCoordinatorNoopsWithoutProcessor(t *testing.T) {
 	NewJobCoordinator(t.TempDir(), nil).Kick(nil)
 	(*JobCoordinator)(nil).Recover()
 	(*JobCoordinator)(nil).Kick(context.Background())
+}
+
+func TestJobCoordinatorDoesNotProcessCurrentJobWhenSameNovelHasFutureJob(t *testing.T) {
+	stateDir := t.TempDir()
+	if err := extractdomain.SaveJob(stateDir, "novel-mixed", extractdomain.Job{JobID: "current-job", Status: "queued"}); err != nil {
+		t.Fatalf("SaveJob current: %v", err)
+	}
+	future := []byte("schema_version: 99\njob_id: future-job\nnovel_id: novel-mixed\nstatus: running\n")
+	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "future-job.yaml"), future, 0o600); err != nil {
+		t.Fatalf("write future job: %v", err)
+	}
+	called := false
+	coordinator := NewJobCoordinator(stateDir, func(context.Context, string, extractdomain.Job) bool {
+		called = true
+		return true
+	})
+	coordinator.Recover()
+	coordinator.processJobs(context.Background())
+	if called {
+		t.Fatal("processor must not be called for a novel with an incompatible canonical job")
+	}
 }
 
 func TestJobCoordinatorKickProcessesWithBackgroundContext(t *testing.T) {

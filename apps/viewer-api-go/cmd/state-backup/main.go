@@ -276,15 +276,11 @@ func readSecretFile(path string) (string, error) {
 }
 
 func openPrivateRegularFile(path string) (*os.File, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("invalid secret or identity file descriptor")
-	}
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()

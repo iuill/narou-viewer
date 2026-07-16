@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"golang.org/x/sys/unix"
 
 	"narou-viewer/apps/viewer-api-go/internal/statebarrier"
 )
@@ -30,15 +31,23 @@ func TestBackupOptionAndDoctorGuards(t *testing.T) {
 			t.Fatalf("Backup should reject options: %+v", options)
 		}
 	}
+	if _, err := Backup(context.Background(), BackupOptions{DataDir: string(filepath.Separator), OutputDir: t.TempDir(), KeyReference: "local-test-key", Recipient: recipient}); err == nil {
+		t.Fatal("Backup should reject a filesystem root data directory")
+	}
+	if _, err := Backup(context.Background(), BackupOptions{DataDir: t.TempDir(), OutputDir: string(filepath.Separator), KeyReference: "local-test-key", Recipient: recipient}); err == nil {
+		t.Fatal("Backup should reject a filesystem root output directory before changing its mode")
+	}
 	dataDir, _ := seedCleanBackupData(t)
 	if _, err := Backup(context.Background(), BackupOptions{DataDir: dataDir, OutputDir: filepath.Join(dataDir, "backups"), KeyReference: "local-test-key", Recipient: recipient}); err == nil {
 		t.Fatal("Backup should reject an output directory inside data")
 	}
-	if _, err := Backup(context.Background(), BackupOptions{
-		DataDir: dataDir, OutputDir: filepath.Join(t.TempDir(), "backups"), KeyReference: "local-test-key", Recipient: recipient,
-		GenerationID: func() (string, error) { return "unsafe generation", nil },
-	}); err == nil {
-		t.Fatal("Backup should reject an unsafe generation ID")
+	for _, unsafeGeneration := range []string{"unsafe generation", "x/../../tmp/victim", "x/../state", "x/y"} {
+		if _, err := Backup(context.Background(), BackupOptions{
+			DataDir: dataDir, OutputDir: filepath.Join(t.TempDir(), "backups"), KeyReference: "local-test-key", Recipient: recipient,
+			GenerationID: func() (string, error) { return unsafeGeneration, nil },
+		}); err == nil {
+			t.Fatalf("Backup should reject unsafe generation ID %q", unsafeGeneration)
+		}
 	}
 	if _, err := Backup(context.Background(), BackupOptions{
 		DataDir: dataDir, OutputDir: filepath.Join(t.TempDir(), "backups"), KeyReference: "local-test-key", Recipient: recipient,
@@ -121,6 +130,11 @@ func TestRestoreOptionArchiveAndWriterGuards(t *testing.T) {
 		if _, err := Restore(context.Background(), options); err == nil {
 			t.Fatalf("Restore should reject options: %+v", options)
 		}
+	}
+	if _, err := Restore(context.Background(), RestoreOptions{
+		DataDir: string(filepath.Separator), ArchivePath: filepath.Join(t.TempDir(), "missing"), KeyReference: "local-test-key", Identities: []age.Identity{identity},
+	}); err == nil {
+		t.Fatal("Restore should reject a filesystem root data directory")
 	}
 	root := t.TempDir()
 	archive := filepath.Join(root, "archive"+ArchiveSuffix)
@@ -353,6 +367,23 @@ func TestFilesystemAndPublishHelpersFailClosed(t *testing.T) {
 	if _, _, err := openSourceFile(filepath.Join(root, "missing")); err == nil {
 		t.Fatal("openSourceFile should reject a missing file")
 	}
+	fifo := filepath.Join(root, "source-fifo")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	opened := make(chan error, 1)
+	go func() {
+		_, _, err := openSourceFile(fifo)
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err == nil {
+			t.Fatal("openSourceFile should reject a FIFO")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("openSourceFile blocked while opening a FIFO without a writer")
+	}
 	private := filepath.Join(root, "private")
 	if err := createEmptyPrivateDirectory(private); err != nil {
 		t.Fatalf("create private directory: %v", err)
@@ -463,6 +494,27 @@ func TestRetentionAndPathHelperErrorBranches(t *testing.T) {
 	}
 	if clean := pathWithin("/tmp/a", "/tmp/ab"); clean {
 		t.Fatal("pathWithin should honor path boundaries")
+	}
+	if !pathWithin(string(filepath.Separator), filepath.Join(string(filepath.Separator), "data")) {
+		t.Fatal("pathWithin should recognize children of the filesystem root")
+	}
+	if err := rejectFilesystemRoot(string(filepath.Separator), "test directory"); err == nil {
+		t.Fatal("filesystem root should be rejected as a managed directory")
+	}
+	if err := rejectFilesystemRoot(t.TempDir(), "test directory"); err != nil {
+		t.Fatalf("ordinary managed directory should be accepted: %v", err)
+	}
+	blockedAncestor := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blockedAncestor, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("write blocked ancestor: %v", err)
+	}
+	if err := rejectFilesystemRoot(filepath.Join(blockedAncestor, "child"), "test directory"); err != nil {
+		t.Fatalf("path resolution diagnostics should remain with the caller: %v", err)
+	}
+	for _, generationID := range []string{"x/../../tmp/victim", "x/../state", "x/y", ".", ".."} {
+		if err := validateGenerationID(generationID); err == nil {
+			t.Fatalf("unsafe generation ID accepted: %q", generationID)
+		}
 	}
 }
 

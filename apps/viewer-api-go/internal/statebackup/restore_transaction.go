@@ -69,6 +69,9 @@ func Recover(ctx context.Context, dataDir string) (RecoveryOutcome, error) {
 	if dataDir == "." {
 		return RecoveryNone, errors.New("data directory is required")
 	}
+	if err := rejectFilesystemRoot(dataDir, "data directory"); err != nil {
+		return RecoveryNone, err
+	}
 	info, err := os.Lstat(dataDir)
 	if err != nil {
 		return RecoveryNone, err
@@ -102,7 +105,10 @@ func beginRestoreTransaction(dataDir string, transaction *restoreTransaction) er
 
 func buildRestoreTransactionPlan(dataDir string, transaction *restoreTransaction) error {
 	actions := make([]restoreTransactionAction, 0, len(restoreTargets()))
-	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
+	stageRoot, _, err := restoreTransactionRoots(dataDir, transaction)
+	if err != nil {
+		return err
+	}
 	for _, relative := range restoreTargets() {
 		destination := filepath.Join(dataDir, filepath.FromSlash(relative))
 		staged := filepath.Join(stageRoot, filepath.FromSlash(relative))
@@ -123,8 +129,10 @@ func buildRestoreTransactionPlan(dataDir string, transaction *restoreTransaction
 }
 
 func publishRestoreTransaction(ctx context.Context, dataDir string, transaction *restoreTransaction) error {
-	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
-	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	stageRoot, rollbackRoot, err := restoreTransactionRoots(dataDir, transaction)
+	if err != nil {
+		return err
+	}
 	for index, action := range transaction.Actions {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -209,8 +217,13 @@ func recoverRestoreTransactionLocked(ctx context.Context, dataDir string) (Recov
 }
 
 func rollbackRestoreTransaction(ctx context.Context, dataDir string, transaction *restoreTransaction) error {
-	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
-	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stageRoot, rollbackRoot, err := restoreTransactionRoots(dataDir, transaction)
+	if err != nil {
+		return err
+	}
 	for index := len(transaction.Actions) - 1; index >= 0; index-- {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -267,8 +280,12 @@ func rollbackRestoreTransaction(ctx context.Context, dataDir string, transaction
 }
 
 func cleanupRestoreTransaction(dataDir string, transaction *restoreTransaction) error {
-	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
-	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	// Revalidate immediately before recursive deletion. Journal validation is
+	// deliberately not treated as permanent authorization for a later cleanup.
+	stageRoot, rollbackRoot, err := restoreTransactionRoots(dataDir, transaction)
+	if err != nil {
+		return err
+	}
 	if err := durableRemoveAll(rollbackRoot); err != nil {
 		return fmt.Errorf("remove restore rollback data: %w", err)
 	}
@@ -319,15 +336,11 @@ func restoreJournalPath(dataDir string) string {
 
 func readRestoreTransaction(dataDir string) (restoreTransaction, error) {
 	path := restoreJournalPath(dataDir)
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return restoreTransaction{}, err
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return restoreTransaction{}, errors.New("invalid restore journal file descriptor")
-	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
@@ -346,14 +359,14 @@ func readRestoreTransaction(dataDir string) (restoreTransaction, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return restoreTransaction{}, errors.New("restore transaction journal contains trailing data")
 	}
-	if err := validateRestoreTransaction(&transaction); err != nil {
+	if err := validateRestoreTransactionForDataDir(dataDir, &transaction); err != nil {
 		return restoreTransaction{}, err
 	}
 	return transaction, nil
 }
 
 func writeRestoreTransaction(dataDir string, transaction *restoreTransaction) (resultErr error) {
-	if err := validateRestoreTransaction(transaction); err != nil {
+	if err := validateRestoreTransactionForDataDir(dataDir, transaction); err != nil {
 		return err
 	}
 	if err := ensureDurableDirectory(dataDir); err != nil {
@@ -390,11 +403,11 @@ func writeRestoreTransaction(dataDir string, transaction *restoreTransaction) (r
 }
 
 func validateRestoreTransaction(transaction *restoreTransaction) error {
-	if transaction == nil || transaction.Version != restoreTransactionVersion || !referencePattern.MatchString(transaction.GenerationID) {
+	if transaction == nil || transaction.Version != restoreTransactionVersion {
 		return errors.New("restore transaction journal header is invalid")
 	}
-	if transaction.StageDirectory != ".restore-staging-"+transaction.GenerationID || transaction.RollbackDirectory != ".restore-rollback-"+transaction.GenerationID {
-		return errors.New("restore transaction journal paths are invalid")
+	if err := validateRestoreTransactionPathFields(transaction); err != nil {
+		return err
 	}
 	switch transaction.Phase {
 	case restorePhaseStaging:
@@ -415,6 +428,57 @@ func validateRestoreTransaction(transaction *restoreTransaction) error {
 		return fmt.Errorf("restore transaction has unsupported phase %q", transaction.Phase)
 	}
 	return nil
+}
+
+func validateRestoreTransactionForDataDir(dataDir string, transaction *restoreTransaction) error {
+	if err := validateRestoreTransaction(transaction); err != nil {
+		return err
+	}
+	_, _, err := restoreTransactionRootsUnchecked(dataDir, transaction)
+	return err
+}
+
+func restoreTransactionRoots(dataDir string, transaction *restoreTransaction) (string, string, error) {
+	if err := validateRestoreTransactionPathFields(transaction); err != nil {
+		return "", "", err
+	}
+	return restoreTransactionRootsUnchecked(dataDir, transaction)
+}
+
+func validateRestoreTransactionPathFields(transaction *restoreTransaction) error {
+	if transaction == nil || validateGenerationID(transaction.GenerationID) != nil {
+		return errors.New("restore transaction journal header is invalid")
+	}
+	if transaction.StageDirectory != ".restore-staging-"+transaction.GenerationID || transaction.RollbackDirectory != ".restore-rollback-"+transaction.GenerationID {
+		return errors.New("restore transaction journal paths are invalid")
+	}
+	return nil
+}
+
+func restoreTransactionRootsUnchecked(dataDir string, transaction *restoreTransaction) (string, string, error) {
+	dataRoot, err := filepath.Abs(filepath.Clean(dataDir))
+	if err != nil {
+		return "", "", err
+	}
+	resolve := func(name string) (string, error) {
+		if filepath.Base(name) != name || name == "." || name == ".." {
+			return "", errors.New("restore transaction journal path is not a top-level directory")
+		}
+		path := filepath.Clean(filepath.Join(dataRoot, name))
+		if filepath.Dir(path) != dataRoot || !pathWithin(dataRoot, path) {
+			return "", errors.New("restore transaction journal path escapes the data directory")
+		}
+		return path, nil
+	}
+	stageRoot, err := resolve(transaction.StageDirectory)
+	if err != nil {
+		return "", "", err
+	}
+	rollbackRoot, err := resolve(transaction.RollbackDirectory)
+	if err != nil {
+		return "", "", err
+	}
+	return stageRoot, rollbackRoot, nil
 }
 
 func pathExists(path string) (bool, error) {

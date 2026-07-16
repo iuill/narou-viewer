@@ -8,6 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"narou-viewer/apps/viewer-api-go/internal/statebarrier"
 )
@@ -256,6 +259,9 @@ func TestRecoverFinishesCommittedGenerationCleanup(t *testing.T) {
 }
 
 func TestRecoverRejectsMissingBlankAndSymlinkDataRoots(t *testing.T) {
+	if outcome, err := Recover(context.Background(), string(filepath.Separator)); err == nil || outcome != RecoveryNone {
+		t.Fatalf("filesystem root Recover: outcome=%v err=%v", outcome, err)
+	}
 	if outcome, err := Recover(context.Background(), " "); err == nil || outcome != RecoveryNone {
 		t.Fatalf("blank Recover: outcome=%v err=%v", outcome, err)
 	}
@@ -287,6 +293,27 @@ func TestRestoreTransactionRejectsInvalidJournalsAndReservedPaths(t *testing.T) 
 	for _, transaction := range []*restoreTransaction{
 		nil,
 		func() *restoreTransaction { value := valid; value.Version = 99; return &value }(),
+		func() *restoreTransaction {
+			value := valid
+			value.GenerationID = "x/../../tmp/victim"
+			value.StageDirectory = ".restore-staging-" + value.GenerationID
+			value.RollbackDirectory = ".restore-rollback-" + value.GenerationID
+			return &value
+		}(),
+		func() *restoreTransaction {
+			value := valid
+			value.GenerationID = "x/../state"
+			value.StageDirectory = ".restore-staging-" + value.GenerationID
+			value.RollbackDirectory = ".restore-rollback-" + value.GenerationID
+			return &value
+		}(),
+		func() *restoreTransaction {
+			value := valid
+			value.GenerationID = "x/y"
+			value.StageDirectory = ".restore-staging-" + value.GenerationID
+			value.RollbackDirectory = ".restore-rollback-" + value.GenerationID
+			return &value
+		}(),
 		func() *restoreTransaction { value := valid; value.StageDirectory = "outside"; return &value }(),
 		func() *restoreTransaction { value := valid; value.Actions = value.Actions[:1]; return &value }(),
 		func() *restoreTransaction {
@@ -305,6 +332,16 @@ func TestRestoreTransactionRejectsInvalidJournalsAndReservedPaths(t *testing.T) 
 		if err := validateRestoreTransaction(transaction); err == nil {
 			t.Fatalf("invalid transaction accepted: %+v", transaction)
 		}
+	}
+	escaping := valid
+	escaping.StageDirectory = "../outside"
+	if _, _, err := restoreTransactionRootsUnchecked(t.TempDir(), &escaping); err == nil {
+		t.Fatal("restore transaction roots accepted a non-top-level staging path")
+	}
+	escaping = valid
+	escaping.RollbackDirectory = "../outside"
+	if _, _, err := restoreTransactionRootsUnchecked(t.TempDir(), &escaping); err == nil {
+		t.Fatal("restore transaction roots accepted a non-top-level rollback path")
 	}
 
 	dataDir := t.TempDir()
@@ -328,6 +365,23 @@ func TestRestoreTransactionRejectsInvalidJournalsAndReservedPaths(t *testing.T) 
 	}
 	if _, err := readRestoreTransaction(dataDir); err == nil {
 		t.Fatal("readRestoreTransaction accepted trailing JSON")
+	}
+	fifoJournalDir := t.TempDir()
+	if err := unix.Mkfifo(restoreJournalPath(fifoJournalDir), 0o600); err != nil {
+		t.Fatalf("mkfifo restore journal: %v", err)
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := readRestoreTransaction(fifoJournalDir)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err == nil {
+			t.Fatal("readRestoreTransaction should reject a FIFO")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readRestoreTransaction blocked while opening a FIFO without a writer")
 	}
 	if err := os.Chmod(restoreJournalPath(dataDir), 0o644); err != nil {
 		t.Fatalf("chmod journal: %v", err)
@@ -373,30 +427,27 @@ func TestRestoreTransactionFilesystemAndRollbackEdges(t *testing.T) {
 	if err := rollbackRestoreTransaction(cancelled, root, &restoreTransaction{Actions: []restoreTransactionAction{{Relative: "target"}}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled rollback error = %v", err)
 	}
-	if err := rollbackRestoreTransaction(context.Background(), root, &restoreTransaction{
-		StageDirectory: "stage", RollbackDirectory: "rollback",
-		Actions: []restoreTransactionAction{{Relative: "missing-old", HadOld: true}},
-	}); err == nil {
+	missingOld := newRestoreTransaction("missing-old-test")
+	missingOld.Actions = []restoreTransactionAction{{Relative: "missing-old", HadOld: true}}
+	if err := rollbackRestoreTransaction(context.Background(), root, &missingOld); err == nil {
 		t.Fatal("rollback accepted a missing old target")
 	}
 	unexpected := filepath.Join(root, "unexpected")
 	if err := os.WriteFile(unexpected, []byte("fixture"), 0o600); err != nil {
 		t.Fatalf("write unexpected target: %v", err)
 	}
-	if err := rollbackRestoreTransaction(context.Background(), root, &restoreTransaction{
-		StageDirectory: "stage", RollbackDirectory: "rollback",
-		Actions: []restoreTransactionAction{{Relative: "unexpected"}},
-	}); err == nil {
+	unexpectedTransaction := newRestoreTransaction("unexpected-test")
+	unexpectedTransaction.Actions = []restoreTransactionAction{{Relative: "unexpected"}}
+	if err := rollbackRestoreTransaction(context.Background(), root, &unexpectedTransaction); err == nil {
 		t.Fatal("rollback accepted an unexplained live target")
 	}
 	placed := filepath.Join(root, "placed")
 	if err := os.WriteFile(placed, []byte("new target"), 0o600); err != nil {
 		t.Fatalf("write placed target: %v", err)
 	}
-	if err := rollbackRestoreTransaction(context.Background(), root, &restoreTransaction{
-		StageDirectory: "stage", RollbackDirectory: "rollback",
-		Actions: []restoreTransactionAction{{Relative: "placed", HasNew: true}},
-	}); err != nil {
+	placedTransaction := newRestoreTransaction("placed-test")
+	placedTransaction.Actions = []restoreTransactionAction{{Relative: "placed", HasNew: true}}
+	if err := rollbackRestoreTransaction(context.Background(), root, &placedTransaction); err != nil {
 		t.Fatalf("rollback new-only target: %v", err)
 	}
 	if _, err := os.Lstat(placed); !errors.Is(err, os.ErrNotExist) {
@@ -494,6 +545,18 @@ func TestRestoreTransactionAdditionalFailureBoundaries(t *testing.T) {
 	}
 	if err := beginRestoreTransaction(partialRoot, pointerToTransaction(newRestoreTransaction("partial-failure"))); err == nil {
 		t.Fatal("beginRestoreTransaction accepted an invalid journal partial")
+	}
+
+	journalBlockedRoot := t.TempDir()
+	if err := os.Mkdir(restoreJournalPath(journalBlockedRoot), 0o700); err != nil {
+		t.Fatalf("mkdir blocked journal target: %v", err)
+	}
+	blockedJournal := newRestoreTransaction("blocked-journal")
+	if err := writeRestoreTransaction(journalBlockedRoot, &blockedJournal); err == nil {
+		t.Fatal("writeRestoreTransaction replaced a directory journal target")
+	}
+	if partials, err := filepath.Glob(filepath.Join(journalBlockedRoot, ".state-restore-transaction-*.partial")); err != nil || len(partials) != 0 {
+		t.Fatalf("failed journal write left partials: %v err=%v", partials, err)
 	}
 
 	planRoot := t.TempDir()

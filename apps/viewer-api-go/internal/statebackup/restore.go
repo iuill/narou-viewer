@@ -53,6 +53,9 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	if !referencePattern.MatchString(options.KeyReference) {
 		return RestoreResult{}, errors.New("key reference must be a non-secret identifier using safe characters")
 	}
+	if err := rejectFilesystemRoot(dataDir, "data directory"); err != nil {
+		return RestoreResult{}, err
+	}
 	physicalDataDir, err := physicalPath(dataDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("resolve restore archive location: %w", err)
@@ -99,8 +102,10 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	}
 
 	transaction := newRestoreTransaction(preflight.manifest.GenerationID)
-	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
-	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	stageRoot, rollbackRoot, err := restoreTransactionRoots(dataDir, &transaction)
+	if err != nil {
+		return RestoreResult{}, err
+	}
 	for _, path := range []string{stageRoot, rollbackRoot} {
 		if _, err := os.Lstat(path); err == nil {
 			return RestoreResult{}, fmt.Errorf("restore temporary path already exists without a transaction journal: %s", path)
@@ -313,7 +318,7 @@ func validateManifest(manifest Manifest, payload map[string]FileRecord, expected
 	if manifest.FormatVersion != ManifestFormatVersion {
 		return fmt.Errorf("unsupported manifest format %d", manifest.FormatVersion)
 	}
-	if !referencePattern.MatchString(manifest.GenerationID) || manifest.SnapshotMethod != "cold-stop+writer-lock-v1" || manifest.Encryption != "age-v1" {
+	if validateGenerationID(manifest.GenerationID) != nil || manifest.SnapshotMethod != "cold-stop+writer-lock-v1" || manifest.Encryption != "age-v1" {
 		return errors.New("manifest snapshot or encryption contract is unsupported")
 	}
 	if manifest.KeyReference != expectedKeyReference {

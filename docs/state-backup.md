@@ -60,15 +60,15 @@ backup 前に次を実施します。
 - state doctor による schema / SQLite / canonical file / frontier / 機微 file mode の preflight。archiveに含めるgroupのerrorとsecurity findingは拒否し、除外する`VA-CACHE`だけのversion / integrity errorはmanifest summaryへ残してbackupを継続
 - symlink と non-regular payload の拒否
 
-archive は一時 `.partial` を `0600` で作成し、age stream、gzip、tar をすべて close / sync できた後だけ最終名へ no-replace で公開します。失敗・cancel 時の partial は削除します。出力 directory は `0700`、archive は `0600` に固定します。
+archive は一時 `.partial` を `0600` で作成し、age stream、gzip、tar をすべて close / sync できた後だけ最終名へ no-replace で公開します。失敗・cancel 時の partial は削除します。出力 directory は `0700`、archive は `0600` に固定します。payload、archive、passphrase / identity file はnon-blockingかつsymlinkを辿らない単一descriptorでopenしてからregular fileを確認するため、FIFOなどの特殊fileは待機せず拒否します。
 
-`--output-dir` と `--archive` のdata tree内外判定は文字列pathではなく、symlinkを解決した物理pathで行います。未作成output directoryは最寄りの実在ancestorを解決してから残りのsuffixを評価し、親directory symlink経由で`data/`配下へ戻る配置も拒否します。
+`--output-dir` と `--archive` のdata tree内外判定は文字列prefixではなく、symlinkを解決した物理pathのrelative containmentで行います。未作成output directoryは最寄りの実在ancestorを解決してから残りのsuffixを評価し、親directory symlink経由で`data/`配下へ戻る配置も拒否します。`--data-dir` と `--output-dir` にfilesystem root自体は指定できません。
 
 ## manifest と consistency group
 
 暗号化 archive 内の `manifest.json` は次を記録します。
 
-- timestamp、generation ID、application build、snapshot method
+- timestamp、generation ID、application build、snapshot method。generation IDはslashを含まない単一path componentに限定する
 - schema ID、path、observed / supported version、status、group
 - payload file の path、group、size、mode、SHA-256
 - 含めた / 除外した group
@@ -115,7 +115,7 @@ restore は次の順で処理します。
 bun run state:backup recover --data-dir ./data
 ```
 
-`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、staging中断ならlive generationを変更せずcleanup、commit cleanup 中断なら検証済み新 generation を維持してcleanupを完了します。CLIはこの3結果を区別して表示します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
+`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、staging中断ならlive generationを変更せずcleanup、commit cleanup 中断なら検証済み新 generation を維持してcleanupを完了します。CLIはこの3結果を区別して表示します。journal内のgeneration IDとstaging / rollback名を単一の安全なpath componentとして検証し、clean済みabsolute pathがdata directory直下にあることをjournal読取時と再帰cleanup直前に再確認します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
 
 restore staging は復号済み機微データです。tool は成功・失敗時に管理 path から削除しますが、一般 filesystem、COW、SSD の物理 secure erase は保証しません。backup は平文 staging を作らず、restore staging の寿命だけを短くしています。
 

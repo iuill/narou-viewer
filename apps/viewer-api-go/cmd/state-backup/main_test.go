@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"narou-viewer/apps/viewer-api-go/internal/statebackup"
 )
@@ -48,6 +51,26 @@ func TestPrivateSecretReadUsesValidatedFileDescriptor(t *testing.T) {
 	raw, err := io.ReadAll(file)
 	if err != nil || string(raw) != "validated fixture" {
 		t.Fatalf("validated descriptor content=%q err=%v", raw, err)
+	}
+}
+
+func TestPrivateSecretOpenRejectsFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret-fifo")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := openPrivateRegularFile(path)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("openPrivateRegularFile should reject a FIFO")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("openPrivateRegularFile blocked while opening a FIFO without a writer")
 	}
 }
 

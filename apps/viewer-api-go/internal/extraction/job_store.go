@@ -51,6 +51,16 @@ func LoadAllJobs(stateDir string) ([]JobWithNovel, error) {
 	return loadJobRecords(stateDir)
 }
 
+// LoadJobsForExecution excludes every current job owned by a novel that also
+// has an incompatible canonical job. An incompatible document whose owner
+// cannot be identified blocks background execution globally.
+func LoadJobsForExecution(stateDir string) ([]JobWithNovel, error) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	return loadJobRecordsForExecution(stateDir)
+}
+
 func PruneNovelState(stateDir string, novelID string) (NovelStatePruneResult, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
@@ -160,8 +170,11 @@ func preflightJobDocumentsUnlocked(stateDir string, novelID string) error {
 		if read.err != nil {
 			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
 		}
-		if read.exists && read.incompatible && read.document.NovelID == novelID {
-			return read.guardError
+		if read.exists && read.incompatible {
+			owner := strings.TrimSpace(read.document.NovelID)
+			if owner == "" || owner == novelID {
+				return read.guardError
+			}
 		}
 	}
 	return nil
@@ -261,10 +274,49 @@ func loadJobRecords(stateDir string) ([]JobWithNovel, error) {
 		}
 		records = append(records, JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()})
 	}
+	sortJobRecords(records)
+	return records, nil
+}
+
+func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
+	paths, err := filepath.Glob(filepath.Join(stateDir, "extraction_jobs", "*.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	records := []JobWithNovel{}
+	blockedNovelIDs := map[string]struct{}{}
+	for _, path := range paths {
+		read := readJobDocument(path)
+		if read.err != nil {
+			return nil, fmt.Errorf("read extraction job %s for execution: %w", path, read.err)
+		}
+		if !read.exists {
+			continue
+		}
+		if read.incompatible {
+			owner := strings.TrimSpace(read.document.NovelID)
+			if owner == "" {
+				return nil, fmt.Errorf("incompatible extraction job owner cannot be identified; background execution is blocked: %w", read.guardError)
+			}
+			blockedNovelIDs[owner] = struct{}{}
+			continue
+		}
+		records = append(records, JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()})
+	}
+	filtered := records[:0]
+	for _, record := range records {
+		if _, blocked := blockedNovelIDs[record.NovelID]; !blocked {
+			filtered = append(filtered, record)
+		}
+	}
+	sortJobRecords(filtered)
+	return filtered, nil
+}
+
+func sortJobRecords(records []JobWithNovel) {
 	sort.SliceStable(records, func(i, j int) bool {
 		return records[i].Job.CreatedAt > records[j].Job.CreatedAt
 	})
-	return records, nil
 }
 
 type jobDocumentRead struct {
@@ -363,7 +415,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 
-	records, err := loadJobRecords(stateDir)
+	records, err := loadJobRecordsForExecution(stateDir)
 	if err != nil {
 		return 0, err
 	}

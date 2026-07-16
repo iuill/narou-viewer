@@ -51,7 +51,7 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		records, err := extractdomain.LoadAllJobs(c.stateDir)
+		records, err := extractdomain.LoadJobsForExecution(c.stateDir)
 		if err != nil {
 			return
 		}
