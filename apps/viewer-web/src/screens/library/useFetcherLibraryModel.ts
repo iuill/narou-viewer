@@ -2,7 +2,9 @@ import { type DragEvent, type FormEvent, useCallback, useEffect, useMemo, useRef
 import {
   cancelFetcherTask,
   downloadFetcherWorks,
+  pauseFetcherTask,
   removeFetcherWorks,
+  resumeFetcherTask,
   resumeFetcherWorks,
   updateFetcherWorks
 } from "../../features/fetcher/api";
@@ -10,6 +12,7 @@ import {
   getFetcherActiveTaskEntries,
   getFetcherBusyFetcherWorkIds,
   getFetcherQueuedTasks,
+  getFetcherResumableTaskEntries,
   getFetcherTaskListEntries
 } from "../../features/fetcher/model";
 import { extractDroppedDownloadTarget } from "../../features/library/downloadTarget";
@@ -137,6 +140,7 @@ export function useFetcherLibraryModel({
   setLibraryNotice
 }: UseFetcherLibraryModelInput) {
   const [cancelingFetcherTaskIds, setCancelingFetcherTaskIds] = useState<Set<string>>(() => new Set());
+  const [controllingFetcherTaskIds, setControllingFetcherTaskIds] = useState<Set<string>>(() => new Set());
   const [downloadingNovelIds, setDownloadingNovelIds] = useState<Set<string>>(() => new Set());
   const [lastReliableFetcherBusyNovelIds, setLastReliableFetcherBusyNovelIds] = useState<Set<string>>(() => new Set());
   const [pendingFetcherActionTasks, setPendingFetcherActionTasks] = useState<PendingFetcherActionTask[]>([]);
@@ -356,11 +360,12 @@ export function useFetcherLibraryModel({
   }
 
   async function handleCancelFetcherTask(taskId: string) {
-    if (cancelingFetcherTaskIds.has(taskId)) {
+    if (controllingFetcherTaskIds.has(taskId)) {
       return;
     }
 
     setCancelingFetcherTaskIds((current) => new Set(current).add(taskId));
+    setControllingFetcherTaskIds((current) => new Set(current).add(taskId));
     onError(null);
 
     try {
@@ -372,6 +377,57 @@ export function useFetcherLibraryModel({
       onError(cancelError instanceof Error ? cancelError.message : "Unknown error");
     } finally {
       setCancelingFetcherTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+      setControllingFetcherTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  }
+
+  async function handlePauseFetcherTask(taskId: string) {
+    if (controllingFetcherTaskIds.has(taskId)) {
+      return;
+    }
+
+    setControllingFetcherTaskIds((current) => new Set(current).add(taskId));
+    onError(null);
+
+    try {
+      const payload = await pauseFetcherTask(taskId);
+      setLibraryNotice(payload.message ?? "タスクの一時停止を受け付けました。");
+      requestLibraryReload();
+    } catch (pauseError) {
+      onError(pauseError instanceof Error ? pauseError.message : "Unknown error");
+    } finally {
+      setControllingFetcherTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  }
+
+  async function handleResumeFetcherTask(taskId: string) {
+    if (controllingFetcherTaskIds.has(taskId)) {
+      return;
+    }
+
+    setControllingFetcherTaskIds((current) => new Set(current).add(taskId));
+    onError(null);
+
+    try {
+      const payload = await resumeFetcherTask(taskId);
+      setLibraryNotice(payload.message ?? "タスクを再開しました。");
+      requestLibraryReload();
+    } catch (resumeError) {
+      onError(resumeError instanceof Error ? resumeError.message : "Unknown error");
+    } finally {
+      setControllingFetcherTaskIds((current) => {
         const next = new Set(current);
         next.delete(taskId);
         return next;
@@ -390,6 +446,11 @@ export function useFetcherLibraryModel({
           ? "稼働中"
           : "待機中";
   const activeFetcherTaskEntries = useMemo(() => getFetcherActiveTaskEntries(fetcherTasks), [fetcherTasks]);
+  const resumableFetcherTaskEntries = useMemo(() => getFetcherResumableTaskEntries(fetcherTasks), [fetcherTasks]);
+  const fetcherTaskEntries = useMemo(
+    () => [...activeFetcherTaskEntries, ...resumableFetcherTaskEntries],
+    [activeFetcherTaskEntries, resumableFetcherTaskEntries]
+  );
   const activeFetcherTasks = useMemo(() => activeFetcherTaskEntries.map((entry) => entry.task), [activeFetcherTaskEntries]);
   const activeFetcherTaskIds = useMemo(
     () => new Set(activeFetcherTaskEntries.map((entry) => entry.task.id).filter(Boolean)),
@@ -408,6 +469,16 @@ export function useFetcherLibraryModel({
       }
     }
     for (const task of fetcherTasks?.recentFailed ?? []) {
+      if (task.id) {
+        taskIds.add(task.id);
+      }
+    }
+    for (const task of fetcherTasks?.paused ?? []) {
+      if (task.id) {
+        taskIds.add(task.id);
+      }
+    }
+    for (const task of fetcherTasks?.interrupted ?? []) {
       if (task.id) {
         taskIds.add(task.id);
       }
@@ -483,6 +554,7 @@ export function useFetcherLibraryModel({
     [downloadingNovelIds, effectiveFetcherBusyNovelIds, pendingFetcherActionNovelIds, resumingNovelIds, updatingNovelIds]
   );
   const hasActiveFetcherTasks = activeFetcherTasks.length > 0;
+  const hasFetcherTaskActivity = hasActiveFetcherTasks || resumableFetcherTaskEntries.length > 0;
   const currentFetcherTask = fetcherTasks?.current ?? fetcherTasks?.convertCurrent ?? null;
   const queuedTaskPreviewEntries = useMemo(
     () => getFetcherTaskListEntries(getFetcherQueuedTasks(fetcherTasks).slice(0, 3)),
@@ -490,6 +562,14 @@ export function useFetcherLibraryModel({
   );
   const recentFailedFetcherTaskPreviewEntries = useMemo(
     () => getFetcherTaskListEntries(fetcherTasks?.recentFailed.slice(0, 2) ?? []),
+    [fetcherTasks]
+  );
+  const pausedFetcherTaskPreviewEntries = useMemo(
+    () => getFetcherTaskListEntries(fetcherTasks?.paused.slice(0, 3) ?? []),
+    [fetcherTasks]
+  );
+  const interruptedFetcherTaskPreviewEntries = useMemo(
+    () => getFetcherTaskListEntries(fetcherTasks?.interrupted.slice(0, 3) ?? []),
     [fetcherTasks]
   );
   const resumableNovels = useMemo(() => novels.filter((novel) => canResumeLibraryNovel(novel)), [novels]);
@@ -542,6 +622,7 @@ export function useFetcherLibraryModel({
     activeFetcherTaskEntries,
     activeFetcherTasks,
     cancelingFetcherTaskIds,
+    controllingFetcherTaskIds,
     currentFetcherTask,
     downloadForce,
     downloadTarget,
@@ -549,9 +630,12 @@ export function useFetcherLibraryModel({
     fetcherQueue,
     fetcherStatusCheckedAt,
     fetcherStatusError,
+    fetcherTaskEntries,
     fetcherTasks,
     fetcherUpdateNotice,
     handleCancelFetcherTask,
+    handlePauseFetcherTask,
+    handleResumeFetcherTask,
     handleDownloadDrop,
     handleDownloadSubmit,
     handleExportLibrary,
@@ -560,7 +644,9 @@ export function useFetcherLibraryModel({
     handleUpdateCurrentNovel,
     handleUpdateNovel,
     hasActiveFetcherTasks,
+    hasFetcherTaskActivity,
     hasFetcherStatus,
+    interruptedFetcherTaskPreviewEntries,
     isDownloadComposerOpen,
     isDownloadDropActive,
     isDownloadSubmitting,
@@ -568,6 +654,7 @@ export function useFetcherLibraryModel({
     isNovelActionSubmitting,
     queuedTaskPreviewEntries,
     queueStatusLabel,
+    pausedFetcherTaskPreviewEntries,
     recentFailedFetcherTaskPreviewEntries,
     resumableNovels,
     setDownloadForce,

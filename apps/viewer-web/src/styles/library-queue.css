@@ -104,7 +104,8 @@
 }
 
 .queue-task-badge.status-running,
-.queue-task-badge.status-completed {
+.queue-task-badge.status-completed,
+.queue-task-badge.status-succeeded {
   background: rgba(63, 128, 85, 0.14);
   color: #2c5c3d;
 }
@@ -116,13 +117,21 @@
 
 .queue-task-badge.status-failed,
 .queue-task-badge.status-incompatible,
-.queue-task-badge.status-canceled {
+.queue-task-badge.status-canceled,
+.queue-task-badge.status-interrupted {
   background: rgba(171, 47, 41, 0.12);
   color: #8a251f;
 }
 
+.queue-task-badge.status-paused {
+  background: rgba(191, 117, 35, 0.14);
+  color: #875117;
+}
+
+.queue-task-action-button,
 .queue-task-cancel-button {
   min-height: 28px;
+  padding: 0 10px;
   border: 1px solid rgba(171, 47, 41, 0.26);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.86);
@@ -132,10 +141,29 @@
   cursor: pointer;
 }
 
+.queue-task-action-button.pause {
+  border-color: rgba(191, 117, 35, 0.3);
+  color: #875117;
+}
+
+.queue-task-action-button.resume {
+  border-color: rgba(63, 128, 85, 0.3);
+  color: #2c5c3d;
+}
+
+.queue-task-action-button:hover:not(:disabled) {
+  background: rgba(191, 117, 35, 0.1);
+}
+
+.queue-task-action-button.resume:hover:not(:disabled) {
+  background: rgba(63, 128, 85, 0.1);
+}
+
 .queue-task-cancel-button:hover:not(:disabled) {
   background: rgba(171, 47, 41, 0.1);
 }
 
+.queue-task-action-button:disabled,
 .queue-task-cancel-button:disabled {
   cursor: wait;
   opacity: 0.62;

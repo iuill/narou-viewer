@@ -91,14 +91,15 @@ type Props = {
   isDownloadSubmitting: boolean;
   isLibraryExporting?: boolean;
   libraryNotice: string | null;
-  hasActiveFetcherTasks: boolean;
   activeFetcherTasksCount: number;
   activeFetcherTaskEntries: ActiveTaskEntry[];
+  fetcherTaskEntries?: ActiveTaskEntry[];
   fetcherStatusError: string | null;
   fetcherQueueRunning: boolean;
   queueStatusLabel: string;
   fetcherStatusCheckedAt: string | null;
   cancelingFetcherTaskIds: Set<string>;
+  controllingFetcherTaskIds?: Set<string>;
   resumingNovelIds: Set<string>;
   updatingNovelIds?: Set<string>;
   libraryPagination: Pagination;
@@ -118,6 +119,8 @@ type Props = {
   onDownloadDragOver: (event: DragEvent<HTMLDivElement>) => void;
   onDownloadDrop: (event: DragEvent<HTMLDivElement>) => void;
   onCancelFetcherTask: (taskId: string) => void | Promise<void>;
+  onPauseFetcherTask?: (taskId: string) => void | Promise<void>;
+  onResumeFetcherTask?: (taskId: string) => void | Promise<void>;
   onLibraryFilterQueryChange: (value: string) => void;
   onClearLibraryFilter: () => void;
   onLibraryPageChange: (page: number) => void;
@@ -139,14 +142,15 @@ export function LibraryPanel({
   isDownloadSubmitting,
   isLibraryExporting = false,
   libraryNotice,
-  hasActiveFetcherTasks,
   activeFetcherTasksCount,
   activeFetcherTaskEntries,
+  fetcherTaskEntries = activeFetcherTaskEntries,
   fetcherStatusError,
   fetcherQueueRunning,
   queueStatusLabel,
   fetcherStatusCheckedAt,
   cancelingFetcherTaskIds = new Set<string>(),
+  controllingFetcherTaskIds = cancelingFetcherTaskIds,
   resumingNovelIds = new Set<string>(),
   updatingNovelIds = new Set<string>(),
   libraryPagination,
@@ -166,6 +170,8 @@ export function LibraryPanel({
   onDownloadDragOver,
   onDownloadDrop,
   onCancelFetcherTask = () => {},
+  onPauseFetcherTask = () => {},
+  onResumeFetcherTask = () => {},
   onLibraryFilterQueryChange,
   onClearLibraryFilter,
   onLibraryPageChange,
@@ -178,7 +184,7 @@ export function LibraryPanel({
   const [expandedStoryNovelId, setExpandedStoryNovelId] = useState<string | null>(null);
   const isMobileDownloadTab = mobileHomeTab === "download";
   const shouldShowDownloadComposer = isDownloadComposerOpen || isMobileDownloadTab;
-  const shouldShowQueueSection = hasActiveFetcherTasks || fetcherStatusError || isMobileDownloadTab;
+  const shouldShowQueueSection = fetcherTaskEntries.length > 0 || fetcherStatusError || isMobileDownloadTab;
   const shouldShowLibraryList = !isMobileDownloadTab;
   const hasResumableNovels = resumableNovels.length > 0;
   const hasUpdatableNovels = updatableNovels.length > 0;
@@ -304,8 +310,10 @@ export function LibraryPanel({
               <p>
                 {fetcherStatusError
                   ? fetcherStatusError
-                  : hasActiveFetcherTasks
-                    ? `${activeFetcherTasksCount} 件のタスクを監視中`
+                  : fetcherTaskEntries.length > 0
+                    ? activeFetcherTasksCount > 0
+                      ? `${activeFetcherTasksCount} 件のタスクを監視中`
+                      : `${fetcherTaskEntries.length} 件の再開可能タスクがあります`
                     : "待機中のタスクはありません。"}
               </p>
             </div>
@@ -314,9 +322,9 @@ export function LibraryPanel({
               <span>{fetcherStatusCheckedAt ? formatDate(fetcherStatusCheckedAt) : "確認中"}</span>
             </div>
           </div>
-          {hasActiveFetcherTasks ? (
+          {fetcherTaskEntries.length > 0 ? (
             <div className="library-queue-list">
-              {activeFetcherTaskEntries.map(({ key, task }) => (
+              {fetcherTaskEntries.map(({ key, task }) => (
                 <article className="library-queue-card" key={key}>
                   <div className="library-queue-card-heading">
                     <div className="library-queue-card-copy">
@@ -326,10 +334,33 @@ export function LibraryPanel({
                     <div className="library-queue-card-badges">
                       <span className={`queue-task-badge type-${task.type}`}>{getFetcherTaskTypeLabel(task.type)}</span>
                       <span className={`queue-task-badge status-${task.status}`}>{getFetcherTaskStatusLabel(task.status)}</span>
-                      {task.status === "running" || task.status === "queued" ? (
+                      {task.canPause ? (
                         <button
+                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}を一時停止`}
+                          className="queue-task-action-button pause"
+                          disabled={controllingFetcherTaskIds.has(task.id)}
+                          onClick={() => void onPauseFetcherTask(task.id)}
+                          type="button"
+                        >
+                          {controllingFetcherTaskIds.has(task.id) ? "一時停止中..." : "一時停止"}
+                        </button>
+                      ) : null}
+                      {task.canResume ? (
+                        <button
+                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}を再開`}
+                          className="queue-task-action-button resume"
+                          disabled={controllingFetcherTaskIds.has(task.id)}
+                          onClick={() => void onResumeFetcherTask(task.id)}
+                          type="button"
+                        >
+                          {controllingFetcherTaskIds.has(task.id) ? "再開中..." : "再開"}
+                        </button>
+                      ) : null}
+                      {task.canCancel ? (
+                        <button
+                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}を中止`}
                           className="queue-task-cancel-button"
-                          disabled={cancelingFetcherTaskIds.has(task.id)}
+                          disabled={controllingFetcherTaskIds.has(task.id)}
                           onClick={() => void onCancelFetcherTask(task.id)}
                           type="button"
                         >

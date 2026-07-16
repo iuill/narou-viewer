@@ -22,15 +22,28 @@ export type FetcherTask = {
   savedEpisodeCount: number | null;
   failedEpisodeId: string | null;
   resumeEpisodeId: string | null;
+  requestedAction: string | null;
+  attemptCount: number | null;
+  queuePosition: number | null;
+  canPause: boolean;
+  canResume: boolean;
+  canCancel: boolean;
+  pausedAt: string | null;
+  interruptedAt: string | null;
 };
 
 export type FetcherTaskSummary = {
   current: FetcherTask | null;
   queued: FetcherTask[];
+  paused: FetcherTask[];
+  interrupted: FetcherTask[];
   recentCompleted: FetcherTask[];
   recentFailed: FetcherTask[];
   completedCount: number;
   failedCount: number;
+  canceledCount: number;
+  pausedCount: number;
+  interruptedCount: number;
   convertCurrent: FetcherTask | null;
   convertQueued: FetcherTask[];
   available?: boolean;
@@ -114,6 +127,23 @@ function normalizeInteger(value: unknown): number | null {
   return Math.floor(normalized);
 }
 
+function normalizeBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    if (value.trim().toLowerCase() === "true") {
+      return true;
+    }
+    if (value.trim().toLowerCase() === "false") {
+      return false;
+    }
+  }
+
+  return null;
+}
+
 function clampPercentage(value: number): number {
   return Math.min(100, Math.max(0, value));
 }
@@ -132,6 +162,17 @@ function pickNumberValue(record: JsonRecord, keys: string[]): number | null {
 function pickIntegerValue(record: JsonRecord, keys: string[]): number | null {
   for (const key of keys) {
     const normalized = normalizeInteger(record[key]);
+    if (normalized !== null) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function pickBooleanValue(record: JsonRecord, keys: string[]): boolean | null {
+  for (const key of keys) {
+    const normalized = normalizeBoolean(record[key]);
     if (normalized !== null) {
       return normalized;
     }
@@ -161,6 +202,7 @@ function normalizeTask(task: unknown): FetcherTask | null {
   const rawProgress = pickNumberValue(task, ["progress"]);
   const totalSteps = pickIntegerValue(task, ["totalSteps"]);
   const currentStep = pickIntegerValue(task, ["currentStep"]);
+  const requestedAction = pickTextValue(task, ["requestedAction", "requested_action"]);
   const derivedProgress =
     rawProgress !== null
       ? clampPercentage(rawProgress)
@@ -197,6 +239,19 @@ function normalizeTask(task: unknown): FetcherTask | null {
     savedEpisodeCount: pickIntegerValue(task, ["savedEpisodeCount"]),
     failedEpisodeId: pickTextValue(task, ["failedEpisodeId"]),
     resumeEpisodeId: pickTextValue(task, ["resumeEpisodeId"]),
+    requestedAction,
+    attemptCount: pickIntegerValue(task, ["attemptCount", "attempt_count"]),
+    queuePosition: pickIntegerValue(task, ["queuePosition", "queue_position"]),
+    canPause:
+      pickBooleanValue(task, ["canPause", "can_pause"]) ?? (status === "queued" || status === "running"),
+    canResume:
+      pickBooleanValue(task, ["canResume", "can_resume"]) ??
+      (status === "paused" || status === "interrupted" || status === "failed"),
+    canCancel:
+      pickBooleanValue(task, ["canCancel", "can_cancel"]) ??
+      (status === "queued" || status === "running" || status === "paused" || status === "interrupted" || status === "failed"),
+    pausedAt: pickTextValue(task, ["pausedAt", "paused_at"]),
+    interruptedAt: pickTextValue(task, ["interruptedAt", "interrupted_at"]),
   };
 }
 
@@ -212,10 +267,15 @@ export function toFetcherTaskSummary(value: FetcherTaskSummaryResponse): Fetcher
   return {
     current: normalizeTask(value.current),
     queued: normalizeTaskArray(value.queued),
+    paused: normalizeTaskArray(value.paused),
+    interrupted: normalizeTaskArray(value.interrupted),
     recentCompleted: normalizeTaskArray(value.recentCompleted),
     recentFailed: normalizeTaskArray(value.recentFailed),
     completedCount: normalizeInteger(value.completedCount) ?? 0,
     failedCount: normalizeInteger(value.failedCount) ?? 0,
+    canceledCount: normalizeInteger(value.canceledCount) ?? 0,
+    pausedCount: normalizeInteger(value.pausedCount) ?? 0,
+    interruptedCount: normalizeInteger(value.interruptedCount) ?? 0,
     convertCurrent: normalizeTask(value.convertCurrent),
     convertQueued: normalizeTaskArray(value.convertQueued),
     available: value.available,
@@ -266,10 +326,22 @@ export function getFetcherQueuedTasks(summary: FetcherTaskSummary | null): Fetch
   return [...summary.queued, ...summary.convertQueued];
 }
 
+export function getFetcherResumableTaskEntries(summary: FetcherTaskSummary | null): FetcherTaskListEntry[] {
+  if (!summary) {
+    return [];
+  }
+
+  return getFetcherTaskListEntries([...summary.paused, ...summary.interrupted]);
+}
+
 export function getFetcherBusyFetcherWorkIds(summary: FetcherTaskSummary | null): Set<string> {
   const busyFetcherWorkIds = new Set<string>();
 
-  for (const task of getFetcherActiveTasks(summary)) {
+  for (const task of [
+    ...getFetcherActiveTasks(summary),
+    ...(summary?.paused ?? []),
+    ...(summary?.interrupted ?? [])
+  ]) {
     if (!["download", "resume", "update"].includes(task.type)) {
       continue;
     }
@@ -349,7 +421,12 @@ export function getFetcherTaskStatusLabel(status: string): string {
     case "running":
       return "実行中";
     case "completed":
+    case "succeeded":
       return "完了";
+    case "paused":
+      return "一時停止";
+    case "interrupted":
+      return "中断";
     case "failed":
       return "失敗";
     case "canceled":
@@ -368,7 +445,7 @@ export function getFetcherTaskProgressValue(task: FetcherTask): number {
     return clampPercentage((task.currentStep / task.totalSteps) * 100);
   }
 
-  return task.status === "completed" ? 100 : 0;
+  return task.status === "completed" || task.status === "succeeded" ? 100 : 0;
 }
 
 export function hasFetcherTaskDeterminateProgress(task: FetcherTask): boolean {
