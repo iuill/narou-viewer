@@ -261,6 +261,38 @@ describe("ReaderCharacterSummaryPanel", () => {
     });
   });
 
+  it("互換性のないjobを要復旧履歴として安全なfallback付きで表示する", async () => {
+    const props = createProps({
+      completedJobs: [
+        {
+          jobId: "future-job",
+          requestedUpToEpisodeIndex: "",
+          generationMode: null,
+          generationStrategy: null,
+          modelId: null,
+          status: "incompatible",
+          createdAt: "",
+          startedAt: null,
+          finishedAt: null,
+          errorMessage: "この抽出 job は現在の build と互換性がないため、変更せず保持されています。"
+        }
+      ]
+    });
+    const { container, root } = await renderPanel(props);
+
+    expect(container.textContent).toContain("過去の生成履歴");
+    expect(container.textContent).toContain("互換性なし・要復旧");
+    expect(container.textContent).toContain("対象範囲不明");
+    expect(container.textContent).toContain("生成方式不明");
+    expect(container.textContent).toContain("未取得");
+    expect(container.textContent).toContain("変更せず保持されています");
+    expect(container.textContent).not.toContain("第話まで");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("通知とエラーを同時に表示できる", async () => {
     const props = createProps({
       error: "キャラクター一覧の再取得に失敗しました。",

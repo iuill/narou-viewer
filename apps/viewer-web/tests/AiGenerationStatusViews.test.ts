@@ -274,6 +274,44 @@ describe("AI generation and mobile status views", () => {
       createElement(AiJobsView, {
         aiGenerationActiveJobsCount: 0,
         aiGenerationCompletedJobsCount: 0,
+        aiGenerationFailedJobsCount: 1,
+        aiGenerationJobFilter: "failed",
+        aiGenerationJobsError: null,
+        hasAiGenerationJobs: true,
+        isAiGenerationJobsLoading: false,
+        onOpenNovelFromJob: onOpenNovel,
+        onSetAiGenerationJobFilter: onSetFilter,
+        visibleAiGenerationJobs: [
+          {
+            createdAt: "",
+            errorMessage: "抽出チェックポイントが現在の build と互換性がないため自動再開を停止しました。",
+            finishedAt: null,
+            generationMode: null,
+            generationStrategy: null,
+            jobId: "incompatible-job",
+            modelId: null,
+            novelAuthor: null,
+            novelId: "n1",
+            novelTitle: "作品A",
+            profileId: null,
+            profileLabel: null,
+            requestedUpToEpisodeIndex: "",
+            startedAt: null,
+            status: "incompatible"
+          }
+        ]
+      })
+    );
+    expect(dom.window.document.body.textContent).toContain("互換性なし・要復旧");
+    expect(dom.window.document.body.textContent).toContain("対象範囲不明");
+    expect(dom.window.document.body.textContent).toContain("生成方式不明");
+    expect(dom.window.document.body.textContent).toContain("自動再開を停止しました");
+
+    await renderIntoRoot(
+      root,
+      createElement(AiJobsView, {
+        aiGenerationActiveJobsCount: 0,
+        aiGenerationCompletedJobsCount: 0,
         aiGenerationFailedJobsCount: 0,
         aiGenerationJobFilter: "active",
         aiGenerationJobsError: null,

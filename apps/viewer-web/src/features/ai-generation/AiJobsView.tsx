@@ -60,13 +60,15 @@ export function AiJobsView({
                       <strong>{job.novelTitle ?? job.novelId}</strong>
                       <p>
                         {job.profileLabel ? `${job.profileLabel} / ` : ""}
-                        第{job.requestedUpToEpisodeIndex}話まで / {getAiGenerationModeLabel(job.generationMode)} /{" "}
-                        {getCharacterGenerationStrategyLabel(job.generationStrategy)}
+                        {formatAiGenerationJobTarget(job.requestedUpToEpisodeIndex)} /{" "}
+                        {getAiGenerationModeLabel(job.generationMode)} / {formatAiGenerationJobStrategy(job)}
                         {job.modelId ? ` / ${job.modelId}` : ""}
                       </p>
                     </div>
                     <div className="library-queue-card-badges">
-                      <span className={`queue-task-badge status-${job.status}`}>{job.status}</span>
+                      <span className={`queue-task-badge status-${job.status}`}>
+                        {job.status === "incompatible" ? "互換性なし・要復旧" : job.status}
+                      </span>
                     </div>
                   </div>
                   <div className="library-queue-card-meta">
@@ -94,4 +96,15 @@ export function AiJobsView({
           )}
 
   </div>;
+}
+
+function formatAiGenerationJobTarget(episodeIndex: string): string {
+  return /^\d+$/.test(episodeIndex) ? `第${episodeIndex}話まで` : "対象範囲不明";
+}
+
+function formatAiGenerationJobStrategy(job: AiGenerationJobSummary): string {
+  if (job.status === "incompatible" && !job.generationStrategy) {
+    return "生成方式不明";
+  }
+  return getCharacterGenerationStrategyLabel(job.generationStrategy);
 }

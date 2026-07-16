@@ -67,14 +67,16 @@ describe("characterSummaryUtils", () => {
     ).toBe(false);
   });
 
-  it("treats failed jobs as finished, not active", () => {
+  it("treats failed and incompatible jobs as finished, not active", () => {
     expect(isCharacterSummaryActiveJob("queued")).toBe(true);
     expect(isCharacterSummaryActiveJob("running")).toBe(true);
     expect(isCharacterSummaryActiveJob("completed")).toBe(false);
     expect(isCharacterSummaryActiveJob("failed")).toBe(false);
+    expect(isCharacterSummaryActiveJob("incompatible")).toBe(false);
 
     expect(isCharacterSummaryCompletedJob("completed")).toBe(true);
     expect(isCharacterSummaryCompletedJob("failed")).toBe(true);
+    expect(isCharacterSummaryCompletedJob("incompatible")).toBe(true);
     expect(isCharacterSummaryCompletedJob("queued")).toBe(false);
     expect(isCharacterSummaryCompletedJob("running")).toBe(false);
   });

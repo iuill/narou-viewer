@@ -17,6 +17,7 @@ const EXTRACTION_JOB_STAGE_LABELS: Record<string, string> = {
   discovery: "人物候補を発見中",
   completed: "完了",
   failed: "失敗",
+  incompatible: "互換性なし・要復旧",
   recovered: "再開待ち"
 };
 
@@ -65,7 +66,8 @@ function ExtractionJobCard({
     <article className={`reader-panel-card reader-character-job job-${job.status}`}>
       <div className="reader-character-job-header">
         <strong>
-          第{formatEpisodeOrderLabel(job.requestedUpToEpisodeIndex)}話まで / {formatExtractionGenerationStrategy(job.generationStrategy)}
+          {formatExtractionJobTarget(job.requestedUpToEpisodeIndex, formatEpisodeOrderLabel)} /{" "}
+          {formatExtractionGenerationStrategy(job)}
         </strong>
         <span>{formatExtractionJobStage(job)}</span>
       </div>
@@ -162,9 +164,23 @@ function formatExtractionJobStage(job: ExtractionJobSummary): string {
   return EXTRACTION_JOB_STAGE_LABELS[job.progressStage ?? job.status] ?? job.progressStage ?? job.status;
 }
 
-function formatExtractionGenerationStrategy(strategy: ExtractionJobSummary["generationStrategy"]): string {
+function formatExtractionJobTarget(
+  episodeIndex: string,
+  formatEpisodeOrderLabel: (episodeIndex: string) => string
+): string {
+  if (!/^\d+$/.test(episodeIndex)) {
+    return "対象範囲不明";
+  }
+  return `第${formatEpisodeOrderLabel(episodeIndex)}話まで`;
+}
+
+function formatExtractionGenerationStrategy(job: ExtractionJobSummary): string {
+  const strategy = job.generationStrategy;
   if (strategy === "serial" || strategy === "parallel_identity" || strategy === "discovery_parallel_correction") {
     return EXTRACTION_GENERATION_STRATEGY_LABELS[strategy];
+  }
+  if (job.status === "incompatible") {
+    return "生成方式不明";
   }
   return EXTRACTION_GENERATION_STRATEGY_LABELS.serial;
 }
