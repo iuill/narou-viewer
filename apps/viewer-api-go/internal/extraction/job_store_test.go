@@ -383,6 +383,46 @@ func TestRecoverRunningJobsDoesNotRequeueUnsupportedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRecoverRunningJobsPersistsFailStopBeforeCheckpointQuarantine(t *testing.T) {
+	stateDir := t.TempDir()
+	novelID := "novel-checkpoint-crash"
+	upToEpisodeIndex := "2"
+	if err := SaveJob(stateDir, novelID, Job{
+		JobID:                     "job-running-crash-safe",
+		RequestedUpToEpisodeIndex: upToEpisodeIndex,
+		Status:                    "running",
+		CreatedAt:                 "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	checkpointPath := checkpointstore.NewFileStore(stateDir).Path(novelID, upToEpisodeIndex)
+	checkpointRaw := `{"schemaVersion":99,"novelId":"novel-checkpoint-crash","upToEpisodeIndex":"2"}`
+	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
+		t.Fatalf("mkdir checkpoint dir: %v", err)
+	}
+	if err := os.WriteFile(checkpointPath, []byte(checkpointRaw), 0o600); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
+
+	indexPath := filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml")
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatalf("remove job index: %v", err)
+	}
+	if err := os.Mkdir(indexPath, 0o700); err != nil {
+		t.Fatalf("block job index path: %v", err)
+	}
+	if recovered, err := RecoverRunningJobs(stateDir); err == nil || recovered != 0 {
+		t.Fatalf("RecoverRunningJobs with index failure = %d, err=%v", recovered, err)
+	}
+	jobs, ok, err := LoadJobs(stateDir, novelID)
+	if err != nil || !ok || len(jobs) != 1 || jobs[0].Status != "incompatible" {
+		t.Fatalf("fail-stop job = %+v, ok=%v err=%v", jobs, ok, err)
+	}
+	if raw, err := os.ReadFile(checkpointPath); err != nil || string(raw) != checkpointRaw {
+		t.Fatalf("checkpoint moved before durable fail-stop: raw=%q err=%v", raw, err)
+	}
+}
+
 func TestLoadSummaryAndJobsHandleMissingFiles(t *testing.T) {
 	stateDir := t.TempDir()
 	if jobs, ok, err := LoadJobs(stateDir, "missing"); err != nil || ok || len(jobs) != 0 {
@@ -553,6 +593,35 @@ func TestOwnerlessFutureJobBlocksAllExecutionAndEnqueue(t *testing.T) {
 	}
 	if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
 		t.Fatalf("ownerless future job should block enqueue globally: created=%v err=%v", created, err)
+	}
+}
+
+func TestUnsafeOrNonStringFutureJobOwnerBlocksGlobally(t *testing.T) {
+	for _, owner := range []string{
+		"novel_id: ../unsafe",
+		"novel_id: 123",
+		"NOVEL_ID: known-novel",
+	} {
+		t.Run(strings.ReplaceAll(owner, " ", "_"), func(t *testing.T) {
+			stateDir := t.TempDir()
+			if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", Status: "queued"}); err != nil {
+				t.Fatalf("SaveJob current: %v", err)
+			}
+			path := filepath.Join(stateDir, "extraction_jobs", "future-job.yaml")
+			raw := "schema_version: 99\njob_id: future-job\n" + owner + "\nstatus: running\n"
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write future job: %v", err)
+			}
+			if records, err := LoadJobsForExecution(stateDir); err == nil || len(records) != 0 {
+				t.Fatalf("ambiguous future owner execution = %+v err=%v", records, err)
+			}
+			if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
+				t.Fatalf("ambiguous future owner enqueue created=%v err=%v", created, err)
+			}
+			if after, err := os.ReadFile(path); err != nil || string(after) != raw {
+				t.Fatalf("blocked future owner changed: bytes=%q err=%v", after, err)
+			}
+		})
 	}
 }
 

@@ -171,8 +171,8 @@ func preflightJobDocumentsUnlocked(stateDir string, novelID string) error {
 			return fmt.Errorf("preflight extraction job %s: %w", path, read.err)
 		}
 		if read.exists && read.incompatible {
-			owner := strings.TrimSpace(read.document.NovelID)
-			if owner == "" || owner == novelID {
+			owner := read.document.NovelID
+			if !safeFutureJobOwner(owner) || owner == novelID {
 				return read.guardError
 			}
 		}
@@ -294,8 +294,8 @@ func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
 			continue
 		}
 		if read.incompatible {
-			owner := strings.TrimSpace(read.document.NovelID)
-			if owner == "" {
+			owner := read.document.NovelID
+			if !safeFutureJobOwner(owner) {
 				return nil, fmt.Errorf("incompatible extraction job owner cannot be identified; background execution is blocked: %w", read.guardError)
 			}
 			blockedNovelIDs[owner] = struct{}{}
@@ -348,6 +348,7 @@ func readJobDocument(path string) jobDocumentRead {
 	if !ok || guardError.Result.Status == schemaguard.StatusMalformed {
 		return jobDocumentRead{exists: true, err: guardErr}
 	}
+	doc.NovelID = probeFutureJobOwner(raw)
 	if strings.TrimSpace(doc.JobID) == "" {
 		doc.JobID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
@@ -355,6 +356,39 @@ func readJobDocument(path string) jobDocumentRead {
 	message := "この抽出 job は現在の build と互換性がないため、変更せず保持されています。"
 	doc.ErrorMessage = &message
 	return jobDocumentRead{document: doc, exists: true, incompatible: true, guardError: guardErr}
+}
+
+func probeFutureJobOwner(raw []byte) string {
+	var document yaml.Node
+	if err := yaml.Unmarshal(raw, &document); err != nil || document.Kind != yaml.DocumentNode || len(document.Content) != 1 {
+		return ""
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return ""
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		key := root.Content[index]
+		value := root.Content[index+1]
+		if key.Kind != yaml.ScalarNode || key.Value != "novel_id" {
+			continue
+		}
+		if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!str" {
+			return ""
+		}
+		return value.Value
+	}
+	return ""
+}
+
+func safeFutureJobOwner(value string) bool {
+	return value != "" &&
+		value == strings.TrimSpace(value) &&
+		value != "." &&
+		value != ".." &&
+		filepath.Base(value) == value &&
+		!strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, `/\`)
 }
 
 func (d jobDocument) toJob() Job {
@@ -431,16 +465,16 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 				if _, ok := schemaguard.AsGuardError(checkpointErr); !ok {
 					return recovered, checkpointErr
 				}
+				// Persist the fail-stop state before moving the checkpoint. If
+				// the following quarantine fails or the process exits, startup
+				// must not requeue a checkpoint-free running job.
+				job = failStopCheckpointIncompatibleJob(job)
+				if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
+					return recovered, err
+				}
 				incompatibleErr := checkpointStore.Quarantine(record.NovelID, job.RequestedUpToEpisodeIndex, "schema or payload validation failed", checkpointErr)
 				if !checkpointstore.IsIncompatible(incompatibleErr) {
 					return recovered, incompatibleErr
-				}
-				job.Status = "incompatible"
-				message := "抽出チェックポイントが現在の build と互換性がないため隔離しました。内容を確認してから再実行してください。"
-				job.ErrorMessage = &message
-				job.ActiveWorkers = nil
-				if err := saveJobUnlocked(stateDir, record.NovelID, job); err != nil {
-					return recovered, err
 				}
 				continue
 			}
@@ -465,6 +499,14 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 		recovered++
 	}
 	return recovered, nil
+}
+
+func failStopCheckpointIncompatibleJob(job Job) Job {
+	job.Status = "incompatible"
+	message := "抽出チェックポイントが現在の build と互換性がないため自動再開を停止しました。内容を確認してから再実行してください。"
+	job.ErrorMessage = &message
+	job.ActiveWorkers = nil
+	return job
 }
 
 func saveJobUnlocked(stateDir string, novelID string, job Job) error {
