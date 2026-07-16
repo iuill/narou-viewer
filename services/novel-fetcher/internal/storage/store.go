@@ -53,10 +53,12 @@ func (e ErrUnsupportedEpisodeSchema) Error() string {
 }
 
 const (
-	FetchStatusComplete = "complete"
-	FetchStatusPartial  = "partial"
-	FetchStatusFailed   = "failed"
-	FetchStatusCanceled = "canceled"
+	FetchStatusComplete    = "complete"
+	FetchStatusPartial     = "partial"
+	FetchStatusFailed      = "failed"
+	FetchStatusCanceled    = "canceled"
+	FetchStatusPaused      = "paused"
+	FetchStatusInterrupted = "interrupted"
 
 	BodyStatusPending  = "pending"
 	BodyStatusComplete = "complete"
@@ -80,6 +82,10 @@ func NewStore(rootDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The fetcher is a single-writer process. Sharing one connection across
+	// storage and taskstate avoids SQLITE_BUSY races between progress writes
+	// and durable task control transactions.
+	db.SetMaxOpenConns(1)
 	store := &Store{rootDir: rootDir, db: db}
 	if err := store.initialize(); err != nil {
 		_ = db.Close()
@@ -119,6 +125,10 @@ func (s *Store) Close() error {
 	_, checkpointErr := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	closeErr := s.db.Close()
 	return errors.Join(optimizeErr, checkpointErr, closeErr)
+}
+
+func (s *Store) DB() *sql.DB {
+	return s.db
 }
 
 func (s *Store) SetAssetFetcher(assetFetcher AssetFetcher, policy fetcher.FetchPolicy) {

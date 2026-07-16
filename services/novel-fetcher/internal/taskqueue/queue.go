@@ -9,9 +9,13 @@ import (
 	"time"
 
 	"narou-viewer/services/novel-fetcher/internal/sites"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type Queue struct {
+	repository taskstate.Repository
+	wake       chan struct{}
+
 	mu             sync.Mutex
 	queue          []*Task
 	current        *Task
@@ -19,16 +23,15 @@ type Queue struct {
 	recentFailed   []*Task
 	completedCount int
 	failedCount    int
-	wake           chan struct{}
 }
 
-func NewQueue() *Queue {
-	return &Queue{wake: make(chan struct{}, 1)}
+func NewQueue() *Queue { return &Queue{wake: make(chan struct{}, 1)} }
+
+func NewPersistentQueue(repository taskstate.Repository) *Queue {
+	return &Queue{repository: repository, wake: make(chan struct{}, 1)}
 }
 
-func (q *Queue) Wake() <-chan struct{} {
-	return q.wake
-}
+func (q *Queue) Wake() <-chan struct{} { return q.wake }
 
 func (q *Queue) Notify() {
 	select {
@@ -37,17 +40,31 @@ func (q *Queue) Notify() {
 	}
 }
 
-func (q *Queue) Enqueue(tasks ...*Task) {
+func (q *Queue) Enqueue(tasks ...*Task) error {
+	if q.repository != nil {
+		if _, err := q.repository.Enqueue(context.Background(), tasks); err != nil {
+			return err
+		}
+		q.Notify()
+		return nil
+	}
 	q.mu.Lock()
 	q.queue = append(q.queue, tasks...)
 	q.mu.Unlock()
 	q.Notify()
+	return nil
 }
 
 func (q *Queue) StatusCounts() StatusCounts {
+	if q.repository != nil {
+		counts, err := q.repository.QueueCounts(context.Background())
+		if err != nil {
+			return StatusCounts{}
+		}
+		return StatusCounts{Total: counts.Total, Running: counts.Running}
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	total := len(q.queue)
 	running := q.current != nil
 	if running {
@@ -57,27 +74,36 @@ func (q *Queue) StatusCounts() StatusCounts {
 }
 
 func (q *Queue) Summary() Summary {
+	if q.repository != nil {
+		state, err := q.repository.Summary(context.Background(), 20)
+		if err != nil {
+			return Summary{}
+		}
+		return Summary{
+			Current: Payload(state.Current), Queued: Payloads(state.Queued), Paused: Payloads(state.Paused),
+			Interrupted: Payloads(state.Interrupted), RecentCompleted: Payloads(state.RecentCompleted),
+			RecentFailed: Payloads(state.RecentFailed), CompletedCount: state.CompletedCount, FailedCount: state.FailedCount,
+			CanceledCount: state.CanceledCount, PausedCount: state.PausedCount, InterruptedCount: state.InterruptedCount,
+		}
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
-	return Summary{
-		Current:         Payload(q.current),
-		Queued:          Payloads(q.queue),
-		RecentCompleted: Payloads(q.recentComplete),
-		RecentFailed:    Payloads(q.recentFailed),
-		CompletedCount:  q.completedCount,
-		FailedCount:     q.failedCount,
-	}
+	return Summary{Current: Payload(q.current), Queued: Payloads(q.queue), RecentCompleted: Payloads(q.recentComplete), RecentFailed: Payloads(q.recentFailed), CompletedCount: q.completedCount, FailedCount: q.failedCount}
 }
 
 func (q *Queue) PopNext() *Task {
+	if q.repository != nil {
+		task, err := q.repository.ClaimNext(context.Background(), time.Now().UTC())
+		if err != nil {
+			return nil
+		}
+		return task
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if len(q.queue) == 0 {
 		return nil
 	}
-
 	next := q.queue[0]
 	q.queue = q.queue[1:]
 	now := time.Now()
@@ -88,37 +114,47 @@ func (q *Queue) PopNext() *Task {
 }
 
 func (q *Queue) HasQueuedTasks() bool {
+	if q.repository != nil {
+		queued, err := q.repository.HasQueuedTasks(context.Background())
+		return err == nil && queued
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.queue) > 0
 }
 
 func (q *Queue) IsIdle() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.current == nil && len(q.queue) == 0
+	counts := q.StatusCounts()
+	return counts.Total == 0
 }
 
 func (q *Queue) SetTaskProgress(taskID string, progress sites.Progress) {
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.UpdateProgress(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, taskstate.Progress{Phase: progress.Phase, CurrentStep: progress.CurrentStep, TotalSteps: progress.TotalSteps, Message: progress.Message})
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current == nil || q.current.ID != taskID {
 		return
 	}
-
-	q.current.Phase = progress.Phase
-	q.current.CurrentStep = progress.CurrentStep
-	q.current.TotalSteps = progress.TotalSteps
+	q.current.Phase, q.current.CurrentStep, q.current.TotalSteps = progress.Phase, progress.CurrentStep, progress.TotalSteps
 	if progress.Message != "" {
 		q.current.Message = progress.Message
 	}
 }
 
 func (q *Queue) SetTaskMessage(taskID string, message string) {
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.UpdateMessage(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, message)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current != nil && q.current.ID == taskID {
 		q.current.Message = message
 	}
@@ -128,10 +164,14 @@ func (q *Queue) AddTaskWarning(taskID string, warning string) {
 	if strings.TrimSpace(warning) == "" {
 		return
 	}
-
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.AddWarning(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, warning)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current == nil || q.current.ID != taskID {
 		return
 	}
@@ -144,9 +184,14 @@ func (q *Queue) AddTaskWarning(taskID string, warning string) {
 }
 
 func (q *Queue) SetTaskTarget(taskID string, target string) {
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.SetTarget(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, target)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current != nil && q.current.ID == taskID {
 		q.current.TargetLabel = target
 	}
@@ -156,10 +201,14 @@ func (q *Queue) AddTaskNovelID(taskID string, novelID int) {
 	if novelID == 0 {
 		return
 	}
-
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.AddNovelID(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, novelID)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current == nil || q.current.ID != taskID {
 		return
 	}
@@ -172,45 +221,65 @@ func (q *Queue) AddTaskNovelID(taskID string, novelID int) {
 }
 
 func (q *Queue) SetTaskSavedEpisodeCount(taskID string, count int) {
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.SetSavedEpisodeCount(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, count)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current != nil && q.current.ID == taskID {
 		q.current.SavedEpisodeCount = count
 	}
 }
 
 func (q *Queue) SetTaskFailureEpisode(taskID string, failedEpisodeID string, resumeEpisodeID string) {
+	if q.repository != nil {
+		if task, found, err := q.repository.Get(context.Background(), taskID); err == nil && found && task.Status == StatusRunning {
+			_ = q.repository.SetFailureEpisode(context.Background(), taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, failedEpisodeID, resumeEpisodeID)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	if q.current != nil && q.current.ID == taskID {
-		q.current.FailedEpisodeID = failedEpisodeID
-		q.current.ResumeEpisodeID = resumeEpisodeID
+		q.current.FailedEpisodeID, q.current.ResumeEpisodeID = failedEpisodeID, resumeEpisodeID
 	}
 }
 
 func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
+	if q.repository != nil {
+		outcome := taskstate.Outcome{Status: StatusSucceeded, Error: err, ExecutionCommitted: done.ExecutionCommitted}
+		if errors.Is(err, context.Canceled) {
+			outcome.Status = StatusCanceled
+			outcome.Message = "Task cancelled"
+		}
+		if err != nil && outcome.Status != StatusCanceled {
+			outcome.Status = StatusFailed
+		}
+		if repoErr := q.repository.Finalize(context.Background(), taskstate.TaskRef{TaskID: done.ID, Attempt: done.AttemptCount}, outcome); repoErr != nil && logger != nil {
+			logger.Error("task finalization failed", "taskID", done.ID, "error", repoErr)
+		}
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	now := time.Now()
 	done.FinishedAt = &now
 	if errors.Is(err, context.Canceled) {
-		done.Status = StatusCanceled
-		done.Message = "Task cancelled"
+		done.Status, done.Message = StatusCanceled, "Task cancelled"
 		q.failedCount++
 		q.recentFailed = appendRecent(q.recentFailed, done)
 	} else if err != nil {
-		done.Status = StatusFailed
-		done.ErrorMessage = err.Error()
+		done.Status, done.ErrorMessage = StatusFailed, err.Error()
 		q.failedCount++
 		q.recentFailed = appendRecent(q.recentFailed, done)
 		if logger != nil {
 			logger.Warn("task failed", "taskID", done.ID, "error", err)
 		}
 	} else {
-		done.Status = StatusCompleted
+		done.Status = StatusSucceeded
 		if done.Message == "" {
 			done.Message = "Task completed"
 		}
@@ -221,30 +290,73 @@ func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
 }
 
 func (q *Queue) IsCurrent(taskID string) bool {
+	if q.repository != nil {
+		task, found, err := q.repository.Get(context.Background(), taskID)
+		return err == nil && found && task.Status == StatusRunning
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	return q.current != nil && q.current.ID == taskID
 }
 
 func (q *Queue) CancelQueued(taskID string) bool {
+	if q.repository != nil {
+		result, err := q.repository.RequestCancel(context.Background(), taskID)
+		return err == nil && result.Changed
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-
 	for index, queued := range q.queue {
 		if queued.ID == taskID {
 			now := time.Now()
-			queued.Status = StatusCanceled
-			queued.FinishedAt = &now
-			queued.Message = "Task cancelled"
+			queued.Status, queued.FinishedAt, queued.Message = StatusCanceled, &now, "Task cancelled"
 			q.queue = append(q.queue[:index], q.queue[index+1:]...)
 			q.failedCount++
 			q.recentFailed = appendRecent(q.recentFailed, queued)
 			return true
 		}
 	}
-
 	return false
+}
+
+func (q *Queue) RequestPause(taskID string) (taskstate.ControlResult, error) {
+	if q.repository == nil {
+		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+	}
+	result, err := q.repository.RequestPause(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
+	}
+	return result, err
+}
+
+func (q *Queue) RequestResume(taskID string) (taskstate.ControlResult, error) {
+	if q.repository == nil {
+		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+	}
+	result, err := q.repository.RequestResume(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
+	}
+	return result, err
+}
+
+func (q *Queue) RequestCancel(taskID string) (taskstate.ControlResult, error) {
+	if q.repository == nil {
+		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+	}
+	result, err := q.repository.RequestCancel(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
+	}
+	return result, err
+}
+
+func (q *Queue) GetTask(taskID string) (*Task, bool, error) {
+	if q.repository == nil {
+		return nil, false, errors.New("persistent task queue is not configured")
+	}
+	return q.repository.Get(context.Background(), taskID)
 }
 
 func appendRecent(tasks []*Task, entry *Task) []*Task {

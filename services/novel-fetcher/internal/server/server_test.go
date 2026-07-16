@@ -21,6 +21,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/sites"
 	"narou-viewer/services/novel-fetcher/internal/storage"
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type progressFetcher struct {
@@ -716,6 +717,150 @@ func TestCancelQueuedTask(t *testing.T) {
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing cancel status = %d", missing.Code)
 	}
+}
+
+func TestPersistentTaskControlEndpointsExposeDurableState(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/control"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	createdData := decodeObject(t, created)["data"].(map[string]any)
+	taskID := createdData["task_ids"].([]any)[0].(string)
+	conflicting := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/control"],"force":true}`)
+	if conflicting.Code != http.StatusConflict {
+		t.Fatalf("conflicting create status = %d: %s", conflicting.Code, conflicting.Body.String())
+	}
+	detail := performRequest(app, http.MethodGet, "/api/v2/tasks/"+taskID, "")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail status = %d: %s", detail.Code, detail.Body.String())
+	}
+	paused := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if paused.Code != http.StatusOK {
+		t.Fatalf("pause status = %d: %s", paused.Code, paused.Body.String())
+	}
+	pausedData := decodeObject(t, paused)["data"].(map[string]any)
+	if pausedData["status"] != string(taskqueue.StatusPaused) || pausedData["can_resume"] != true {
+		t.Fatalf("pause data = %#v", pausedData)
+	}
+	pausedAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if pausedAgain.Code != http.StatusOK {
+		t.Fatalf("idempotent pause status = %d: %s", pausedAgain.Code, pausedAgain.Body.String())
+	}
+	resumed := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/resume", "")
+	if resumed.Code != http.StatusAccepted {
+		t.Fatalf("resume status = %d: %s", resumed.Code, resumed.Body.String())
+	}
+	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceled.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	canceledAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceledAgain.Code != http.StatusConflict {
+		t.Fatalf("repeated cancel status = %d: %s", canceledAgain.Code, canceledAgain.Body.String())
+	}
+	missing := performRequest(app, http.MethodGet, "/api/v2/tasks/missing", "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing detail status = %d", missing.Code)
+	}
+	for _, action := range []string{"pause", "resume", "cancel"} {
+		missingAction := performRequest(app, http.MethodPost, "/api/v2/tasks/missing/"+action, "")
+		if missingAction.Code != http.StatusNotFound {
+			t.Fatalf("missing %s status = %d", action, missingAction.Code)
+		}
+	}
+}
+
+func TestNewWithErrorRequiresStorage(t *testing.T) {
+	app := New(Options{Logger: slog.Default()})
+	app.Start(context.Background())
+	if app == nil || app.initErr == nil {
+		t.Fatal("missing storage did not produce initialization error")
+	}
+}
+
+func TestNewRecordsTaskStateInitializationError(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	defer store.Close()
+	repositoryTask := taskqueue.NewTask("download")
+	repositoryTask.Targets = []string{"https://example.com/corrupt-startup"}
+	if _, err := taskstate.NewSQLiteRepository(store.DB()).Enqueue(context.Background(), []*taskqueue.Task{repositoryTask}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`DELETE FROM fetch_task_queue`); err != nil {
+		t.Fatal(err)
+	}
+	app := New(Options{Store: store, Logger: slog.Default()})
+	if app == nil || app.initErr == nil {
+		t.Fatal("corrupt task state did not produce initialization error")
+	}
+}
+
+func TestRunningTaskControlAcknowledgesCancellationRequest(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	fetcher := &blockingTocFetcher{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n9999ab", Title: "制御作品", Author: "作者",
+			Episodes: []model.Episode{{Index: "1", Title: "第一話"}},
+		},
+	}
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+	startApp(t, app)
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+	defer func() { close(fetcher.release) }()
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/running-control"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	select {
+	case <-fetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	summary := decodeObject(t, performRequest(app, http.MethodGet, "/api/v2/tasks/summary", ""))["data"].(map[string]any)
+	current := summary["current"].(map[string]any)
+	taskID := current["id"].(string)
+	paused := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if paused.Code != http.StatusAccepted {
+		t.Fatalf("running pause status = %d: %s", paused.Code, paused.Body.String())
+	}
+	waitForIdleApp(t, app)
+}
+
+func TestRunningTaskCancelEndpointAcknowledgesCancellationRequest(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	fetcher := &blockingTocFetcher{entered: make(chan struct{}), release: make(chan struct{}), work: model.Work{
+		Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n9999ac", Title: "中止作品", Author: "作者",
+		Episodes: []model.Episode{{Index: "1", Title: "第一話"}},
+	}}
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+	startApp(t, app)
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+	defer func() { close(fetcher.release) }()
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/running-cancel"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	select {
+	case <-fetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	summary := decodeObject(t, performRequest(app, http.MethodGet, "/api/v2/tasks/summary", ""))["data"].(map[string]any)
+	taskID := summary["current"].(map[string]any)["id"].(string)
+	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceled.Code != http.StatusAccepted {
+		t.Fatalf("running cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	waitForIdleApp(t, app)
 }
 
 func (f *progressFetcher) FetchToc(_ context.Context, target string, _ sites.ProgressReporter) (model.Work, error) {

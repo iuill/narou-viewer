@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Request) {
@@ -52,7 +53,10 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 		task.Force = body.Force
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"targets":                targets,
@@ -105,7 +109,10 @@ func (a *App) handleUpdateNovels(writer http.ResponseWriter, request *http.Reque
 		task.SkipUnchanged = skipUnchanged
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"ids":                  taskqueue.IntIDsToStrings(body.IDs),
@@ -144,7 +151,10 @@ func (a *App) handleResumeNovels(writer http.ResponseWriter, request *http.Reque
 		task.NovelIDs = []int{id}
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"ids":      taskqueue.IntIDsToStrings(body.IDs),
@@ -192,9 +202,68 @@ func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	if !a.runner.Cancel(taskID) {
-		writeError(writer, http.StatusNotFound, "task was not found")
+	result, err := a.queue.RequestCancel(taskID)
+	if err != nil {
+		writeTaskStateError(writer, err)
 		return
 	}
-	writeEnvelope(writer, http.StatusOK, map[string]any{"task_id": taskID, "cancelled": true}, "Task cancelled")
+	if result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
+		a.runner.Cancel(taskID)
+	}
+	status := http.StatusOK
+	if result.Task != nil && result.Task.Status == taskqueue.StatusRunning && result.Changed {
+		status = http.StatusAccepted
+	}
+	writeEnvelope(writer, status, taskqueue.Payload(result.Task), "Task cancelled")
+}
+
+func (a *App) handlePauseTask(writer http.ResponseWriter, request *http.Request) {
+	a.handleTaskControl(writer, request, "pause")
+}
+
+func (a *App) handleResumeTask(writer http.ResponseWriter, request *http.Request) {
+	a.handleTaskControl(writer, request, "resume")
+}
+
+func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Request, action string) {
+	taskID := strings.TrimSpace(request.PathValue("taskID"))
+	if taskID == "" {
+		writeError(writer, http.StatusBadRequest, "task id is required")
+		return
+	}
+	var result taskstate.ControlResult
+	var err error
+	switch action {
+	case "pause":
+		result, err = a.queue.RequestPause(taskID)
+	case "resume":
+		result, err = a.queue.RequestResume(taskID)
+	default:
+		err = errors.New("unknown task action")
+	}
+	if err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
+	if action == "pause" && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
+		a.runner.Cancel(taskID)
+	}
+	status := http.StatusOK
+	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {
+		status = http.StatusAccepted
+	}
+	message := "Task " + action
+	writeEnvelope(writer, status, taskqueue.Payload(result.Task), message)
+}
+
+func writeTaskStateError(writer http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	message := err.Error()
+	if errors.Is(err, taskstate.ErrTaskNotFound) {
+		status = http.StatusNotFound
+	}
+	if errors.Is(err, taskstate.ErrTaskAlreadyActive) || errors.Is(err, taskstate.ErrTaskStateConflict) {
+		status = http.StatusConflict
+	}
+	writeError(writer, status, message)
 }

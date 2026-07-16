@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const SupportedLatestVersion = 3
+const SupportedLatestVersion = 4
 
 type ErrFutureSchema struct {
 	Path      string
@@ -207,6 +207,72 @@ var migrations = []Migration{
 				)
 			`)
 			return err
+		},
+	},
+	{
+		Version: 4,
+		Name:    "persistent_fetch_tasks",
+		Up: func(db dbtx) error {
+			statements := []string{
+				`CREATE TABLE IF NOT EXISTS fetch_tasks (
+					task_id TEXT PRIMARY KEY,
+					request_version INTEGER NOT NULL,
+					kind TEXT NOT NULL,
+					request_json TEXT NOT NULL,
+					status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'paused', 'interrupted', 'failed', 'canceled', 'succeeded')),
+					requested_action TEXT NOT NULL DEFAULT '' CHECK (requested_action IN ('', 'pause', 'cancel')),
+					dedupe_key TEXT NOT NULL,
+					request_fingerprint TEXT NOT NULL,
+					primary_work_id INTEGER NOT NULL DEFAULT 0,
+					target_label TEXT NOT NULL DEFAULT '',
+					phase TEXT NOT NULL DEFAULT '',
+					current_step INTEGER NOT NULL DEFAULT 0 CHECK (current_step >= 0),
+					total_steps INTEGER NOT NULL DEFAULT 0 CHECK (total_steps >= 0),
+					saved_episode_count INTEGER NOT NULL DEFAULT 0 CHECK (saved_episode_count >= 0),
+					failed_episode_id TEXT NOT NULL DEFAULT '',
+					resume_episode_id TEXT NOT NULL DEFAULT '',
+					message TEXT NOT NULL DEFAULT '',
+					warnings_json TEXT NOT NULL DEFAULT '[]',
+					error_message TEXT NOT NULL DEFAULT '',
+					attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+					execution_committed INTEGER NOT NULL DEFAULT 0 CHECK (execution_committed IN (0, 1)),
+					created_at TEXT NOT NULL,
+					last_enqueued_at TEXT NOT NULL,
+					started_at TEXT NOT NULL DEFAULT '',
+					updated_at TEXT NOT NULL,
+					paused_at TEXT NOT NULL DEFAULT '',
+					interrupted_at TEXT NOT NULL DEFAULT '',
+					finished_at TEXT NOT NULL DEFAULT '',
+					CHECK (total_steps = 0 OR current_step <= total_steps),
+					CHECK (status = 'running' OR requested_action = '')
+				)`,
+				`CREATE TABLE IF NOT EXISTS fetch_task_queue (
+					seq INTEGER PRIMARY KEY AUTOINCREMENT,
+					task_id TEXT NOT NULL UNIQUE REFERENCES fetch_tasks(task_id) ON DELETE CASCADE,
+					enqueued_at TEXT NOT NULL
+				)`,
+				`CREATE TABLE IF NOT EXISTS fetch_task_episode_checkpoints (
+					task_id TEXT NOT NULL REFERENCES fetch_tasks(task_id) ON DELETE CASCADE,
+					work_id INTEGER NOT NULL,
+					episode_id TEXT NOT NULL,
+					sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+					content_hash TEXT NOT NULL,
+					completed_attempt INTEGER NOT NULL CHECK (completed_attempt > 0),
+					completed_at TEXT NOT NULL,
+					PRIMARY KEY (task_id, work_id, episode_id)
+				)`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS fetch_tasks_one_running_idx ON fetch_tasks(status) WHERE status = 'running'`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS fetch_tasks_reserved_dedupe_idx ON fetch_tasks(dedupe_key) WHERE status IN ('queued', 'running', 'paused', 'interrupted')`,
+				`CREATE UNIQUE INDEX IF NOT EXISTS fetch_tasks_reserved_work_idx ON fetch_tasks(primary_work_id) WHERE primary_work_id > 0 AND status IN ('queued', 'running', 'paused', 'interrupted')`,
+				`CREATE INDEX IF NOT EXISTS fetch_tasks_status_updated_idx ON fetch_tasks(status, updated_at DESC)`,
+				`CREATE INDEX IF NOT EXISTS fetch_task_checkpoints_work_idx ON fetch_task_episode_checkpoints(task_id, work_id, sort_order)`,
+			}
+			for _, statement := range statements {
+				if _, err := db.Exec(statement); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	},
 }

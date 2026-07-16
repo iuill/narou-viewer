@@ -3,12 +3,17 @@ package taskqueue
 import "time"
 
 type Summary struct {
-	Current         map[string]any
-	Queued          []map[string]any
-	RecentCompleted []map[string]any
-	RecentFailed    []map[string]any
-	CompletedCount  int
-	FailedCount     int
+	Current          map[string]any
+	Queued           []map[string]any
+	Paused           []map[string]any
+	Interrupted      []map[string]any
+	RecentCompleted  []map[string]any
+	RecentFailed     []map[string]any
+	CompletedCount   int
+	FailedCount      int
+	CanceledCount    int
+	PausedCount      int
+	InterruptedCount int
 }
 
 type StatusCounts struct {
@@ -32,15 +37,25 @@ func Payload(task *Task) map[string]any {
 	}
 
 	payload := map[string]any{
-		"id":         task.ID,
-		"task_id":    task.ID,
-		"type":       task.Kind,
-		"status":     task.Status,
-		"targets":    task.Targets,
-		"novel_ids":  IntIDsToStrings(task.NovelIDs),
-		"message":    task.Message,
-		"created_at": task.CreatedAt.Format(time.RFC3339Nano),
+		"id":               task.ID,
+		"task_id":          task.ID,
+		"type":             task.Kind,
+		"status":           task.Status,
+		"requested_action": task.RequestedAction,
+		"attempt_count":    task.AttemptCount,
+		"targets":          task.Targets,
+		"novel_ids":        IntIDsToStrings(task.NovelIDs),
+		"message":          task.Message,
+		"created_at":       task.CreatedAt.Format(time.RFC3339Nano),
 	}
+	if task.QueuePosition != nil {
+		payload["queue_position"] = *task.QueuePosition
+	} else {
+		payload["queue_position"] = nil
+	}
+	payload["can_pause"] = task.Status == StatusQueued || task.Status == StatusRunning
+	payload["can_resume"] = task.Status == StatusPaused || task.Status == StatusInterrupted || task.Status == StatusFailed
+	payload["can_cancel"] = task.Status == StatusQueued || task.Status == StatusRunning || task.Status == StatusPaused || task.Status == StatusInterrupted || task.Status == StatusFailed
 	switch task.Kind {
 	case "download":
 		payload["force"] = task.Force
@@ -56,6 +71,12 @@ func Payload(task *Task) map[string]any {
 	}
 	if task.FinishedAt != nil {
 		payload["finished_at"] = task.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if task.PausedAt != nil {
+		payload["paused_at"] = task.PausedAt.Format(time.RFC3339Nano)
+	}
+	if task.InterruptedAt != nil {
+		payload["interrupted_at"] = task.InterruptedAt.Format(time.RFC3339Nano)
 	}
 	if task.ErrorMessage != "" {
 		payload["error"] = task.ErrorMessage

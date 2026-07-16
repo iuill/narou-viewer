@@ -8,6 +8,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/config"
 	"narou-viewer/services/novel-fetcher/internal/model"
 	"narou-viewer/services/novel-fetcher/internal/storage"
+	"narou-viewer/services/novel-fetcher/internal/taskqueue"
 )
 
 func (a *App) handleHealth(writer http.ResponseWriter, _ *http.Request) {
@@ -40,15 +41,38 @@ func (a *App) handleTasksSummary(writer http.ResponseWriter, _ *http.Request) {
 	summary := a.queue.Summary()
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
-		"current":          summary.Current,
-		"queued":           summary.Queued,
-		"recent_completed": summary.RecentCompleted,
-		"recent_failed":    summary.RecentFailed,
-		"completed_count":  summary.CompletedCount,
-		"failed_count":     summary.FailedCount,
-		"convert_current":  nil,
-		"convert_queued":   []any{},
+		"current":           summary.Current,
+		"queued":            summary.Queued,
+		"recent_completed":  summary.RecentCompleted,
+		"recent_failed":     summary.RecentFailed,
+		"paused":            summary.Paused,
+		"interrupted":       summary.Interrupted,
+		"completed_count":   summary.CompletedCount,
+		"failed_count":      summary.FailedCount,
+		"canceled_count":    summary.CanceledCount,
+		"paused_count":      summary.PausedCount,
+		"interrupted_count": summary.InterruptedCount,
+		"convert_current":   nil,
+		"convert_queued":    []any{},
 	}, nil)
+}
+
+func (a *App) handleTask(writer http.ResponseWriter, request *http.Request) {
+	taskID := strings.TrimSpace(request.PathValue("taskID"))
+	if taskID == "" {
+		writeError(writer, http.StatusBadRequest, "task id is required")
+		return
+	}
+	task, found, err := a.queue.GetTask(taskID)
+	if err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, "task was not found")
+		return
+	}
+	writeEnvelope(writer, http.StatusOK, taskqueue.Payload(task), nil)
 }
 
 func (a *App) handleListNovels(writer http.ResponseWriter, _ *http.Request) {

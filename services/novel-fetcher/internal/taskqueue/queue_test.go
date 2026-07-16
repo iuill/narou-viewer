@@ -3,9 +3,12 @@ package taskqueue
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"narou-viewer/services/novel-fetcher/internal/sites"
+	"narou-viewer/services/novel-fetcher/internal/storage"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 func TestQueueTracksSummaryAndHistory(t *testing.T) {
@@ -145,5 +148,73 @@ func TestQueueIsCurrent(t *testing.T) {
 	}
 	if queue.IsCurrent("other") {
 		t.Fatal("different task id should not be current")
+	}
+}
+
+func TestPersistentQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	queue := NewPersistentQueue(taskstate.NewSQLiteRepository(store.DB()))
+	task := NewTask("update")
+	task.NovelIDs = []int{99}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	if counts := queue.StatusCounts(); counts.Total != 1 || counts.Running {
+		t.Fatalf("counts = %#v", counts)
+	}
+	claimed := queue.PopNext()
+	if claimed == nil || !queue.IsCurrent(task.ID) {
+		t.Fatal("persistent task was not claimed")
+	}
+	queue.SetTaskProgress(task.ID, sites.Progress{Phase: "episode", CurrentStep: 1, TotalSteps: 2, Message: "half"})
+	queue.SetTaskMessage(task.ID, "saved")
+	queue.AddTaskWarning(task.ID, "warning")
+	queue.AddTaskWarning(task.ID, "warning")
+	queue.SetTaskTarget(task.ID, "作品")
+	queue.AddTaskNovelID(task.ID, 100)
+	queue.SetTaskSavedEpisodeCount(task.ID, 1)
+	queue.SetTaskFailureEpisode(task.ID, "2", "2")
+	if _, err := queue.RequestCancel(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	queue.FinishTask(claimed, context.Canceled, slog.Default())
+	summary := queue.Summary()
+	if summary.Current != nil || len(summary.RecentFailed) != 1 || summary.RecentFailed[0]["status"] != StatusCanceled {
+		t.Fatalf("summary = %#v", summary)
+	}
+
+	queued := NewTask("download")
+	queued.Targets = []string{"https://example.com/queued"}
+	if err := queue.Enqueue(queued); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := queue.RequestPause(queued.ID); err != nil || !result.Changed {
+		t.Fatalf("pause = %#v, err = %v", result, err)
+	}
+	if result, err := queue.RequestResume(queued.ID); err != nil || !result.Changed {
+		t.Fatalf("resume = %#v, err = %v", result, err)
+	}
+	if _, found, err := queue.GetTask(queued.ID); err != nil || !found {
+		t.Fatalf("GetTask found=%v err=%v", found, err)
+	}
+}
+
+func TestMemoryQueueRejectsDurableControls(t *testing.T) {
+	queue := NewQueue()
+	if _, err := queue.RequestPause("task"); err == nil {
+		t.Fatal("memory pause unexpectedly succeeded")
+	}
+	if _, err := queue.RequestResume("task"); err == nil {
+		t.Fatal("memory resume unexpectedly succeeded")
+	}
+	if _, err := queue.RequestCancel("task"); err == nil {
+		t.Fatal("memory cancel unexpectedly succeeded")
+	}
+	if _, _, err := queue.GetTask("task"); err == nil {
+		t.Fatal("memory get unexpectedly succeeded")
 	}
 }

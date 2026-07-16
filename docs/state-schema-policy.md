@@ -173,7 +173,7 @@ path は `data/` からの相対 path を表す。
 | `NF-CANONICAL-EPISODE` | `novel-fetcher/works/**/episodes/*.json` | novel-fetcher / 実装済み | 取得済み本文の local canonical copy | 再取得できても削除・改稿により同一内容を保証できない | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者作品本文 |
 | `NF-RAW-EPISODE` | `novel-fetcher/works/**/raw/episodes/*.html` | novel-fetcher / 実装済み | raw source snapshot / cache | best-effort 再取得。履歴的同一性は保証できない | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者作品本文、元 HTML |
 | `NF-ASSETS` | `novel-fetcher/works/**/assets/**` | novel-fetcher / 実装済み | 取得 asset | best-effort 再取得。元消失・差替えの可能性あり | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者画像等 |
-| `NF-TASKS` | path 未決定 | novel-fetcher / 予約（[#15](https://github.com/iuill/narou-viewer/issues/15)） | 将来の運用正本 | queue 順序、利用者意図、resume / cancel / idempotency を保持する | #15 で定義 | 対象 URL、option、error、進捗 |
+| `NF-TASKS` | `library.sqlite` の `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints`、migration 4 | novel-fetcher | `fetch_tasks` が task request・状態・進捗・制御要求、`fetch_task_queue` が queue 順序、`fetch_task_episode_checkpoints` が task 内の episode 完了を保持する。`queued` のみ起動時に自動実行し、旧 `running` は recovery で `interrupted` 等へ確定する | queue 順序、利用者意図、resume / cancel / idempotency を保持する。未知 request version、malformed request、queue invariant 不整合は起動時に fail-closed | `fetch_tasks.request_version = 1`、status enum、requested_action、attempt fencing | 対象 URL、work ID、option、error、進捗、checkpoint |
 | `EX-LIBRARY-V1` | library export YAML | viewer-web export / producer 実装済み、import 未実装 | 交換 schema | 利用者管理の export。server 全体 backup ではない | server prune 対象外 | 読書行動、栞、作品一覧 |
 | `BROWSER-PREFERENCES` | `localStorage` の `narou-viewer.reader-local-preferences.v1` | browser / server registry 対象外 | 端末設定の正本 | 消失時は既定値へ戻り、元設定は再構築不能 | 利用者による browser storage 消去 | 端末設定 |
 | `BROWSER-APP-SHELL` | SW / Cache Storage の `narou-viewer-shell-*` | browser / server registry 対象外 | app-shell cache | `/` と manifest を再取得して再構築可能 | SW activate / browser eviction | 第三者本文を含まない app shell |
@@ -200,7 +200,7 @@ path は `data/` からの相対 path を表す。
 | `NF-CANONICAL-EPISODE` | JSON `schema_version: 1`。supported legacy version なし | work mutation の preflight で既存 `body_path` と新 target path を検査し、typed decode・API 応答・TOC metadata/status 更新・skip・prune・再保存より前に拒否する。field 欠落、`1` 以外、parse error では元 file と DB metadata を変更しない | 対応 build または supported backup を使う。`library.sqlite` と `works/**` を同じ consistency group で復旧する |
 | `NF-RAW-EPISODE` | version なし | opaque HTML | schema migration 対象外。DB metadata、source URL、hash で管理 |
 | `NF-ASSETS` | file format 固有、索引は DB | opaque binary | schema migration 対象外。DB metadata と hash の整合を検査 |
-| `NF-TASKS` | 未定 | queue は memory only | #15 で version、状態遷移、idempotency、queue order、起動 recovery、未知 version 停止規則を定義 |
+| `NF-TASKS` | migration 4 | `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints` | #15 の task version、状態遷移、idempotency、queue order、起動 recovery、未知 version 停止規則を実装済み |
 | `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import なし | unknown version / field / malformed data を mutation 前に strict reject。dry-run と apply は同一 validator（[#17](https://github.com/iuill/narou-viewer/issues/17)） |
 
 ## 4. schema 別の重要事項
