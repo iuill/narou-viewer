@@ -190,6 +190,60 @@ func TestRestoreTransactionRemovesAndCanRollbackStaleLibrarySHM(t *testing.T) {
 	}
 }
 
+func TestRecoverVerifyingPhaseFailsClosedWhenRollbackDataIsMissing(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := ensureRestoreRoots(dataDir); err != nil {
+		t.Fatalf("ensureRestoreRoots: %v", err)
+	}
+	transaction := newRestoreTransaction("missing-rollback-test")
+	stageRoot := filepath.Join(dataDir, transaction.StageDirectory)
+	rollbackRoot := filepath.Join(dataDir, transaction.RollbackDirectory)
+	if err := beginRestoreTransaction(dataDir, &transaction); err != nil {
+		t.Fatalf("beginRestoreTransaction: %v", err)
+	}
+	if err := createEmptyPrivateDirectory(stageRoot); err != nil {
+		t.Fatalf("create stage: %v", err)
+	}
+	if err := prepareStagingLayout(stageRoot); err != nil {
+		t.Fatalf("prepare stage: %v", err)
+	}
+	if err := createEmptyPrivateDirectory(rollbackRoot); err != nil {
+		t.Fatalf("create rollback: %v", err)
+	}
+	live := filepath.Join(dataDir, "novel-fetcher", "library.sqlite")
+	staged := filepath.Join(stageRoot, "novel-fetcher", "library.sqlite")
+	if err := os.WriteFile(live, []byte("old library"), 0o600); err != nil {
+		t.Fatalf("write live: %v", err)
+	}
+	if err := os.WriteFile(staged, []byte("new library"), 0o600); err != nil {
+		t.Fatalf("write staged: %v", err)
+	}
+	if err := buildRestoreTransactionPlan(dataDir, &transaction); err != nil {
+		t.Fatalf("buildRestoreTransactionPlan: %v", err)
+	}
+	if err := publishRestoreTransaction(context.Background(), dataDir, &transaction); err != nil {
+		t.Fatalf("publishRestoreTransaction: %v", err)
+	}
+	rollback := filepath.Join(rollbackRoot, "novel-fetcher", "library.sqlite")
+	if err := os.Remove(rollback); err != nil {
+		t.Fatalf("remove rollback fixture: %v", err)
+	}
+
+	outcome, err := Recover(context.Background(), dataDir)
+	if err == nil || outcome != RecoveryNone {
+		t.Fatalf("Recover missing rollback: outcome=%v err=%v", outcome, err)
+	}
+	if raw, readErr := os.ReadFile(live); readErr != nil || string(raw) != "new library" {
+		t.Fatalf("failed recovery changed live target: raw=%q err=%v", raw, readErr)
+	}
+	if _, statErr := os.Stat(restoreJournalPath(dataDir)); statErr != nil {
+		t.Fatalf("failed recovery removed journal: %v", statErr)
+	}
+	if transactionAfter, readErr := readRestoreTransaction(dataDir); readErr != nil || transactionAfter.Phase != restorePhaseVerifying {
+		t.Fatalf("failed recovery changed journal: transaction=%+v err=%v", transactionAfter, readErr)
+	}
+}
+
 func TestRecoverFailsClosedOnMalformedJournal(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := ensureRestoreRoots(dataDir); err != nil {
@@ -323,6 +377,28 @@ func TestRestoreTransactionRejectsInvalidJournalsAndReservedPaths(t *testing.T) 
 			return &value
 		}(),
 		func() *restoreTransaction { value := valid; value.Phase = "unknown"; return &value }(),
+		func() *restoreTransaction { value := valid; value.NextAction = -1; return &value }(),
+		func() *restoreTransaction {
+			value := valid
+			value.Phase = restorePhaseVerifying
+			return &value
+		}(),
+		func() *restoreTransaction {
+			value := valid
+			value.Phase = restorePhaseCommitting
+			return &value
+		}(),
+		func() *restoreTransaction {
+			value := valid
+			value.Phase = restorePhaseRollingBack
+			value.NextAction = len(value.Actions)
+			return &value
+		}(),
+		func() *restoreTransaction {
+			value := valid
+			value.Phase = restorePhaseRolledBack
+			return &value
+		}(),
 		func() *restoreTransaction {
 			value := newRestoreTransaction("staging-actions")
 			value.Actions = []restoreTransactionAction{{Relative: "unexpected"}}
@@ -394,6 +470,25 @@ func TestRestoreTransactionRejectsInvalidJournalsAndReservedPaths(t *testing.T) 
 	}
 }
 
+func TestRollbackPrerequisitesUsePublishingProgressAndRejectOtherPhases(t *testing.T) {
+	dataDir := t.TempDir()
+	transaction := newRestoreTransaction("publishing-prerequisite-test")
+	transaction.Phase = restorePhasePublishing
+	for _, relative := range restoreTargets() {
+		transaction.Actions = append(transaction.Actions, restoreTransactionAction{Relative: relative})
+	}
+	transaction.Actions[0].HadOld = true
+	transaction.NextAction = 1
+	if err := validateRollbackPrerequisites(dataDir, &transaction); err == nil {
+		t.Fatal("publishing rollback prerequisites accepted missing data for a completed action")
+	}
+	transaction.Phase = restorePhaseRollingBack
+	transaction.NextAction = 0
+	if err := validateRollbackPrerequisites(dataDir, &transaction); err == nil {
+		t.Fatal("rollback prerequisites accepted an already rolling-back phase")
+	}
+}
+
 func TestRestoreTransactionFilesystemAndRollbackEdges(t *testing.T) {
 	root := t.TempDir()
 	blocked := filepath.Join(root, "blocked")
@@ -429,7 +524,7 @@ func TestRestoreTransactionFilesystemAndRollbackEdges(t *testing.T) {
 	}
 	missingOld := newRestoreTransaction("missing-old-test")
 	missingOld.Actions = []restoreTransactionAction{{Relative: "missing-old", HadOld: true}}
-	if err := rollbackRestoreTransaction(context.Background(), root, &missingOld); err == nil {
+	if err := rollbackRestoreAction(root, filepath.Join(root, missingOld.StageDirectory), filepath.Join(root, missingOld.RollbackDirectory), missingOld.Actions[0]); err == nil {
 		t.Fatal("rollback accepted a missing old target")
 	}
 	unexpected := filepath.Join(root, "unexpected")
@@ -438,7 +533,7 @@ func TestRestoreTransactionFilesystemAndRollbackEdges(t *testing.T) {
 	}
 	unexpectedTransaction := newRestoreTransaction("unexpected-test")
 	unexpectedTransaction.Actions = []restoreTransactionAction{{Relative: "unexpected"}}
-	if err := rollbackRestoreTransaction(context.Background(), root, &unexpectedTransaction); err == nil {
+	if err := rollbackRestoreAction(root, filepath.Join(root, unexpectedTransaction.StageDirectory), filepath.Join(root, unexpectedTransaction.RollbackDirectory), unexpectedTransaction.Actions[0]); err == nil {
 		t.Fatal("rollback accepted an unexplained live target")
 	}
 	placed := filepath.Join(root, "placed")
@@ -447,7 +542,7 @@ func TestRestoreTransactionFilesystemAndRollbackEdges(t *testing.T) {
 	}
 	placedTransaction := newRestoreTransaction("placed-test")
 	placedTransaction.Actions = []restoreTransactionAction{{Relative: "placed", HasNew: true}}
-	if err := rollbackRestoreTransaction(context.Background(), root, &placedTransaction); err != nil {
+	if err := rollbackRestoreAction(root, filepath.Join(root, placedTransaction.StageDirectory), filepath.Join(root, placedTransaction.RollbackDirectory), placedTransaction.Actions[0]); err != nil {
 		t.Fatalf("rollback new-only target: %v", err)
 	}
 	if _, err := os.Lstat(placed); !errors.Is(err, os.ErrNotExist) {

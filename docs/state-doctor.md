@@ -62,6 +62,8 @@ bun run state:doctor --data-dir ./data --apply --finding finding-0123456789abcde
 
 通常のscanは`.restore-staging-*` / `.restore-rollback-*`に似た名前も含めてdata tree全体の機微file配置を診断します。restore内部のpost-publish scanだけは、検証済みdurable journalが指す正確なtop-level staging / rollback pathとjournalを明示指定して除外します。名前prefixだけで任意directoryを除外しません。
 
+YAML / JSONのcanonical stateとAI credential scanは、symlinkを辿らないnon-blocking open後に同じdescriptorでregular fileかを確認し、64 MiBを上限として読みます。FIFOやdeviceなどの特殊file、上限超過fileは待機・無制限読取せず`read_error`またはcredential scan errorとして報告します。
+
 repair 後は同じ data tree を再走査した report を返します。正本側の finding が残る場合は recovery hint に従い、対応 build または同一 consistency group の backup を使って復旧します。
 
 malformed extraction job / checkpoint は `novel_id` を安全に特定できないため、1 fileでも残る間は全作品の削除をfail-closedで停止します。malformed jobはさらにjob一覧・新規queue・起動時recoveryを停止し、checkpointは対象生成・対応jobのrecoveryでprovider呼出し前に停止します。まず両writerを停止してcold backupを確保し、対応buildまたはsupported backupで正本を復旧してください。手動で退避する場合は自動repairとして扱わず、元bytesを保持したうえで、そのjobの再実行・重複cost・関連checkpointを運用者が確認します。

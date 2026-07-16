@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"narou-viewer/apps/viewer-api-go/internal/extraction"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -42,13 +44,12 @@ func (s *scanner) scanJobIndexConsistency() {
 		if !file.accepted {
 			continue
 		}
-		var job jobMetadata
-		if err := yaml.Unmarshal(file.raw, &job); err != nil || strings.TrimSpace(job.JobID) == "" || strings.TrimSpace(job.NovelID) == "" {
-			s.add(Finding{SchemaID: "VA-EXTRACTION-JOBS", Path: s.rel(path), Kind: "typed_payload_invalid", Severity: SeverityError, Observed: "missing or invalid job_id/novel_id", Supported: "job schema v2", RecoveryHint: "運用正本を自動削除せず、対応 build または backup で復旧してください。"})
+		record, err := extraction.ValidateCurrentJobDocument(file.raw, path)
+		if err != nil {
+			s.add(Finding{SchemaID: "VA-EXTRACTION-JOBS", Path: s.rel(path), Kind: "typed_payload_invalid", Severity: SeverityError, Observed: "invalid canonical job identity or required fields", Supported: "job schema v2", RecoveryHint: "運用正本を自動削除せず、対応 build または backup で復旧してください。"})
 			continue
 		}
-		job.JobID = strings.TrimSpace(job.JobID)
-		job.NovelID = strings.TrimSpace(job.NovelID)
+		job := jobMetadata{JobID: record.Job.JobID, NovelID: record.NovelID, Status: record.Job.Status}
 		jobsByNovel[job.NovelID] = append(jobsByNovel[job.NovelID], job)
 	}
 

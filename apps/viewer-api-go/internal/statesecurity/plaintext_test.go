@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +28,36 @@ func TestHasLegacyPlaintextAPIKeyFindsNestedNonEmptyValues(t *testing.T) {
 			got, err := HasLegacyPlaintextAPIKey(path)
 			if err != nil || got != testCase.want {
 				t.Fatalf("HasLegacyPlaintextAPIKey = %v err=%v, want %v", got, err, testCase.want)
+			}
+		})
+	}
+}
+
+func TestCredentialScansRejectFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.yaml")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	for name, scan := range map[string]func() error{
+		"plaintext": func() error {
+			_, err := HasLegacyPlaintextAPIKey(path)
+			return err
+		},
+		"crypto_version": func() error {
+			_, _, err := APIKeyVersionsIfExists(path)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() { done <- scan() }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("credential scan accepted a FIFO")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("credential scan blocked while opening a FIFO without a writer")
 			}
 		})
 	}

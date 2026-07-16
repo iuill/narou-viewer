@@ -15,6 +15,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai/usagemigration"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/library"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
 
 	_ "modernc.org/sqlite"
 )
@@ -198,7 +199,7 @@ func (s *scanner) scanCanonicalEpisode(path string, expectedHash string) {
 			return
 		}
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		s.add(Finding{SchemaID: "NF-CANONICAL-EPISODE", Path: s.rel(path), Kind: "missing_body_file", Severity: SeverityError, Observed: "missing", Supported: strconv.Itoa(nfCanonicalEpisodeVersion), RecoveryHint: "library.sqlite と works/** を同じ consistency group backup から復旧するか、明示再取得してください。"})
 		return

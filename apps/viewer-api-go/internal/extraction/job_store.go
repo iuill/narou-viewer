@@ -14,6 +14,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/novelstate"
 	"narou-viewer/apps/viewer-api-go/internal/state/filequarantine"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
@@ -139,7 +140,7 @@ func preflightPruneNovelStateUnlocked(stateDir string, novelID string) error {
 		return err
 	}
 	for _, path := range checkpointPaths {
-		raw, err := os.ReadFile(path)
+		raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -238,7 +239,7 @@ func pruneNovelStateUnlocked(stateDir string, novelID string) (NovelStatePruneRe
 		return NovelStatePruneResult{}, err
 	}
 	for _, path := range checkpointPaths {
-		raw, err := os.ReadFile(path)
+		raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -285,6 +286,7 @@ func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
 	}
 	records := []JobWithNovel{}
 	blockedNovelIDs := map[string]struct{}{}
+	activeCounts := map[string]int{}
 	for _, path := range paths {
 		read := readJobDocument(path)
 		if read.err != nil {
@@ -301,7 +303,16 @@ func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
 			blockedNovelIDs[owner] = struct{}{}
 			continue
 		}
-		records = append(records, JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()})
+		record := JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()}
+		records = append(records, record)
+		if record.Job.Status == "queued" || record.Job.Status == "running" {
+			activeCounts[record.NovelID]++
+		}
+	}
+	for novelID, count := range activeCounts {
+		if count > 1 {
+			blockedNovelIDs[novelID] = struct{}{}
+		}
 	}
 	filtered := records[:0]
 	for _, record := range records {
@@ -328,7 +339,7 @@ type jobDocumentRead struct {
 }
 
 func readJobDocument(path string) jobDocumentRead {
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return jobDocumentRead{}
 	}
@@ -342,6 +353,10 @@ func readJobDocument(path string) jobDocumentRead {
 		return jobDocumentRead{exists: true, err: malformedErr}
 	}
 	if guardErr == nil {
+		if err := validateCurrentJobDocument(doc, path); err != nil {
+			_, malformedErr := schemaguard.Malformed(JobSchemaContract.WithPath(path), err)
+			return jobDocumentRead{exists: true, err: malformedErr}
+		}
 		return jobDocumentRead{document: doc, exists: true}
 	}
 	guardError, ok := schemaguard.AsGuardError(guardErr)
@@ -356,6 +371,67 @@ func readJobDocument(path string) jobDocumentRead {
 	message := "この抽出 job は現在の build と互換性がないため、変更せず保持されています。"
 	doc.ErrorMessage = &message
 	return jobDocumentRead{document: doc, exists: true, incompatible: true, guardError: guardErr}
+}
+
+func ValidateCurrentJobDocument(raw []byte, path string) (JobWithNovel, error) {
+	contract := JobSchemaContract.WithPath(path)
+	if _, err := schemaguard.CheckYAML(raw, contract); err != nil {
+		return JobWithNovel{}, err
+	}
+	var document jobDocument
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		_, malformedErr := schemaguard.Malformed(contract, err)
+		return JobWithNovel{}, malformedErr
+	}
+	if err := validateCurrentJobDocument(document, path); err != nil {
+		_, malformedErr := schemaguard.Malformed(contract, err)
+		return JobWithNovel{}, malformedErr
+	}
+	return JobWithNovel{NovelID: document.NovelID, Job: document.toJob()}, nil
+}
+
+func validateCurrentJobDocument(document jobDocument, path string) error {
+	jobID, err := safeJobFileName(document.JobID)
+	if err != nil || jobID != document.JobID {
+		return errors.Join(err, errors.New("extraction job_id is not canonical"))
+	}
+	if filepath.Base(path) != jobID+".yaml" {
+		return errors.New("extraction job_id does not match its canonical filename")
+	}
+	if !safeNovelID(document.NovelID) {
+		return errors.New("extraction novel_id must be a single safe path component")
+	}
+	if !isNonNegativeIntegerString(document.RequestedUpToEpisodeIndex) {
+		return errors.New("extraction requested boundary must be a non-negative integer string")
+	}
+	switch document.Status {
+	case "queued", "running", "completed", "failed", "incompatible":
+	default:
+		return fmt.Errorf("extraction job status is invalid: %q", document.Status)
+	}
+	return nil
+}
+
+func safeNovelID(value string) bool {
+	return value != "" &&
+		value == strings.TrimSpace(value) &&
+		value != "." &&
+		value != ".." &&
+		filepath.Base(value) == value &&
+		!strings.ContainsRune(value, 0) &&
+		!strings.ContainsAny(value, `/\`)
+}
+
+func isNonNegativeIntegerString(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func probeFutureJobOwner(raw []byte) string {
@@ -382,13 +458,7 @@ func probeFutureJobOwner(raw []byte) string {
 }
 
 func safeFutureJobOwner(value string) bool {
-	return value != "" &&
-		value == strings.TrimSpace(value) &&
-		value != "." &&
-		value != ".." &&
-		filepath.Base(value) == value &&
-		!strings.ContainsRune(value, 0) &&
-		!strings.ContainsAny(value, `/\`)
+	return safeNovelID(value)
 }
 
 func (d jobDocument) toJob() Job {
@@ -535,6 +605,9 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		FinishedAt:                job.FinishedAt,
 		ErrorMessage:              job.ErrorMessage,
 	}
+	if err := validateCurrentJobDocument(doc, filepath.Join(stateDir, "extraction_jobs", job.JobID+".yaml")); err != nil {
+		return err
+	}
 	fileName, err := safeJobFileName(job.JobID)
 	if err != nil {
 		return err
@@ -546,6 +619,19 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	}
 	if read.incompatible {
 		return read.guardError
+	}
+	if job.Status == "queued" || job.Status == "running" {
+		records, err := loadJobRecords(stateDir)
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			if record.NovelID == novelID &&
+				record.Job.JobID != job.JobID &&
+				(record.Job.Status == "queued" || record.Job.Status == "running") {
+				return fmt.Errorf("extraction novel %q already has active job %q", novelID, record.Job.JobID)
+			}
+		}
 	}
 	if err := writeYAMLAtomic(path, doc); err != nil {
 		return err

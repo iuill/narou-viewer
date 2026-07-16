@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai/usagemigration"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
@@ -19,6 +20,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -108,6 +110,40 @@ func TestScanReportsCrossStoreProblemsWithoutChangingBytes(t *testing.T) {
 	}
 	if quarantined, _ := filepath.Glob(readerSearchPath + ".unsupported-*"); len(quarantined) != 0 {
 		t.Fatalf("dry-run must not quarantine cache: %v", quarantined)
+	}
+}
+
+func TestScanRejectsCanonicalFIFOWithoutBlocking(t *testing.T) {
+	dataDir := t.TempDir()
+	stateDir := filepath.Join(dataDir, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	path := filepath.Join(stateDir, "reading_state.yaml")
+	if err := unix.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("mkfifo: %v", err)
+	}
+	done := make(chan struct {
+		report Report
+		err    error
+	}, 1)
+	go func() {
+		report, err := Scan(context.Background(), dataDir)
+		done <- struct {
+			report Report
+			err    error
+		}{report: report, err: err}
+	}()
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("Scan: %v", result.err)
+		}
+		if !reportHasKind(result.report, "read_error") {
+			t.Fatalf("FIFO read_error missing: %+v", result.report.Findings)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("state doctor blocked while opening a FIFO without a writer")
 	}
 }
 

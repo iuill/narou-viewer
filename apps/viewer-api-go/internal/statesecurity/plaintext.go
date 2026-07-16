@@ -7,11 +7,13 @@ import (
 	"sort"
 	"strings"
 
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
+
 	"gopkg.in/yaml.v3"
 )
 
 func HasLegacyPlaintextAPIKey(path string) (bool, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if err != nil {
 		return false, err
 	}
@@ -31,7 +33,7 @@ func HasLegacyPlaintextAPIKeyIfExists(path string) (bool, bool, error) {
 }
 
 func APIKeyVersionsIfExists(path string) ([]int, bool, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}

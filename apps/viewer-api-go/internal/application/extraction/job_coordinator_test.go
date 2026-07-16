@@ -4,40 +4,35 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 )
 
-func TestJobCoordinatorProcessJobsConsumesQueuedAndRunningJobs(t *testing.T) {
+func TestJobCoordinatorDoesNotProcessMultipleActiveJobsForOneNovel(t *testing.T) {
 	stateDir := t.TempDir()
-	jobs := []extractdomain.Job{
-		{JobID: "job-queued", RequestedUpToEpisodeIndex: "1", GenerationMode: "heuristic", Status: "queued", CreatedAt: "2026-01-01T00:00:00Z"},
-		{JobID: "job-running", RequestedUpToEpisodeIndex: "2", GenerationMode: "heuristic", Status: "running", CreatedAt: "2026-01-01T00:00:01Z"},
+	jobDir := filepath.Join(stateDir, "extraction_jobs")
+	if err := os.MkdirAll(jobDir, 0o700); err != nil {
+		t.Fatalf("mkdir jobs: %v", err)
 	}
-	for _, job := range jobs {
-		if err := extractdomain.SaveJob(stateDir, "novel-1", job); err != nil {
-			t.Fatalf("SaveJob(%s) returned error: %v", job.JobID, err)
+	for name, status := range map[string]string{"job-queued": "queued", "job-running": "running"} {
+		raw := "schema_version: 2\nrevision: 1\njob_id: " + name + "\nnovel_id: novel-1\nrequested_up_to_episode_index: \"1\"\nstatus: " + status + "\ncreated_at: 2026-01-01T00:00:00Z\n"
+		if err := os.WriteFile(filepath.Join(jobDir, name+".yaml"), []byte(raw), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
 		}
 	}
 
-	processed := []string{}
+	called := false
 	coordinator := NewJobCoordinator(stateDir, func(ctx context.Context, novelID string, job extractdomain.Job) bool {
-		processed = append(processed, novelID+":"+job.JobID)
-		job.Status = "completed"
-		if err := extractdomain.SaveJob(stateDir, novelID, job); err != nil {
-			t.Fatalf("SaveJob completed returned error: %v", err)
-		}
+		called = true
 		return true
 	})
 	coordinator.Recover()
 	coordinator.processJobs(context.Background())
 
-	want := []string{"novel-1:job-queued", "novel-1:job-running"}
-	if !reflect.DeepEqual(processed, want) {
-		t.Fatalf("unexpected processed jobs: got %+v want %+v", processed, want)
+	if called {
+		t.Fatal("processor must not run when a novel has multiple active canonical jobs")
 	}
 }
 
@@ -49,7 +44,7 @@ func TestJobCoordinatorNoopsWithoutProcessor(t *testing.T) {
 
 func TestJobCoordinatorDoesNotProcessCurrentJobWhenSameNovelHasFutureJob(t *testing.T) {
 	stateDir := t.TempDir()
-	if err := extractdomain.SaveJob(stateDir, "novel-mixed", extractdomain.Job{JobID: "current-job", Status: "queued"}); err != nil {
+	if err := extractdomain.SaveJob(stateDir, "novel-mixed", extractdomain.Job{JobID: "current-job", RequestedUpToEpisodeIndex: "1", Status: "queued"}); err != nil {
 		t.Fatalf("SaveJob current: %v", err)
 	}
 	future := []byte("schema_version: 99\njob_id: future-job\nnovel_id: novel-mixed\nstatus: running\n")

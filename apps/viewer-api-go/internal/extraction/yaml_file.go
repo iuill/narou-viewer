@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
 
 	"gopkg.in/yaml.v3"
 )
 
 func readYAMLIfExists(path string, target any) (bool, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}

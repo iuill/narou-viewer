@@ -22,6 +22,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/state/novelsettings"
 	"narou-viewer/apps/viewer-api-go/internal/state/preferences"
 	"narou-viewer/apps/viewer-api-go/internal/state/readingstate"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/statesecurity"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
@@ -160,7 +161,7 @@ func (s *scanner) scanJSONGlob(pattern string, contract schemaguard.Contract) {
 		if s.rejectSymlink(contract.ID, path, supportedVersions(contract)) {
 			continue
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 		if err != nil {
 			s.add(Finding{SchemaID: contract.ID, Path: s.rel(path), Kind: "read_error", Severity: SeverityError, Observed: "unreadable", Supported: supportedVersions(contract), RecoveryHint: "権限と storage を確認し、元 file を変更せず復旧してください。"})
 			continue
@@ -175,7 +176,7 @@ func (s *scanner) scanYAML(path string, contract schemaguard.Contract, singleton
 	if s.rejectSymlink(contract.ID, path, supportedVersions(contract)) {
 		return
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if errors.Is(err, os.ErrNotExist) {
 		s.yamlFiles[path] = scannedFile{path: path}
 		hint := "per-novel state が未生成なら正常です。"

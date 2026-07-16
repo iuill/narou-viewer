@@ -12,6 +12,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/state/filequarantine"
+	"narou-viewer/apps/viewer-api-go/internal/state/safefile"
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
@@ -82,7 +83,7 @@ func (s FileStore) Path(novelID string, upToEpisodeIndex string) string {
 
 func (s FileStore) Load(novelID string, upToEpisodeIndex string) (Checkpoint, error) {
 	path := s.Path(novelID, upToEpisodeIndex)
-	raw, err := os.ReadFile(path)
+	raw, err := safefile.ReadRegular(path, safefile.MaxCanonicalStateBytes)
 	if err != nil {
 		return Checkpoint{}, err
 	}

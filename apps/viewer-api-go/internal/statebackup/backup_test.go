@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -348,6 +349,35 @@ func TestPruneArchivesKeepsNewestAndHonorsAge(t *testing.T) {
 	}
 	if _, err := PruneArchives(directory, RetentionPolicy{}); err == nil {
 		t.Fatal("invalid retention policy should fail")
+	}
+}
+
+func TestArchiveWriterRejectsManifestOverRestoreLimitBeforePublishing(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "oversized"+ArchiveSuffix)
+	files := make([]sourceFile, 0, 30_000)
+	missingSource := filepath.Join(t.TempDir(), "missing")
+	for index := 0; index < cap(files); index++ {
+		relative := "state/extraction_jobs/job-" + strconv.Itoa(index) + ".yaml"
+		files = append(files, sourceFile{
+			absolute: missingSource,
+			record: FileRecord{
+				Path:  relative,
+				Group: GroupVAExtraction,
+				Size:  0,
+				Mode:  0o600,
+			},
+		})
+	}
+	recipient, _ := testScryptPair(t)
+	manifest := validEmptyManifest("oversized-manifest")
+	err := writeEncryptedArchive(context.Background(), archivePath, recipient, files, &manifest, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "manifest exceeds size limit") {
+		t.Fatalf("oversized manifest error = %v", err)
+	}
+	for _, path := range []string{archivePath, archivePath + ".partial"} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("oversized archive left %s: %v", path, statErr)
+		}
 	}
 }
 

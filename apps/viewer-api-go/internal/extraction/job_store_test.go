@@ -501,6 +501,59 @@ func TestMalformedJobStopsReadsAndNewJobMutation(t *testing.T) {
 	}
 }
 
+func TestCurrentJobCanonicalIdentityViolationsStopReadsAndExecution(t *testing.T) {
+	for name, raw := range map[string]string{
+		"filename_mismatch": "schema_version: 2\nrevision: 1\njob_id: real-job\nnovel_id: novel-1\nrequested_up_to_episode_index: \"1\"\nstatus: queued\n",
+		"unsafe_novel_id":   "schema_version: 2\nrevision: 1\njob_id: alias\nnovel_id: ../../tmp/target\nrequested_up_to_episode_index: \"1\"\nstatus: queued\n",
+		"invalid_boundary":  "schema_version: 2\nrevision: 1\njob_id: alias\nnovel_id: novel-1\nrequested_up_to_episode_index: latest\nstatus: queued\n",
+		"invalid_status":    "schema_version: 2\nrevision: 1\njob_id: alias\nnovel_id: novel-1\nrequested_up_to_episode_index: \"1\"\nstatus: retrying\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			path := filepath.Join(stateDir, "extraction_jobs", "alias.yaml")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatalf("mkdir jobs: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write job: %v", err)
+			}
+			err := schemaguardtest.AssertFileUntouched(t, path, func() error {
+				_, _, loadErr := LoadJobs(stateDir, "novel-1")
+				return loadErr
+			})
+			if err == nil {
+				t.Fatal("LoadJobs accepted a non-canonical current job")
+			}
+			if records, loadErr := LoadJobsForExecution(stateDir); loadErr == nil || len(records) != 0 {
+				t.Fatalf("LoadJobsForExecution = %+v, %v", records, loadErr)
+			}
+			if recovered, recoverErr := RecoverRunningJobs(stateDir); recoverErr == nil || recovered != 0 {
+				t.Fatalf("RecoverRunningJobs = %d, %v", recovered, recoverErr)
+			}
+		})
+	}
+}
+
+func TestSaveJobRejectsUnsafeNovelIDBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	outside := filepath.Join(root, "outside.yaml")
+	err := SaveJob(stateDir, "../../../outside", Job{
+		JobID:                     "job-1",
+		RequestedUpToEpisodeIndex: "1",
+		Status:                    "queued",
+	})
+	if err == nil {
+		t.Fatal("SaveJob accepted an unsafe novel ID")
+	}
+	if _, statErr := os.Lstat(outside); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unsafe SaveJob wrote outside the index directory: %v", statErr)
+	}
+	if paths, globErr := filepath.Glob(filepath.Join(stateDir, "extraction_jobs", "*.yaml")); globErr != nil || len(paths) != 0 {
+		t.Fatalf("unsafe SaveJob created canonical files: %v, %v", paths, globErr)
+	}
+}
+
 func TestFutureJobIsListedAsIncompatibleAndNeverRequeuedOrOverwritten(t *testing.T) {
 	stateDir := t.TempDir()
 	jobDir := filepath.Join(stateDir, "extraction_jobs")
@@ -527,14 +580,14 @@ created_at: 2026-01-01T00:00:00Z
 		t.Fatalf("RecoverRunningJobs = %d, err=%v", recovered, err)
 	}
 	err = schemaguardtest.AssertFileUntouched(t, path, func() error {
-		return SaveJob(stateDir, "novel-future", Job{JobID: "future-job", Status: "queued"})
+		return SaveJob(stateDir, "novel-future", Job{JobID: "future-job", RequestedUpToEpisodeIndex: "1", Status: "queued"})
 	})
 	var guardError *schemaguard.GuardError
 	if !errors.As(err, &guardError) || guardError.Result.Status != schemaguard.StatusFutureUnknown {
 		t.Fatalf("SaveJob error = %#v, want future GuardError", err)
 	}
 	err = schemaguardtest.AssertFileUntouched(t, path, func() error {
-		_, created, enqueueErr := SaveJobIfNoActive(stateDir, "novel-future", Job{JobID: "different-job", Status: "queued"})
+		_, created, enqueueErr := SaveJobIfNoActive(stateDir, "novel-future", Job{JobID: "different-job", RequestedUpToEpisodeIndex: "1", Status: "queued"})
 		if created {
 			t.Fatal("future job must block enqueue of a different job ID for the same novel")
 		}
@@ -581,7 +634,7 @@ func TestFutureJobBlocksRecoveryAndExecutionForSameNovel(t *testing.T) {
 
 func TestOwnerlessFutureJobBlocksAllExecutionAndEnqueue(t *testing.T) {
 	stateDir := t.TempDir()
-	if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", Status: "queued"}); err != nil {
+	if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", RequestedUpToEpisodeIndex: "1", Status: "queued"}); err != nil {
 		t.Fatalf("SaveJob current: %v", err)
 	}
 	jobDir := filepath.Join(stateDir, "extraction_jobs")
@@ -591,7 +644,7 @@ func TestOwnerlessFutureJobBlocksAllExecutionAndEnqueue(t *testing.T) {
 	if records, err := LoadJobsForExecution(stateDir); err == nil || len(records) != 0 {
 		t.Fatalf("ownerless future job should block execution globally: records=%+v err=%v", records, err)
 	}
-	if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
+	if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", RequestedUpToEpisodeIndex: "1", Status: "queued"}); err == nil || created {
 		t.Fatalf("ownerless future job should block enqueue globally: created=%v err=%v", created, err)
 	}
 }
@@ -604,7 +657,7 @@ func TestUnsafeOrNonStringFutureJobOwnerBlocksGlobally(t *testing.T) {
 	} {
 		t.Run(strings.ReplaceAll(owner, " ", "_"), func(t *testing.T) {
 			stateDir := t.TempDir()
-			if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", Status: "queued"}); err != nil {
+			if err := SaveJob(stateDir, "known-novel", Job{JobID: "current-job", RequestedUpToEpisodeIndex: "1", Status: "queued"}); err != nil {
 				t.Fatalf("SaveJob current: %v", err)
 			}
 			path := filepath.Join(stateDir, "extraction_jobs", "future-job.yaml")
@@ -615,7 +668,7 @@ func TestUnsafeOrNonStringFutureJobOwnerBlocksGlobally(t *testing.T) {
 			if records, err := LoadJobsForExecution(stateDir); err == nil || len(records) != 0 {
 				t.Fatalf("ambiguous future owner execution = %+v err=%v", records, err)
 			}
-			if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", Status: "queued"}); err == nil || created {
+			if _, created, err := SaveJobIfNoActive(stateDir, "another-novel", Job{JobID: "new-job", RequestedUpToEpisodeIndex: "1", Status: "queued"}); err == nil || created {
 				t.Fatalf("ambiguous future owner enqueue created=%v err=%v", created, err)
 			}
 			if after, err := os.ReadFile(path); err != nil || string(after) != raw {
@@ -627,7 +680,7 @@ func TestUnsafeOrNonStringFutureJobOwnerBlocksGlobally(t *testing.T) {
 
 func TestSaveJobRebuildsUnsupportedDerivedIndex(t *testing.T) {
 	stateDir := t.TempDir()
-	if err := SaveJob(stateDir, "novel-index", Job{JobID: "job-1", Status: "completed", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
+	if err := SaveJob(stateDir, "novel-index", Job{JobID: "job-1", RequestedUpToEpisodeIndex: "1", Status: "completed", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob job-1: %v", err)
 	}
 	path := filepath.Join(stateDir, "extraction_jobs", "index", "novel-index.yaml")
@@ -635,7 +688,7 @@ func TestSaveJobRebuildsUnsupportedDerivedIndex(t *testing.T) {
 	if err := os.WriteFile(path, future, 0o644); err != nil {
 		t.Fatalf("write future index: %v", err)
 	}
-	if err := SaveJob(stateDir, "novel-index", Job{JobID: "job-2", Status: "queued", CreatedAt: "2026-01-02T00:00:00Z"}); err != nil {
+	if err := SaveJob(stateDir, "novel-index", Job{JobID: "job-2", RequestedUpToEpisodeIndex: "1", Status: "queued", CreatedAt: "2026-01-02T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob job-2: %v", err)
 	}
 	quarantined, err := filepath.Glob(path + ".unsupported-*")

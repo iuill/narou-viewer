@@ -125,15 +125,15 @@ func TestScannerReconciliationCoversInvalidAndConflictingDerivedState(t *testing
 		return path
 	}
 
-	addYAML("extraction_jobs/invalid.yaml", "job_id: ''\nnovel_id: ''\n", true)
+	addYAML("extraction_jobs/invalid.yaml", "schema_version: 2\nrevision: 1\njob_id: other\nnovel_id: novel-invalid\nrequested_up_to_episode_index: '1'\nstatus: completed\n", true)
 	addYAML("extraction_jobs/skipped.yaml", "job_id: skipped\nnovel_id: skipped\n", false)
-	addYAML("extraction_jobs/active-a.yaml", "job_id: active-a\nnovel_id: novel-active\nstatus: queued\n", true)
-	addYAML("extraction_jobs/active-b.yaml", "job_id: active-b\nnovel_id: novel-active\nstatus: running\n", true)
-	addYAML("extraction_jobs/single.yaml", "job_id: single\nnovel_id: novel-single\nstatus: queued\n", true)
+	addYAML("extraction_jobs/active-a.yaml", "schema_version: 2\nrevision: 1\njob_id: active-a\nnovel_id: novel-active\nrequested_up_to_episode_index: '1'\nstatus: queued\n", true)
+	addYAML("extraction_jobs/active-b.yaml", "schema_version: 2\nrevision: 1\njob_id: active-b\nnovel_id: novel-active\nrequested_up_to_episode_index: '1'\nstatus: running\n", true)
+	addYAML("extraction_jobs/single.yaml", "schema_version: 2\nrevision: 1\njob_id: single\nnovel_id: novel-single\nrequested_up_to_episode_index: '1'\nstatus: queued\n", true)
 	addYAML("extraction_jobs/index/novel-active.yaml", "novel_id: novel-active\nactive_job_id: missing\njob_ids: [active-a, active-b]\n", true)
 	addYAML("extraction_jobs/index/invalid-index.yaml", ":\n", true)
 	addYAML("extraction_jobs/index/skipped-index.yaml", "novel_id: skipped-index\n", false)
-	addYAML("extraction_jobs/unsafe.yaml", "job_id: unsafe\nnovel_id: ../unsafe\nstatus: completed\n", true)
+	addYAML("extraction_jobs/unsafe.yaml", "schema_version: 2\nrevision: 1\njob_id: unsafe\nnovel_id: ../unsafe\nrequested_up_to_episode_index: '1'\nstatus: completed\n", true)
 	s.scanJobIndexConsistency()
 	for _, kind := range []string{"typed_payload_invalid", "multiple_active_jobs", "job_index_mismatch"} {
 		if !reportHasKind(s.report, kind) {

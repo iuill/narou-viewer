@@ -90,7 +90,7 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "index", novelID+".yaml"), []byte("job_ids:\n  - job-remove\n"), 0o644); err != nil {
 		t.Fatalf("write character job index fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "job-remove.yaml"), []byte("schema_version: 2\nnovel_id: "+novelID+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, "extraction_jobs", "job-remove.yaml"), []byte("schema_version: 2\nrevision: 1\njob_id: job-remove\nnovel_id: "+novelID+"\nrequested_up_to_episode_index: \"1\"\nstatus: completed\n"), 0o644); err != nil {
 		t.Fatalf("write character job fixture: %v", err)
 	}
 	checkpointDir := filepath.Join(stateDir, "extraction_jobs", "checkpoints")

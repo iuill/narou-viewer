@@ -62,6 +62,8 @@ backup 前に次を実施します。
 
 archive は一時 `.partial` を `0600` で作成し、age stream、gzip、tar をすべて close / sync できた後だけ最終名へ no-replace で公開します。失敗・cancel 時の partial は削除します。出力 directory は `0700`、archive は `0600` に固定します。payload、archive、passphrase / identity file はnon-blockingかつsymlinkを辿らない単一descriptorでopenしてからregular fileを確認するため、FIFOなどの特殊fileは待機せず拒否します。
 
+backup writerはrestore readerと同じarchive契約を公開前に適用し、entry数100万、非圧縮合計1 TiB、manifest 4 MiBの上限、entry path、payload group対応を検証します。現行build自身がrestoreできないarchiveは成功扱いで公開せず、retentionも実行しません。
+
 `--output-dir` と `--archive` のdata tree内外判定は文字列prefixではなく、symlinkを解決した物理pathのrelative containmentで行います。未作成output directoryは最寄りの実在ancestorを解決してから残りのsuffixを評価し、親directory symlink経由で`data/`配下へ戻る配置も拒否します。`--data-dir` と `--output-dir` にfilesystem root自体は指定できません。
 
 ## manifest と consistency group
@@ -115,7 +117,7 @@ restore は次の順で処理します。
 bun run state:backup recover --data-dir ./data
 ```
 
-`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、staging中断ならlive generationを変更せずcleanup、commit cleanup 中断なら検証済み新 generation を維持してcleanupを完了します。CLIはこの3結果を区別して表示します。journal内のgeneration IDとstaging / rollback名を単一の安全なpath componentとして検証し、clean済みabsolute pathがdata directory直下にあることをjournal読取時と再帰cleanup直前に再確認します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
+`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、staging中断ならlive generationを変更せずcleanup、commit cleanup 中断なら検証済み新 generation を維持してcleanupを完了します。CLIはこの3結果を区別して表示します。verify phaseでは旧targetがあった全action、publish phaseではjournal上完了済みのactionについてrollback copyの存在をrollback開始前に要求し、欠落時はlive treeとjournalを保持して停止します。rollbackは逆順cursorをactionごとにjournalへ同期するため、rollback自体の再中断後も完了済みactionを再推測しません。journal内のgeneration IDとstaging / rollback名を単一の安全なpath componentとして検証し、clean済みabsolute pathがdata directory直下にあることをjournal読取時と再帰cleanup直前に再確認します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
 
 restore staging は復号済み機微データです。tool は成功・失敗時に管理 path から削除しますが、一般 filesystem、COW、SSD の物理 secure erase は保証しません。backup は平文 staging を作らず、restore staging の寿命だけを短くしています。
 

@@ -196,9 +196,10 @@ func recoverRestoreTransactionLocked(ctx context.Context, dataDir string) (Recov
 		// transactions only need their durable temporary data cleaned up.
 	case restorePhasePublishing, restorePhaseVerifying, restorePhaseRollingBack:
 		outcome = RecoveryRolledBack
-		transaction.Phase = restorePhaseRollingBack
-		if err := writeRestoreTransaction(dataDir, &transaction); err != nil {
-			return RecoveryNone, err
+		if transaction.Phase != restorePhaseRollingBack {
+			if err := prepareRestoreRollback(dataDir, &transaction); err != nil {
+				return RecoveryNone, fmt.Errorf("validate interrupted restore rollback prerequisites: %w", err)
+			}
 		}
 		if err := rollbackRestoreTransaction(ctx, dataDir, &transaction); err != nil {
 			return RecoveryNone, fmt.Errorf("roll back interrupted restore transaction: %w", err)
@@ -220,52 +221,64 @@ func rollbackRestoreTransaction(ctx context.Context, dataDir string, transaction
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if transaction.Phase != restorePhaseRollingBack {
+		if err := prepareRestoreRollback(dataDir, transaction); err != nil {
+			return err
+		}
+	}
 	stageRoot, rollbackRoot, err := restoreTransactionRoots(dataDir, transaction)
 	if err != nil {
 		return err
 	}
-	for index := len(transaction.Actions) - 1; index >= 0; index-- {
+	for index := transaction.NextAction; index >= 0; index-- {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		action := transaction.Actions[index]
-		destination := filepath.Join(dataDir, filepath.FromSlash(action.Relative))
-		staged := filepath.Join(stageRoot, filepath.FromSlash(action.Relative))
-		rollback := filepath.Join(rollbackRoot, filepath.FromSlash(action.Relative))
-		rollbackExists, err := pathExists(rollback)
-		if err != nil {
+		if err := rollbackRestoreAction(dataDir, stageRoot, rollbackRoot, action); err != nil {
 			return err
 		}
-		destinationExists, err := pathExists(destination)
-		if err != nil {
+		transaction.NextAction = index - 1
+		if err := writeRestoreTransaction(dataDir, transaction); err != nil {
 			return err
 		}
-		if action.HadOld {
-			if rollbackExists {
-				if destinationExists {
-					if err := durableRemoveAll(destination); err != nil {
-						return err
-					}
-				}
-				if err := ensureDurableDirectory(filepath.Dir(destination)); err != nil {
+	}
+	return nil
+}
+
+func rollbackRestoreAction(dataDir string, stageRoot string, rollbackRoot string, action restoreTransactionAction) error {
+	destination := filepath.Join(dataDir, filepath.FromSlash(action.Relative))
+	staged := filepath.Join(stageRoot, filepath.FromSlash(action.Relative))
+	rollback := filepath.Join(rollbackRoot, filepath.FromSlash(action.Relative))
+	rollbackExists, err := pathExists(rollback)
+	if err != nil {
+		return err
+	}
+	destinationExists, err := pathExists(destination)
+	if err != nil {
+		return err
+	}
+	if action.HadOld {
+		if rollbackExists {
+			if destinationExists {
+				if err := durableRemoveAll(destination); err != nil {
 					return err
 				}
-				if err := durableRename(rollback, destination); err != nil {
-					return fmt.Errorf("restore rollback target %s: %w", action.Relative, err)
-				}
-				continue
 			}
-			if !destinationExists {
-				return fmt.Errorf("restore rollback target is missing from both live and rollback locations: %s", action.Relative)
+			if err := ensureDurableDirectory(filepath.Dir(destination)); err != nil {
+				return err
 			}
-			continue
+			if err := durableRename(rollback, destination); err != nil {
+				return fmt.Errorf("restore rollback target %s: %w", action.Relative, err)
+			}
+		} else if !destinationExists {
+			return fmt.Errorf("restore rollback target is missing from both live and rollback locations: %s", action.Relative)
 		}
-		if !action.HasNew {
-			if destinationExists {
-				return fmt.Errorf("unexpected live restore target without an old or staged value: %s", action.Relative)
-			}
-			continue
+	} else if !action.HasNew {
+		if destinationExists {
+			return fmt.Errorf("unexpected live restore target without an old or staged value: %s", action.Relative)
 		}
+	} else {
 		stagedExists, err := pathExists(staged)
 		if err != nil {
 			return err
@@ -274,6 +287,46 @@ func rollbackRestoreTransaction(ctx context.Context, dataDir string, transaction
 			if err := durableRemoveAll(destination); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func prepareRestoreRollback(dataDir string, transaction *restoreTransaction) error {
+	if err := validateRollbackPrerequisites(dataDir, transaction); err != nil {
+		return err
+	}
+	transaction.Phase = restorePhaseRollingBack
+	transaction.NextAction = len(transaction.Actions) - 1
+	return writeRestoreTransaction(dataDir, transaction)
+}
+
+func validateRollbackPrerequisites(dataDir string, transaction *restoreTransaction) error {
+	_, rollbackRoot, err := restoreTransactionRoots(dataDir, transaction)
+	if err != nil {
+		return err
+	}
+	requiredBefore := 0
+	switch transaction.Phase {
+	case restorePhasePublishing:
+		requiredBefore = transaction.NextAction
+	case restorePhaseVerifying:
+		requiredBefore = len(transaction.Actions)
+	default:
+		return fmt.Errorf("restore phase %q cannot begin rollback", transaction.Phase)
+	}
+	for index := 0; index < requiredBefore; index++ {
+		action := transaction.Actions[index]
+		if !action.HadOld {
+			continue
+		}
+		rollback := filepath.Join(rollbackRoot, filepath.FromSlash(action.Relative))
+		exists, err := pathExists(rollback)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("completed restore action is missing rollback data: %s", action.Relative)
 		}
 	}
 	return nil
@@ -416,12 +469,30 @@ func validateRestoreTransaction(transaction *restoreTransaction) error {
 		}
 	case restorePhasePublishing, restorePhaseVerifying, restorePhaseRollingBack, restorePhaseRolledBack, restorePhaseCommitting:
 		targets := restoreTargets()
-		if len(transaction.Actions) != len(targets) || transaction.NextAction < 0 || transaction.NextAction > len(targets) {
+		if len(transaction.Actions) != len(targets) {
 			return errors.New("restore transaction publish plan is incomplete")
 		}
 		for index, action := range transaction.Actions {
 			if action.Relative != targets[index] {
 				return errors.New("restore transaction publish plan contains an unsafe target")
+			}
+		}
+		switch transaction.Phase {
+		case restorePhasePublishing:
+			if transaction.NextAction < 0 || transaction.NextAction > len(targets) {
+				return errors.New("restore transaction publish progress is invalid")
+			}
+		case restorePhaseVerifying, restorePhaseCommitting:
+			if transaction.NextAction != len(targets) {
+				return errors.New("completed restore publish progress is invalid")
+			}
+		case restorePhaseRollingBack:
+			if transaction.NextAction < -1 || transaction.NextAction >= len(targets) {
+				return errors.New("restore transaction rollback progress is invalid")
+			}
+		case restorePhaseRolledBack:
+			if transaction.NextAction != -1 {
+				return errors.New("completed restore rollback progress is invalid")
 			}
 		}
 	default:

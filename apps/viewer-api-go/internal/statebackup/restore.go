@@ -30,10 +30,6 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/statedoctor"
 )
 
-const maxManifestBytes = 4 << 20
-const maxArchiveFiles = 1_000_000
-const maxUncompressedArchiveBytes int64 = 1 << 40
-
 type scannedArchive struct {
 	manifest Manifest
 	files    map[string]FileRecord
@@ -203,8 +199,7 @@ func scanEncryptedArchiveFile(ctx context.Context, archive *os.File, identities 
 	result := scannedArchive{files: map[string]FileRecord{}}
 	seenEntries := map[string]bool{}
 	manifestSeen := false
-	entryCount := 0
-	var uncompressedBytes int64
+	budget := archiveBudget{}
 	for {
 		if err := ctx.Err(); err != nil {
 			_ = compressed.Close()
@@ -218,30 +213,20 @@ func scanEncryptedArchiveFile(ctx context.Context, archive *os.File, identities 
 			_ = compressed.Close()
 			return scannedArchive{}, err
 		}
-		entryCount++
-		if entryCount > maxArchiveFiles {
-			_ = compressed.Close()
-			return scannedArchive{}, errors.New("archive contains too many entries")
-		}
-		if header.Typeflag != tar.TypeReg || header.Size < 0 || !safeArchiveEntryName(header.Name) {
+		if header.Typeflag != tar.TypeReg {
 			_ = compressed.Close()
 			return scannedArchive{}, fmt.Errorf("unsupported archive entry: %s", header.Name)
 		}
-		if header.Size > maxUncompressedArchiveBytes-uncompressedBytes {
+		if err := budget.add(header.Name, header.Size); err != nil {
 			_ = compressed.Close()
-			return scannedArchive{}, errors.New("archive uncompressed payload exceeds size limit")
+			return scannedArchive{}, err
 		}
-		uncompressedBytes += header.Size
 		if seenEntries[header.Name] {
 			_ = compressed.Close()
 			return scannedArchive{}, fmt.Errorf("duplicate archive entry: %s", header.Name)
 		}
 		seenEntries[header.Name] = true
 		if header.Name == ManifestName {
-			if header.Size > maxManifestBytes {
-				_ = compressed.Close()
-				return scannedArchive{}, errors.New("manifest exceeds size limit")
-			}
 			raw, err := io.ReadAll(io.LimitReader(tarReader, maxManifestBytes+1))
 			if err != nil || int64(len(raw)) != header.Size {
 				_ = compressed.Close()

@@ -192,6 +192,12 @@ func blockingDoctorFinding(report statedoctor.Report) (statedoctor.Finding, bool
 }
 
 func writeEncryptedArchive(ctx context.Context, archivePath string, recipient age.Recipient, files []sourceFile, manifest *Manifest, createdAt time.Time) (resultErr error) {
+	if manifest == nil {
+		return errors.New("backup manifest is required")
+	}
+	if err := validateBackupArchiveContract(files, *manifest); err != nil {
+		return fmt.Errorf("validate backup archive contract: %w", err)
+	}
 	partialPath := archivePath + ".partial"
 	output, err := os.OpenFile(partialPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -250,6 +256,10 @@ func writeEncryptedArchive(ctx context.Context, archivePath string, recipient ag
 		return err
 	}
 	manifestRaw = append(manifestRaw, '\n')
+	if len(manifestRaw) > maxManifestBytes {
+		_ = closeWriters()
+		return errors.New("manifest exceeds size limit")
+	}
 	if err := tarWriter.WriteHeader(&tar.Header{Name: ManifestName, Mode: 0o600, Size: int64(len(manifestRaw)), ModTime: createdAt, Typeflag: tar.TypeReg, Format: tar.FormatPAX}); err != nil {
 		_ = closeWriters()
 		return err
