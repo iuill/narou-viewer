@@ -12,6 +12,9 @@ import (
 )
 
 func TestQueueTracksSummaryAndHistory(t *testing.T) {
+	if NewTaskID("test") == "" {
+		t.Fatal("NewTaskID returned an empty id")
+	}
 	queue := NewQueue()
 	task := NewTask("download")
 	task.Targets = []string{"https://example.com/work"}
@@ -200,6 +203,50 @@ func TestPersistentQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	}
 	if _, found, err := queue.GetTask(queued.ID); err != nil || !found {
 		t.Fatalf("GetTask found=%v err=%v", found, err)
+	}
+	claimed = queue.PopNext()
+	if claimed == nil {
+		t.Fatal("resumed task was not claimed")
+	}
+	if action := queue.RequestedAction(taskstate.TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}); action != taskstate.RequestedActionNone {
+		t.Fatalf("requested action = %q", action)
+	}
+	queue.FinishTask(claimed, taskstate.ErrTaskPauseRequested, slog.Default())
+	if summary := queue.Summary(); len(summary.Paused) != 1 || summary.Paused[0]["status"] != StatusPaused {
+		t.Fatalf("paused summary = %#v", summary)
+	}
+	if result, err := queue.RequestResume(queued.ID); err != nil || !result.Changed {
+		t.Fatalf("resume paused task = %#v, err = %v", result, err)
+	}
+	claimed = queue.PopNext()
+	if claimed == nil {
+		t.Fatal("resumed paused task was not claimed")
+	}
+	queue.FinishTask(claimed, taskstate.ErrRunnerShutdown, slog.Default())
+	if summary := queue.Summary(); len(summary.Interrupted) != 1 || summary.Interrupted[0]["status"] != StatusInterrupted {
+		t.Fatalf("interrupted summary = %#v", summary)
+	}
+}
+
+func TestMemoryQueueSupportsQueuedPauseAndCurrentControls(t *testing.T) {
+	queue := NewQueue()
+	paused := NewTask("download")
+	if err := queue.Enqueue(paused); err != nil {
+		t.Fatal(err)
+	}
+	result, err := queue.RequestPause(paused.ID)
+	if err != nil || !result.Changed || result.Task.Status != StatusPaused {
+		t.Fatalf("queued pause = %#v, err = %v", result, err)
+	}
+	current := NewTask("download")
+	if err := queue.Enqueue(current); err != nil {
+		t.Fatal(err)
+	}
+	if queue.PopNext() == nil {
+		t.Fatal("current task was not popped")
+	}
+	if result, err := queue.RequestCancel(current.ID); err != nil || !result.Changed {
+		t.Fatalf("current cancel = %#v, err = %v", result, err)
 	}
 }
 

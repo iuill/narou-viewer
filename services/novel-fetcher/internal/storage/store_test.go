@@ -18,6 +18,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/fetcher"
 	"narou-viewer/services/novel-fetcher/internal/model"
 	"narou-viewer/services/novel-fetcher/internal/storage/migration"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type fakeAssetFetcher struct {
@@ -25,6 +26,15 @@ type fakeAssetFetcher struct {
 	contentType string
 	err         error
 	urls        []string
+}
+
+func TestUnsupportedEpisodeSchemaErrorIncludesRecoveryDetails(t *testing.T) {
+	observed := 99
+	err := ErrUnsupportedEpisodeSchema{Path: "episodes/1.json", Observed: &observed, Supported: 1}
+	message := err.Error()
+	if !strings.Contains(message, "episodes/1.json") || !strings.Contains(message, "observed 99") || !strings.Contains(message, "supported 1") {
+		t.Fatalf("error message = %q", message)
+	}
 }
 
 func (f *fakeAssetFetcher) FetchBytes(_ context.Context, rawURL string, _ fetcher.FetchPolicy) (fetcher.BinaryResponse, error) {
@@ -180,6 +190,111 @@ func TestStoreSavesSQLiteAndCanonicalEpisode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootDir, episodes[0].RawPath)); err != nil {
 		t.Fatalf("raw html was not written: %v", err)
+	}
+}
+
+func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	work := model.Work{
+		Site:       model.SiteSyosetu,
+		SiteName:   "小説家になろう",
+		SiteWorkID: "ncheckpoint",
+		SourceURL:  "https://ncode.syosetu.com/ncheckpoint/",
+		Title:      "チェックポイント作品",
+		Author:     "作者",
+		Story:      "あらすじ",
+		Episodes: []model.Episode{{
+			Index:       "1",
+			Title:       "第一話",
+			PublishedAt: "2026/05/09 12:00",
+			ModifiedAt:  "2026/05/09 12:00",
+			FetchedAt:   time.Date(2026, 5, 9, 12, 1, 0, 0, time.UTC),
+			Element:     model.EpisodeElement{DataType: "html", Body: "<p>本文</p>"},
+		}},
+	}
+	stored, err := store.UpsertWorkToc(context.Background(), work, FetchStatusPartial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveEpisodeBody(context.Background(), work, stored, work.Episodes[0], 0); err != nil {
+		t.Fatal(err)
+	}
+	repository := taskstate.NewSQLiteRepository(store.DB())
+	task := taskstate.NewTask("update")
+	task.NovelIDs = []int{stored.ID}
+	if _, err := repository.Enqueue(context.Background(), []*taskstate.Task{task}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimNext(context.Background(), time.Now().UTC())
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNext() = %#v, err = %v", claimed, err)
+	}
+	ref := taskstate.TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
+	if err := store.RecordTaskEpisodeCheckpoint(context.Background(), ref, stored.ID, "missing", 0, ""); err == nil {
+		t.Fatal("missing episode checkpoint unexpectedly succeeded")
+	}
+	valid, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	if err != nil || valid {
+		t.Fatalf("checkpoint before record = %v, err = %v", valid, err)
+	}
+	if err := store.RecordTaskEpisodeCheckpoint(context.Background(), ref, stored.ID, "1", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	if err != nil || !valid {
+		t.Fatalf("checkpoint after record = %v, err = %v", valid, err)
+	}
+	updatedEpisode := work.Episodes[0]
+	updatedEpisode.Element.Body = "<p>更新本文</p>"
+	if _, err := store.SaveEpisodeBodyForTask(context.Background(), ref, work, stored, updatedEpisode, 0, ""); err != nil {
+		t.Fatalf("SaveEpisodeBodyForTask() error = %v", err)
+	}
+	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	if err != nil || !valid {
+		t.Fatalf("checkpoint after atomic save = %v, err = %v", valid, err)
+	}
+	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID); err != nil {
+		t.Fatalf("CompleteWorkForTask() error = %v", err)
+	}
+	completedTask, found, err := repository.Get(context.Background(), task.ID)
+	if err != nil || !found || !completedTask.ExecutionCommitted {
+		t.Fatalf("completed task = %#v, found = %v, err = %v", completedTask, found, err)
+	}
+	if err := repository.Finalize(context.Background(), ref, taskstate.Outcome{Status: taskstate.StatusSucceeded, ExecutionCommitted: true}); err != nil {
+		t.Fatalf("Finalize() error = %v", err)
+	}
+	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+		t.Fatalf("stale CompleteWorkForTask() error = %v", err)
+	}
+
+	episode, found, err := store.FindEpisode(stored.ID, "1")
+	if err != nil || !found {
+		t.Fatalf("FindEpisode() = %#v/%v/%v", episode, found, err)
+	}
+	if err := os.WriteFile(filepath.Join(store.rootDir, episode.BodyPath), []byte(`{"schema_version":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	if err != nil || valid {
+		t.Fatalf("checkpoint after body mutation = %v, err = %v", valid, err)
+	}
+	if err := os.Remove(filepath.Join(store.rootDir, episode.BodyPath)); err != nil {
+		t.Fatal(err)
+	}
+	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	if err != nil || valid {
+		t.Fatalf("checkpoint after body removal = %v, err = %v", valid, err)
+	}
+	if err := os.WriteFile(filepath.Join(store.rootDir, episode.BodyPath), []byte(`{"schema_version":99}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1"); err == nil {
+		t.Fatal("future episode schema was accepted")
 	}
 }
 

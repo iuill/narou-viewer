@@ -4,11 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"narou-viewer/services/novel-fetcher/internal/storage"
+	"narou-viewer/services/novel-fetcher/internal/storage/migration"
+
+	_ "modernc.org/sqlite"
 )
 
 type scanError struct{ err error }
@@ -25,19 +29,36 @@ type resultError struct{}
 func (resultError) LastInsertId() (int64, error) { return 0, nil }
 func (resultError) RowsAffected() (int64, error) { return 0, errors.New("rows unavailable") }
 
-func newRepository(t *testing.T) (*storage.Store, *SQLiteRepository) {
+func newRepository(t *testing.T) (*sql.DB, *SQLiteRepository) {
 	t.Helper()
-	store, err := storage.NewStore(t.TempDir())
+	store, err := openTestDB(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return store, NewSQLiteRepository(store.DB())
+	return store, NewSQLiteRepository(store)
+}
+
+func openTestDB(root string) (*sql.DB, error) {
+	databasePath := filepath.Join(root, "library.sqlite")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if err := migration.Run(db, databasePath); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func TestSQLiteRepositoryPersistsQueueOrderAcrossStoreReopen(t *testing.T) {
 	root := t.TempDir()
-	store, err := storage.NewStore(root)
+	store, err := openTestDB(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,18 +66,18 @@ func TestSQLiteRepositoryPersistsQueueOrderAcrossStoreReopen(t *testing.T) {
 	first.Targets = []string{"https://example.com/first"}
 	second := NewTask("download")
 	second.Targets = []string{"https://example.com/second"}
-	repository := NewSQLiteRepository(store.DB())
+	repository := NewSQLiteRepository(store)
 	if _, err := repository.Enqueue(context.Background(), []*Task{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	_ = store.Close()
 
-	store, err = storage.NewStore(root)
+	store, err = openTestDB(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	repository = NewSQLiteRepository(store.DB())
+	repository = NewSQLiteRepository(store)
 	summary, err := repository.Summary(context.Background(), 20)
 	if err != nil {
 		t.Fatal(err)
@@ -268,13 +289,13 @@ func TestSQLiteRepositoryRejectsCorruptQueueInvariantAndMalformedRequest(t *test
 	}()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`DELETE FROM fetch_task_queue`); err != nil {
+	if _, err := store.Exec(`DELETE FROM fetch_task_queue`); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.RecoverOnStartup(context.Background(), time.Now()); !errors.Is(err, ErrTaskStateConflict) {
 		t.Fatalf("queue invariant error = %v", err)
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET request_json = ?`, "{}"); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET request_json = ?`, "{}"); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.RecoverOnStartup(context.Background(), time.Now()); err == nil {
@@ -323,7 +344,7 @@ func TestSQLiteRepositoryControlIdempotencyAndRecoveryOutcomes(t *testing.T) {
 				t.Fatalf("claim = %#v, err = %v", claimed, err)
 			}
 			if test.committed {
-				if _, err := store.DB().Exec(`UPDATE fetch_tasks SET execution_committed = 1 WHERE task_id = ?`, task.ID); err != nil {
+				if _, err := store.Exec(`UPDATE fetch_tasks SET execution_committed = 1 WHERE task_id = ?`, task.ID); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -474,7 +495,7 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 		t.Fatal("finalize invalid running state unexpectedly succeeded")
 	}
 
-	if _, err := store.DB().Exec(`INSERT INTO fetch_task_queue(task_id, enqueued_at) VALUES (?, ?)`, third.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := store.Exec(`INSERT INTO fetch_task_queue(task_id, enqueued_at) VALUES (?, ?)`, third.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.RecoverOnStartup(context.Background(), time.Now()); !errors.Is(err, ErrTaskStateConflict) {
@@ -568,13 +589,13 @@ func TestSQLiteRepositoryRejectsMalformedStoredTaskAndInvalidClaimState(t *testi
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET warnings_json = ? WHERE task_id = ?`, "{", task.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET warnings_json = ? WHERE task_id = ?`, "{", task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := repository.Get(context.Background(), task.ID); err == nil {
 		t.Fatal("malformed warnings were accepted")
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET warnings_json = '[]', status = 'paused' WHERE task_id = ?`, task.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET warnings_json = '[]', status = 'paused' WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.ClaimNext(context.Background(), time.Now()); !errors.Is(err, ErrTaskStateConflict) {
@@ -599,7 +620,7 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 		return task
 	}
 	failed := newTask("failed")
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET status = 'failed' WHERE task_id = ?`, failed.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'failed' WHERE task_id = ?`, failed.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.RequestPause(context.Background(), failed.ID); !errors.Is(err, ErrTaskStateConflict) {
@@ -609,7 +630,7 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 		t.Fatalf("failed cancel = %#v, err = %v", result, err)
 	}
 	interrupted := newTask("interrupted")
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET status = 'interrupted' WHERE task_id = ?`, interrupted.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'interrupted' WHERE task_id = ?`, interrupted.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.RequestPause(context.Background(), interrupted.ID); !errors.Is(err, ErrTaskStateConflict) {
@@ -620,11 +641,11 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 	}
 
 	succeeded := newTask("succeeded")
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET status = 'succeeded' WHERE task_id = ?`, succeeded.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'succeeded' WHERE task_id = ?`, succeeded.ID); err != nil {
 		t.Fatal(err)
 	}
 	canceled := newTask("canceled")
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET status = 'canceled' WHERE task_id = ?`, canceled.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'canceled' WHERE task_id = ?`, canceled.ID); err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range []*Task{succeeded, canceled} {
@@ -656,13 +677,13 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 
 	reserved := newTask("reserved")
 	conflict := newTask("conflict")
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET primary_work_id = 500 WHERE task_id = ?`, reserved.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET primary_work_id = 500 WHERE task_id = ?`, reserved.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`DELETE FROM fetch_task_queue WHERE task_id = ?`, conflict.ID); err != nil {
+	if _, err := store.Exec(`DELETE FROM fetch_task_queue WHERE task_id = ?`, conflict.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET status = 'failed', primary_work_id = 500 WHERE task_id = ?`, conflict.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'failed', primary_work_id = 500 WHERE task_id = ?`, conflict.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.RequestResume(context.Background(), conflict.ID); !errors.Is(err, ErrTaskAlreadyActive) {
@@ -680,7 +701,7 @@ func TestSQLiteRepositoryRejectsUnknownRequestVersionAndInvalidFinalization(t *t
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET request_version = 99 WHERE task_id = ?`, task.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET request_version = 99 WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.RecoverOnStartup(context.Background(), time.Now()); err == nil {
@@ -738,7 +759,7 @@ func TestSQLiteRepositoryNoopAndMissingControlPaths(t *testing.T) {
 	if _, err := repository.RequestPause(context.Background(), paused.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`INSERT INTO fetch_task_queue(task_id, enqueued_at) VALUES (?, ?)`, paused.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := store.Exec(`INSERT INTO fetch_task_queue(task_id, enqueued_at) VALUES (?, ?)`, paused.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.RequestResume(context.Background(), paused.ID); err == nil {
@@ -852,7 +873,7 @@ func TestSQLiteRepositoryRejectsInvalidStoredTimestampsAndSummaryRows(t *testing
 			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.DB().Exec(`UPDATE fetch_tasks SET `+column+` = ? WHERE task_id = ?`, "not-a-time", task.ID); err != nil {
+			if _, err := store.Exec(`UPDATE fetch_tasks SET `+column+` = ? WHERE task_id = ?`, "not-a-time", task.ID); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, err := repository.Get(context.Background(), task.ID); err == nil {
@@ -866,7 +887,7 @@ func TestSQLiteRepositoryRejectsInvalidStoredTimestampsAndSummaryRows(t *testing
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB().Exec(`UPDATE fetch_tasks SET request_json = ? WHERE task_id = ?`, "{}", task.ID); err != nil {
+	if _, err := store.Exec(`UPDATE fetch_tasks SET request_json = ? WHERE task_id = ?`, "{}", task.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.Summary(context.Background(), 20); err == nil {

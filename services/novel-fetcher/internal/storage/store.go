@@ -23,6 +23,7 @@ import (
 	storageassets "narou-viewer/services/novel-fetcher/internal/storage/assets"
 	"narou-viewer/services/novel-fetcher/internal/storage/migration"
 	"narou-viewer/services/novel-fetcher/internal/storage/pathutil"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type Store struct {
@@ -38,6 +39,8 @@ type ErrUnsupportedEpisodeSchema struct {
 	Observed  *int
 	Supported int
 }
+
+var ErrInvalidTaskEpisodeCheckpoint = errors.New("invalid task episode checkpoint")
 
 func (e ErrUnsupportedEpisodeSchema) Error() string {
 	observed := "missing"
@@ -67,6 +70,14 @@ const (
 
 type AssetFetcher interface {
 	FetchBytes(ctx context.Context, rawURL string, policy fetcher.FetchPolicy) (fetcher.BinaryResponse, error)
+}
+
+type TaskEpisodeCheckpoint struct {
+	Ref           taskstate.TaskRef
+	WorkID        int
+	EpisodeID     string
+	SortOrder     int
+	NextEpisodeID string
 }
 
 func NewStore(rootDir string) (*Store, error) {
@@ -596,6 +607,21 @@ func (s *Store) UpsertWorkToc(ctx context.Context, work model.Work, status strin
 }
 
 func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int) (stored model.StoredEpisode, err error) {
+	return s.saveEpisodeBody(ctx, work, storedWork, episode, sortOrder, nil)
+}
+
+func (s *Store) SaveEpisodeBodyForTask(ctx context.Context, ref taskstate.TaskRef, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int, nextEpisodeID string) (model.StoredEpisode, error) {
+	checkpoint := TaskEpisodeCheckpoint{
+		Ref:           ref,
+		WorkID:        storedWork.ID,
+		EpisodeID:     canonicalEpisodeID(episode, sortOrder),
+		SortOrder:     sortOrder,
+		NextEpisodeID: nextEpisodeID,
+	}
+	return s.saveEpisodeBody(ctx, work, storedWork, episode, sortOrder, &checkpoint)
+}
+
+func (s *Store) saveEpisodeBody(ctx context.Context, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int, checkpoint *TaskEpisodeCheckpoint) (stored model.StoredEpisode, err error) {
 	episodeID := canonicalEpisodeID(episode, sortOrder)
 	bodyRelPath := filepath.ToSlash(filepath.Join(storedWork.Directory, "episodes", sanitizePathSegment(episodeID)+".json"))
 	if err := s.guardCanonicalEpisodeBeforeSave(storedWork.ID, episodeID, bodyRelPath); err != nil {
@@ -736,12 +762,123 @@ func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork
 		}
 	}
 	staleFiles = excludeRelativePaths(staleFiles, assetStoragePaths(assets))
+	if checkpoint != nil {
+		completedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO fetch_task_episode_checkpoints (
+				task_id, work_id, episode_id, sort_order, content_hash, completed_attempt, completed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(task_id, work_id, episode_id) DO UPDATE SET
+				sort_order = excluded.sort_order,
+				content_hash = excluded.content_hash,
+				completed_attempt = excluded.completed_attempt,
+				completed_at = excluded.completed_at
+		`, checkpoint.Ref.TaskID, checkpoint.WorkID, checkpoint.EpisodeID, checkpoint.SortOrder, contentHash, checkpoint.Ref.Attempt, completedAt); execErr != nil {
+			err = execErr
+			return model.StoredEpisode{}, err
+		}
+		result, execErr := tx.ExecContext(ctx, `
+			UPDATE fetch_tasks
+			SET saved_episode_count = MAX(saved_episode_count, ?), current_step = MAX(current_step, ?), resume_episode_id = ?, updated_at = ?
+			WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+		`, checkpoint.SortOrder+1, checkpoint.SortOrder+1, checkpoint.NextEpisodeID, completedAt, checkpoint.Ref.TaskID, checkpoint.Ref.Attempt)
+		if execErr != nil {
+			err = execErr
+			return model.StoredEpisode{}, err
+		}
+		if err = requireTaskAttemptUpdate(result); err != nil {
+			return model.StoredEpisode{}, err
+		}
+	}
 
 	if err = tx.Commit(); err != nil {
 		return model.StoredEpisode{}, err
 	}
 	_ = s.removeRelativeFiles(staleFiles)
 	return s.findEpisodeRequired(storedWork.ID, episodeID)
+}
+
+func (s *Store) RecordTaskEpisodeCheckpoint(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string, sortOrder int, nextEpisodeID string) error {
+	episode, found, err := s.FindEpisode(workID, episodeID)
+	if err != nil {
+		return err
+	}
+	if !found || episode.BodyStatus != BodyStatusComplete {
+		return fmt.Errorf("%w: episode %s is not complete", ErrInvalidTaskEpisodeCheckpoint, episodeID)
+	}
+	valid, err := s.validateStoredEpisodeFile(episode)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return fmt.Errorf("%w: episode %s canonical body is invalid", ErrInvalidTaskEpisodeCheckpoint, episodeID)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO fetch_task_episode_checkpoints (
+			task_id, work_id, episode_id, sort_order, content_hash, completed_attempt, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, work_id, episode_id) DO UPDATE SET
+			sort_order = excluded.sort_order,
+			content_hash = excluded.content_hash,
+			completed_attempt = excluded.completed_attempt,
+			completed_at = excluded.completed_at
+	`, ref.TaskID, workID, episodeID, sortOrder, episode.ContentHash, ref.Attempt, now); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE fetch_tasks
+		SET saved_episode_count = MAX(saved_episode_count, ?), current_step = MAX(current_step, ?), resume_episode_id = ?, updated_at = ?
+		WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+	`, sortOrder+1, sortOrder+1, nextEpisodeID, now, ref.TaskID, ref.Attempt)
+	if err != nil {
+		return err
+	}
+	if err := requireTaskAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string) (bool, error) {
+	var checkpointHash string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.content_hash
+		FROM fetch_task_episode_checkpoints c
+		JOIN fetch_tasks t ON t.task_id = c.task_id
+		WHERE c.task_id = ? AND c.work_id = ? AND c.episode_id = ? AND c.completed_attempt <= ?
+	`, ref.TaskID, workID, episodeID, ref.Attempt).Scan(&checkpointHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	episode, found, err := s.FindEpisode(workID, episodeID)
+	if err != nil || !found || episode.BodyStatus != BodyStatusComplete || episode.ContentHash == "" || episode.ContentHash != checkpointHash {
+		return false, err
+	}
+	return s.validateStoredEpisodeFile(episode)
+}
+
+func (s *Store) validateStoredEpisodeFile(episode model.StoredEpisode) (bool, error) {
+	path := filepath.Join(s.rootDir, episode.BodyPath)
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := validateCanonicalEpisodeSchema(path, bytes); err != nil {
+		return false, err
+	}
+	return sha256Hex(bytes) == episode.ContentHash, nil
 }
 
 func validateUniqueEpisodeIDs(episodes []model.Episode) error {
@@ -936,6 +1073,34 @@ func (s *Store) UpdateWorkFetchStatus(ctx context.Context, workID int, status st
 		WHERE id = ?
 	`, status, message, failedEpisodeID, resumeEpisodeID, time.Now().UTC().Format(time.RFC3339Nano), workID)
 	return err
+}
+
+func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE works
+		SET fetch_status = ?, last_fetch_error = '', last_failed_episode_id = '', resume_episode_id = '', updated_at = ?
+		WHERE id = ?
+	`, FetchStatusComplete, now, workID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE fetch_tasks
+		SET execution_committed = 1, updated_at = ?
+		WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+	`, now, ref.TaskID, ref.Attempt)
+	if err != nil {
+		return err
+	}
+	if err := requireTaskAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RemoveWork(id int, withFiles bool) error {
@@ -1154,6 +1319,17 @@ func sanitizePathSegment(value string) string {
 func sha256Hex(bytes []byte) string {
 	sum := sha256.Sum256(bytes)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func requireTaskAttemptUpdate(result sql.Result) error {
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return taskstate.ErrStaleTaskAttempt
+	}
+	return nil
 }
 
 func formatTime(value time.Time) string {

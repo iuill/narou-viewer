@@ -246,7 +246,7 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if action == "pause" && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
-		a.runner.Cancel(taskID)
+		a.runner.Pause(taskID)
 	}
 	status := http.StatusOK
 	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {

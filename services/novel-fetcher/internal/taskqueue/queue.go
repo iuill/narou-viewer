@@ -16,13 +16,18 @@ type Queue struct {
 	repository taskstate.Repository
 	wake       chan struct{}
 
-	mu             sync.Mutex
-	queue          []*Task
-	current        *Task
-	recentComplete []*Task
-	recentFailed   []*Task
-	completedCount int
-	failedCount    int
+	mu                sync.Mutex
+	queue             []*Task
+	current           *Task
+	recentComplete    []*Task
+	recentFailed      []*Task
+	recentPaused      []*Task
+	recentInterrupted []*Task
+	completedCount    int
+	failedCount       int
+	canceledCount     int
+	pausedCount       int
+	interruptedCount  int
 }
 
 func NewQueue() *Queue { return &Queue{wake: make(chan struct{}, 1)} }
@@ -88,7 +93,11 @@ func (q *Queue) Summary() Summary {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return Summary{Current: Payload(q.current), Queued: Payloads(q.queue), RecentCompleted: Payloads(q.recentComplete), RecentFailed: Payloads(q.recentFailed), CompletedCount: q.completedCount, FailedCount: q.failedCount}
+	return Summary{
+		Current: Payload(q.current), Queued: Payloads(q.queue), Paused: Payloads(q.recentPaused), Interrupted: Payloads(q.recentInterrupted),
+		RecentCompleted: Payloads(q.recentComplete), RecentFailed: Payloads(q.recentFailed), CompletedCount: q.completedCount,
+		FailedCount: q.failedCount, CanceledCount: q.canceledCount, PausedCount: q.pausedCount, InterruptedCount: q.interruptedCount,
+	}
 }
 
 func (q *Queue) PopNext() *Task {
@@ -251,13 +260,7 @@ func (q *Queue) SetTaskFailureEpisode(taskID string, failedEpisodeID string, res
 func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
 	if q.repository != nil {
 		outcome := taskstate.Outcome{Status: StatusSucceeded, Error: err, ExecutionCommitted: done.ExecutionCommitted}
-		if errors.Is(err, context.Canceled) {
-			outcome.Status = StatusCanceled
-			outcome.Message = "Task cancelled"
-		}
-		if err != nil && outcome.Status != StatusCanceled {
-			outcome.Status = StatusFailed
-		}
+		setPersistentOutcomeFromError(&outcome, err)
 		if repoErr := q.repository.Finalize(context.Background(), taskstate.TaskRef{TaskID: done.ID, Attempt: done.AttemptCount}, outcome); repoErr != nil && logger != nil {
 			logger.Error("task finalization failed", "taskID", done.ID, "error", repoErr)
 		}
@@ -266,13 +269,21 @@ func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	now := time.Now()
+	setMemoryOutcomeFromError(done, err)
 	done.FinishedAt = &now
-	if errors.Is(err, context.Canceled) {
-		done.Status, done.Message = StatusCanceled, "Task cancelled"
-		q.failedCount++
-		q.recentFailed = appendRecent(q.recentFailed, done)
-	} else if err != nil {
-		done.Status, done.ErrorMessage = StatusFailed, err.Error()
+	if done.Status == StatusCanceled || done.Status == StatusInterrupted || done.Status == StatusPaused {
+		if done.Status == StatusCanceled {
+			q.canceledCount++
+			q.failedCount++
+			q.recentFailed = appendRecent(q.recentFailed, done)
+		} else if done.Status == StatusInterrupted {
+			q.interruptedCount++
+			q.recentInterrupted = appendRecent(q.recentInterrupted, done)
+		} else {
+			q.pausedCount++
+			q.recentPaused = appendRecent(q.recentPaused, done)
+		}
+	} else if done.Status == StatusFailed {
 		q.failedCount++
 		q.recentFailed = appendRecent(q.recentFailed, done)
 		if logger != nil {
@@ -287,6 +298,36 @@ func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
 		q.recentComplete = appendRecent(q.recentComplete, done)
 	}
 	q.current = nil
+}
+
+func setPersistentOutcomeFromError(outcome *taskstate.Outcome, err error) {
+	outcome.Status = StatusSucceeded
+	outcome.Message = "Task completed"
+	switch {
+	case errors.Is(err, taskstate.ErrTaskPauseRequested):
+		outcome.Status, outcome.Message = StatusPaused, "Task paused"
+	case errors.Is(err, taskstate.ErrTaskCancelRequested), errors.Is(err, context.Canceled):
+		outcome.Status, outcome.Message = StatusCanceled, "Task cancelled"
+	case errors.Is(err, taskstate.ErrRunnerShutdown):
+		outcome.Status, outcome.Message = StatusInterrupted, "Task interrupted during process shutdown"
+	case err != nil:
+		outcome.Status, outcome.Message = StatusFailed, err.Error()
+	}
+}
+
+func setMemoryOutcomeFromError(task *Task, err error) {
+	task.Status = StatusSucceeded
+	task.Message = "Task completed"
+	switch {
+	case errors.Is(err, taskstate.ErrTaskPauseRequested):
+		task.Status, task.Message = StatusPaused, "Task paused"
+	case errors.Is(err, taskstate.ErrTaskCancelRequested), errors.Is(err, context.Canceled):
+		task.Status, task.Message = StatusCanceled, "Task cancelled"
+	case errors.Is(err, taskstate.ErrRunnerShutdown):
+		task.Status, task.Message = StatusInterrupted, "Task interrupted during process shutdown"
+	case err != nil:
+		task.Status, task.ErrorMessage, task.Message = StatusFailed, err.Error(), err.Error()
+	}
 }
 
 func (q *Queue) IsCurrent(taskID string) bool {
@@ -312,6 +353,7 @@ func (q *Queue) CancelQueued(taskID string) bool {
 			queued.Status, queued.FinishedAt, queued.Message = StatusCanceled, &now, "Task cancelled"
 			q.queue = append(q.queue[:index], q.queue[index+1:]...)
 			q.failedCount++
+			q.canceledCount++
 			q.recentFailed = appendRecent(q.recentFailed, queued)
 			return true
 		}
@@ -321,7 +363,23 @@ func (q *Queue) CancelQueued(taskID string) bool {
 
 func (q *Queue) RequestPause(taskID string) (taskstate.ControlResult, error) {
 	if q.repository == nil {
-		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		for index, queued := range q.queue {
+			if queued.ID != taskID {
+				continue
+			}
+			now := time.Now()
+			queued.Status, queued.PausedAt, queued.FinishedAt, queued.Message = StatusPaused, &now, nil, "Task paused"
+			q.queue = append(q.queue[:index], q.queue[index+1:]...)
+			q.pausedCount++
+			q.recentPaused = appendRecent(q.recentPaused, queued)
+			return taskstate.ControlResult{Task: queued, Changed: true}, nil
+		}
+		if q.current != nil && q.current.ID == taskID {
+			return taskstate.ControlResult{Task: q.current, Changed: true}, nil
+		}
+		return taskstate.ControlResult{}, errors.New("task not found")
 	}
 	result, err := q.repository.RequestPause(context.Background(), taskID)
 	if err == nil && result.Changed {
@@ -332,7 +390,7 @@ func (q *Queue) RequestPause(taskID string) (taskstate.ControlResult, error) {
 
 func (q *Queue) RequestResume(taskID string) (taskstate.ControlResult, error) {
 	if q.repository == nil {
-		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+		return taskstate.ControlResult{}, errors.New("resume is not supported by the in-memory task queue")
 	}
 	result, err := q.repository.RequestResume(context.Background(), taskID)
 	if err == nil && result.Changed {
@@ -343,7 +401,17 @@ func (q *Queue) RequestResume(taskID string) (taskstate.ControlResult, error) {
 
 func (q *Queue) RequestCancel(taskID string) (taskstate.ControlResult, error) {
 	if q.repository == nil {
-		return taskstate.ControlResult{}, errors.New("persistent task queue is not configured")
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		if q.current != nil && q.current.ID == taskID {
+			return taskstate.ControlResult{Task: q.current, Changed: true}, nil
+		}
+		for _, queued := range q.queue {
+			if queued.ID == taskID {
+				return taskstate.ControlResult{Task: queued, Changed: true}, nil
+			}
+		}
+		return taskstate.ControlResult{}, errors.New("task not found")
 	}
 	result, err := q.repository.RequestCancel(context.Background(), taskID)
 	if err == nil && result.Changed {
@@ -357,6 +425,17 @@ func (q *Queue) GetTask(taskID string) (*Task, bool, error) {
 		return nil, false, errors.New("persistent task queue is not configured")
 	}
 	return q.repository.Get(context.Background(), taskID)
+}
+
+func (q *Queue) RequestedAction(ref taskstate.TaskRef) taskstate.RequestedAction {
+	if q.repository == nil {
+		return taskstate.RequestedActionNone
+	}
+	action, err := q.repository.ReadRequestedAction(context.Background(), ref)
+	if err != nil {
+		return taskstate.RequestedActionNone
+	}
+	return action
 }
 
 func appendRecent(tasks []*Task, entry *Task) []*Task {

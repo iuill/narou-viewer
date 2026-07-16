@@ -3,9 +3,21 @@ package taskstate
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
+)
+
+var (
+	// ErrTaskPauseRequested is the cancellation cause used when a running task
+	// should persist its checkpoint and become resumable.
+	ErrTaskPauseRequested = errors.New("task pause requested")
+	// ErrTaskCancelRequested is the cancellation cause used for an explicit
+	// user cancellation.
+	ErrTaskCancelRequested = errors.New("task cancel requested")
+	// ErrRunnerShutdown distinguishes process shutdown from user cancellation.
+	ErrRunnerShutdown = errors.New("novel-fetcher runner shutdown")
 )
 
 type Status string
