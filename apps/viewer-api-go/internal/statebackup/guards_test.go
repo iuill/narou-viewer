@@ -73,6 +73,44 @@ func TestBackupOptionAndDoctorGuards(t *testing.T) {
 	}
 }
 
+func TestBackupAndRestoreRejectPhysicalDataTreeContainmentThroughParentSymlink(t *testing.T) {
+	dataDir, _ := seedCleanBackupData(t)
+	recipient, identity := testScryptPair(t)
+	aliasRoot := t.TempDir()
+	worksDir := filepath.Join(dataDir, "novel-fetcher", "works")
+	alias := filepath.Join(aliasRoot, "works-alias")
+	if err := os.Symlink(worksDir, alias); err != nil {
+		t.Fatalf("symlink works alias: %v", err)
+	}
+	if _, err := Backup(context.Background(), BackupOptions{
+		DataDir: dataDir, OutputDir: filepath.Join(alias, "backups"), KeyReference: "local-test-key", Recipient: recipient,
+	}); err == nil || !strings.Contains(err.Error(), "separate from the data tree") {
+		t.Fatalf("backup should reject a parent-symlink alias into the data tree: %v", err)
+	}
+
+	backup, err := Backup(context.Background(), BackupOptions{
+		DataDir: dataDir, OutputDir: filepath.Join(t.TempDir(), "safe-backups"), KeyReference: "local-test-key", Recipient: recipient,
+		GenerationID: func() (string, error) { return "physical-path-test", nil },
+	})
+	if err != nil {
+		t.Fatalf("create safe backup: %v", err)
+	}
+	raw, err := os.ReadFile(backup.ArchivePath)
+	if err != nil {
+		t.Fatalf("read safe backup: %v", err)
+	}
+	insideArchive := filepath.Join(worksDir, "inside"+ArchiveSuffix)
+	if err := os.WriteFile(insideArchive, raw, 0o600); err != nil {
+		t.Fatalf("copy archive into data tree: %v", err)
+	}
+	aliasedArchive := filepath.Join(alias, filepath.Base(insideArchive))
+	if _, err := Restore(context.Background(), RestoreOptions{
+		DataDir: dataDir, ArchivePath: aliasedArchive, KeyReference: "local-test-key", Identities: []age.Identity{identity},
+	}); err == nil || !strings.Contains(err.Error(), "outside the data tree") {
+		t.Fatalf("restore should reject a parent-symlink alias into the data tree: %v", err)
+	}
+}
+
 func TestRestoreOptionArchiveAndWriterGuards(t *testing.T) {
 	_, identity := testScryptPair(t)
 	for _, options := range []RestoreOptions{

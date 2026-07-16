@@ -44,6 +44,15 @@ type restoreTransactionAction struct {
 	HasNew   bool   `json:"has_new"`
 }
 
+type RecoveryOutcome string
+
+const (
+	RecoveryNone             RecoveryOutcome = "none"
+	RecoveryStagingCleanup   RecoveryOutcome = "staging_cleanup"
+	RecoveryRolledBack       RecoveryOutcome = "rolled_back"
+	RecoveryCommittedCleanup RecoveryOutcome = "committed_cleanup"
+)
+
 func newRestoreTransaction(generationID string) restoreTransaction {
 	return restoreTransaction{
 		Version:           restoreTransactionVersion,
@@ -55,25 +64,25 @@ func newRestoreTransaction(generationID string) restoreTransaction {
 	}
 }
 
-func Recover(ctx context.Context, dataDir string) (bool, error) {
+func Recover(ctx context.Context, dataDir string) (RecoveryOutcome, error) {
 	dataDir = filepath.Clean(strings.TrimSpace(dataDir))
 	if dataDir == "." {
-		return false, errors.New("data directory is required")
+		return RecoveryNone, errors.New("data directory is required")
 	}
 	info, err := os.Lstat(dataDir)
 	if err != nil {
-		return false, err
+		return RecoveryNone, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return false, fmt.Errorf("restore recovery data path must be a non-symlink directory: %s", dataDir)
+		return RecoveryNone, fmt.Errorf("restore recovery data path must be a non-symlink directory: %s", dataDir)
 	}
 	locks, err := statebarrier.AcquireWriters(dataDir)
 	if err != nil {
-		return false, fmt.Errorf("restore recovery requires viewer-api and novel-fetcher to be stopped: %w", err)
+		return RecoveryNone, fmt.Errorf("restore recovery requires viewer-api and novel-fetcher to be stopped: %w", err)
 	}
 	defer locks.Close()
 	if err := ensureRestoreRoots(dataDir); err != nil {
-		return false, err
+		return RecoveryNone, err
 	}
 	return recoverRestoreTransactionLocked(ctx, dataDir)
 }
@@ -160,37 +169,43 @@ func commitRestoreTransaction(dataDir string, transaction *restoreTransaction) e
 	return cleanupRestoreTransaction(dataDir, transaction)
 }
 
-func recoverRestoreTransactionLocked(ctx context.Context, dataDir string) (bool, error) {
+func recoverRestoreTransactionLocked(ctx context.Context, dataDir string) (RecoveryOutcome, error) {
 	transaction, err := readRestoreTransaction(dataDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return RecoveryNone, nil
 	}
 	if err != nil {
-		return true, fmt.Errorf("read restore transaction journal: %w", err)
+		return RecoveryNone, fmt.Errorf("read restore transaction journal: %w", err)
 	}
+	outcome := RecoveryStagingCleanup
 	switch transaction.Phase {
-	case restorePhaseStaging, restorePhaseRolledBack, restorePhaseCommitting:
+	case restorePhaseStaging:
+	case restorePhaseRolledBack:
+		outcome = RecoveryRolledBack
+	case restorePhaseCommitting:
+		outcome = RecoveryCommittedCleanup
 		// No published target exists during staging. Rolled-back and committed
 		// transactions only need their durable temporary data cleaned up.
 	case restorePhasePublishing, restorePhaseVerifying, restorePhaseRollingBack:
+		outcome = RecoveryRolledBack
 		transaction.Phase = restorePhaseRollingBack
 		if err := writeRestoreTransaction(dataDir, &transaction); err != nil {
-			return true, err
+			return RecoveryNone, err
 		}
 		if err := rollbackRestoreTransaction(ctx, dataDir, &transaction); err != nil {
-			return true, fmt.Errorf("roll back interrupted restore transaction: %w", err)
+			return RecoveryNone, fmt.Errorf("roll back interrupted restore transaction: %w", err)
 		}
 		transaction.Phase = restorePhaseRolledBack
 		if err := writeRestoreTransaction(dataDir, &transaction); err != nil {
-			return true, err
+			return RecoveryNone, err
 		}
 	default:
-		return true, fmt.Errorf("restore transaction has unsupported phase %q", transaction.Phase)
+		return RecoveryNone, fmt.Errorf("restore transaction has unsupported phase %q", transaction.Phase)
 	}
 	if err := cleanupRestoreTransaction(dataDir, &transaction); err != nil {
-		return true, err
+		return RecoveryNone, err
 	}
-	return true, nil
+	return outcome, nil
 }
 
 func rollbackRestoreTransaction(ctx context.Context, dataDir string, transaction *restoreTransaction) error {

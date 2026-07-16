@@ -40,7 +40,11 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	if !referencePattern.MatchString(options.KeyReference) {
 		return BackupResult{}, errors.New("key reference must be a non-secret identifier using safe characters")
 	}
-	if pathWithin(dataDir, outputDir) || pathWithin(outputDir, dataDir) {
+	overlap, err := pathsOverlapPhysically(dataDir, outputDir)
+	if err != nil {
+		return BackupResult{}, fmt.Errorf("resolve backup output location: %w", err)
+	}
+	if overlap {
 		return BackupResult{}, errors.New("backup output directory must be separate from the data tree")
 	}
 	if options.Retention != nil {
@@ -324,4 +328,63 @@ func pathWithin(root string, path string) bool {
 		return false
 	}
 	return path == root || strings.HasPrefix(path, root+string(filepath.Separator))
+}
+
+func pathsOverlapPhysically(left string, right string) (bool, error) {
+	physicalLeft, err := physicalPath(left)
+	if err != nil {
+		return false, err
+	}
+	physicalRight, err := physicalPath(right)
+	if err != nil {
+		return false, err
+	}
+	return pathWithin(physicalLeft, physicalRight) || pathWithin(physicalRight, physicalLeft), nil
+}
+
+func pathWithinPhysical(root string, path string) (bool, error) {
+	physicalRoot, err := physicalPath(root)
+	if err != nil {
+		return false, err
+	}
+	physicalTarget, err := physicalPath(path)
+	if err != nil {
+		return false, err
+	}
+	return pathWithin(physicalRoot, physicalTarget), nil
+}
+
+// physicalPath resolves every existing path component and then appends any
+// not-yet-created suffix. This keeps containment checks meaningful for backup
+// output directories that do not exist yet without following a textual alias.
+func physicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", err
+	}
+	ancestor := absolute
+	suffix := []string{}
+	for {
+		_, statErr := os.Lstat(ancestor)
+		if statErr == nil {
+			break
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
+		}
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return "", statErr
+		}
+		suffix = append(suffix, filepath.Base(ancestor))
+		ancestor = parent
+	}
+	resolved, err := filepath.EvalSymlinks(ancestor)
+	if err != nil {
+		return "", err
+	}
+	for index := len(suffix) - 1; index >= 0; index-- {
+		resolved = filepath.Join(resolved, suffix[index])
+	}
+	return filepath.Clean(resolved), nil
 }

@@ -53,18 +53,38 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	if !referencePattern.MatchString(options.KeyReference) {
 		return RestoreResult{}, errors.New("key reference must be a non-secret identifier using safe characters")
 	}
-	if err := validateArchiveFile(archivePath, options.AllowInsecureArchive); err != nil {
+	physicalDataDir, err := physicalPath(dataDir)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("resolve restore archive location: %w", err)
+	}
+	physicalArchivePath, err := physicalPath(archivePath)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("resolve restore archive location: %w", err)
+	}
+	if pathWithin(physicalDataDir, physicalArchivePath) {
+		return RestoreResult{}, errors.New("restore archive must be stored outside the data tree")
+	}
+	archive, archiveInfo, err := openSourceFile(archivePath)
+	if err != nil {
 		return RestoreResult{}, err
 	}
-	preflight, err := scanEncryptedArchive(ctx, archivePath, options.Identities, nil)
+	defer archive.Close()
+	openedArchivePath, err := openedFilePhysicalPath(archive)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("resolve opened restore archive: %w", err)
+	}
+	if pathWithin(physicalDataDir, openedArchivePath) {
+		return RestoreResult{}, errors.New("opened restore archive must be stored outside the data tree")
+	}
+	if err := validateArchiveInfo(archiveInfo, options.AllowInsecureArchive); err != nil {
+		return RestoreResult{}, err
+	}
+	preflight, err := scanEncryptedArchiveFile(ctx, archive, options.Identities, nil)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("restore archive preflight: %w", err)
 	}
 	if err := validateManifest(preflight.manifest, preflight.files, options.KeyReference); err != nil {
 		return RestoreResult{}, fmt.Errorf("restore manifest preflight: %w", err)
-	}
-	if pathWithin(dataDir, archivePath) {
-		return RestoreResult{}, errors.New("restore archive must be stored outside the data tree")
 	}
 	locks, err := statebarrier.AcquireWriters(dataDir)
 	if err != nil {
@@ -104,14 +124,14 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	if err := prepareStagingLayout(stageRoot); err != nil {
 		return RestoreResult{}, err
 	}
-	staged, err := scanEncryptedArchive(ctx, archivePath, options.Identities, stagingDestination(stageRoot))
+	staged, err := scanEncryptedArchiveFile(ctx, archive, options.Identities, stagingDestination(stageRoot))
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("decrypt restore staging: %w", err)
 	}
 	if err := validateManifest(staged.manifest, staged.files, options.KeyReference); err != nil {
 		return RestoreResult{}, fmt.Errorf("staged restore manifest: %w", err)
 	}
-	if staged.manifest.GenerationID != preflight.manifest.GenerationID {
+	if !archiveScansEqual(preflight, staged) {
 		return RestoreResult{}, errors.New("archive manifest changed between preflight and staging")
 	}
 	if err := syncRestoreTree(stageRoot); err != nil {
@@ -121,7 +141,7 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("staged restore state doctor: %w", err)
 	}
-	if finding, blocked := firstDoctorError(stagedReport); blocked {
+	if finding, blocked := blockingDoctorFinding(stagedReport); blocked {
 		return RestoreResult{}, fmt.Errorf("staged restore state doctor rejected payload: %s %s %s", finding.SchemaID, finding.Path, finding.Kind)
 	}
 	if err := createEmptyPrivateDirectory(rollbackRoot); err != nil {
@@ -133,11 +153,15 @@ func Restore(ctx context.Context, options RestoreOptions) (result RestoreResult,
 	if err := publishRestoreTransaction(ctx, dataDir, &transaction); err != nil {
 		return RestoreResult{}, err
 	}
-	report, scanErr := statedoctor.Scan(ctx, dataDir)
+	report, scanErr := statedoctor.ScanWithOptions(ctx, dataDir, statedoctor.ScanOptions{ExcludedTopLevel: []string{
+		transaction.StageDirectory,
+		transaction.RollbackDirectory,
+		statebarrier.RestoreJournalRelativePath,
+	}})
 	if scanErr != nil {
 		return RestoreResult{}, fmt.Errorf("post-restore state doctor: %w", scanErr)
 	}
-	if finding, blocked := firstDoctorError(report); blocked {
+	if finding, blocked := blockingDoctorFinding(report); blocked {
 		return RestoreResult{}, fmt.Errorf("post-restore state doctor rejected restored generation: %s %s %s", finding.SchemaID, finding.Path, finding.Kind)
 	}
 	if err := commitRestoreTransaction(dataDir, &transaction); err != nil {
@@ -153,6 +177,13 @@ func scanEncryptedArchive(ctx context.Context, archivePath string, identities []
 		return scannedArchive{}, err
 	}
 	defer archive.Close()
+	return scanEncryptedArchiveFile(ctx, archive, identities, destination)
+}
+
+func scanEncryptedArchiveFile(ctx context.Context, archive *os.File, identities []age.Identity, destination payloadDestination) (scannedArchive, error) {
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return scannedArchive{}, fmt.Errorf("rewind encrypted archive: %w", err)
+	}
 	decrypted, err := age.Decrypt(archive, identities...)
 	if err != nil {
 		return scannedArchive{}, errors.New("age decryption failed")
@@ -262,6 +293,20 @@ func scanEncryptedArchive(ctx context.Context, archivePath string, identities []
 		return scannedArchive{}, errors.New("archive manifest is missing")
 	}
 	return result, nil
+}
+
+func archiveScansEqual(left scannedArchive, right scannedArchive) bool {
+	leftManifest, leftErr := json.Marshal(left.manifest)
+	rightManifest, rightErr := json.Marshal(right.manifest)
+	if leftErr != nil || rightErr != nil || string(leftManifest) != string(rightManifest) || len(left.files) != len(right.files) {
+		return false
+	}
+	for path, leftRecord := range left.files {
+		if rightRecord, ok := right.files[path]; !ok || rightRecord != leftRecord {
+			return false
+		}
+	}
+	return true
 }
 
 func validateManifest(manifest Manifest, payload map[string]FileRecord, expectedKeyReference string) error {
@@ -410,17 +455,33 @@ func (file *syncedFile) Close() error {
 }
 
 func validateArchiveFile(path string, allowInsecure bool) error {
-	info, err := os.Lstat(path)
+	archive, info, err := openSourceFile(path)
 	if err != nil {
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	defer archive.Close()
+	return validateArchiveInfo(info, allowInsecure)
+}
+
+func validateArchiveInfo(info os.FileInfo, allowInsecure bool) error {
+	if !info.Mode().IsRegular() {
 		return errors.New("archive must be a regular non-symlink file")
 	}
 	if !allowInsecure && info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("archive mode must be 0600 or stricter, got %04o", info.Mode().Perm())
 	}
 	return nil
+}
+
+func openedFilePhysicalPath(file *os.File) (string, error) {
+	path, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", file.Fd()))
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) || strings.HasSuffix(path, " (deleted)") {
+		return "", errors.New("opened archive descriptor does not reference a stable absolute path")
+	}
+	return filepath.Clean(path), nil
 }
 
 func safeArchiveEntryName(name string) bool {
@@ -496,13 +557,4 @@ func restoreTargets() []string {
 		"state/"+readertextcache.FileName+"-shm",
 	)
 	return targets
-}
-
-func firstDoctorError(report statedoctor.Report) (statedoctor.Finding, bool) {
-	for _, finding := range report.Findings {
-		if finding.Severity == statedoctor.SeverityError {
-			return finding, true
-		}
-	}
-	return statedoctor.Finding{}, false
 }

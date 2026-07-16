@@ -341,6 +341,9 @@ func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, err
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
 
+	if err := preflightJobDocumentsUnlocked(stateDir, novelID); err != nil {
+		return Job{}, false, err
+	}
 	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
 	if err != nil {
 		return Job{}, false, err

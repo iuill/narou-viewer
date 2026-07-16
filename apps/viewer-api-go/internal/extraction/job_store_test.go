@@ -487,6 +487,19 @@ created_at: 2026-01-01T00:00:00Z
 	if !errors.As(err, &guardError) || guardError.Result.Status != schemaguard.StatusFutureUnknown {
 		t.Fatalf("SaveJob error = %#v, want future GuardError", err)
 	}
+	err = schemaguardtest.AssertFileUntouched(t, path, func() error {
+		_, created, enqueueErr := SaveJobIfNoActive(stateDir, "novel-future", Job{JobID: "different-job", Status: "queued"})
+		if created {
+			t.Fatal("future job must block enqueue of a different job ID for the same novel")
+		}
+		return enqueueErr
+	})
+	if !errors.As(err, &guardError) || guardError.Result.Status != schemaguard.StatusFutureUnknown {
+		t.Fatalf("SaveJobIfNoActive error = %#v, want future GuardError", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(jobDir, "different-job.yaml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("blocked enqueue created a new job file: %v", statErr)
+	}
 }
 
 func TestSaveJobRebuildsUnsupportedDerivedIndex(t *testing.T) {

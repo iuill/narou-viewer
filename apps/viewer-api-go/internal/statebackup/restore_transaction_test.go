@@ -70,9 +70,9 @@ func TestInterruptedPublishRecoversPreviousGenerationOnNextProcess(t *testing.T)
 		t.Fatalf("expected old works generation before recovery: raw=%q err=%v", raw, err)
 	}
 
-	recovered, err := Recover(context.Background(), dataDir)
-	if err != nil || !recovered {
-		t.Fatalf("Recover: recovered=%v err=%v", recovered, err)
+	outcome, err := Recover(context.Background(), dataDir)
+	if err != nil || outcome != RecoveryRolledBack {
+		t.Fatalf("Recover: outcome=%v err=%v", outcome, err)
 	}
 	if raw, err := os.ReadFile(oldLibrary); err != nil || string(raw) != "old library" {
 		t.Fatalf("library did not roll back: raw=%q err=%v", raw, err)
@@ -85,8 +85,8 @@ func TestInterruptedPublishRecoversPreviousGenerationOnNextProcess(t *testing.T)
 			t.Fatalf("recovery left transaction path %s: %v", path, err)
 		}
 	}
-	if recovered, err := Recover(context.Background(), dataDir); err != nil || recovered {
-		t.Fatalf("second Recover: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), dataDir); err != nil || outcome != RecoveryNone {
+		t.Fatalf("second Recover: outcome=%v err=%v", outcome, err)
 	}
 }
 
@@ -135,8 +135,8 @@ func TestRecoverCleansInterruptedStagingTransaction(t *testing.T) {
 	if err := os.WriteFile(journalPartial, []byte("synthetic journal metadata"), 0o600); err != nil {
 		t.Fatalf("write journal partial: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), dataDir); err != nil || !recovered {
-		t.Fatalf("Recover staging: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), dataDir); err != nil || outcome != RecoveryStagingCleanup {
+		t.Fatalf("Recover staging: outcome=%v err=%v", outcome, err)
 	}
 	if _, err := os.Lstat(stageRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging recovery left stage root: %v", err)
@@ -196,8 +196,8 @@ func TestRecoverFailsClosedOnMalformedJournal(t *testing.T) {
 	if err := os.WriteFile(journal, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write malformed journal: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), dataDir); err == nil || !recovered {
-		t.Fatalf("Recover malformed journal: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), dataDir); err == nil || outcome != RecoveryNone {
+		t.Fatalf("Recover malformed journal: outcome=%v err=%v", outcome, err)
 	}
 	if _, err := os.Lstat(journal); err != nil {
 		t.Fatalf("malformed journal should remain for explicit inspection: %v", err)
@@ -242,8 +242,8 @@ func TestRecoverFinishesCommittedGenerationCleanup(t *testing.T) {
 	if err := writeRestoreTransaction(dataDir, &transaction); err != nil {
 		t.Fatalf("write committing transaction: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), dataDir); err != nil || !recovered {
-		t.Fatalf("Recover committing transaction: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), dataDir); err != nil || outcome != RecoveryCommittedCleanup {
+		t.Fatalf("Recover committing transaction: outcome=%v err=%v", outcome, err)
 	}
 	if raw, err := os.ReadFile(library); err != nil || string(raw) != "new library" {
 		t.Fatalf("committed library changed during cleanup: raw=%q err=%v", raw, err)
@@ -256,13 +256,13 @@ func TestRecoverFinishesCommittedGenerationCleanup(t *testing.T) {
 }
 
 func TestRecoverRejectsMissingBlankAndSymlinkDataRoots(t *testing.T) {
-	if recovered, err := Recover(context.Background(), " "); err == nil || recovered {
-		t.Fatalf("blank Recover: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), " "); err == nil || outcome != RecoveryNone {
+		t.Fatalf("blank Recover: outcome=%v err=%v", outcome, err)
 	}
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing")
-	if recovered, err := Recover(context.Background(), missing); !errors.Is(err, os.ErrNotExist) || recovered {
-		t.Fatalf("missing Recover: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), missing); !errors.Is(err, os.ErrNotExist) || outcome != RecoveryNone {
+		t.Fatalf("missing Recover: outcome=%v err=%v", outcome, err)
 	}
 	target := filepath.Join(root, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
@@ -272,8 +272,8 @@ func TestRecoverRejectsMissingBlankAndSymlinkDataRoots(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("symlink target: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), link); err == nil || recovered {
-		t.Fatalf("symlink Recover: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), link); err == nil || outcome != RecoveryNone {
+		t.Fatalf("symlink Recover: outcome=%v err=%v", outcome, err)
 	}
 }
 
@@ -480,8 +480,8 @@ func TestRestoreTransactionAdditionalFailureBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireViewerAPI: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), activeRoot); !errors.Is(err, statebarrier.ErrWriterActive) || recovered {
-		t.Fatalf("Recover with active writer: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), activeRoot); !errors.Is(err, statebarrier.ErrWriterActive) || outcome != RecoveryNone {
+		t.Fatalf("Recover with active writer: outcome=%v err=%v", outcome, err)
 	}
 	if err := active.Close(); err != nil {
 		t.Fatalf("close active writer: %v", err)
@@ -548,8 +548,8 @@ func TestRestoreTransactionAdditionalFailureBoundaries(t *testing.T) {
 	if err := writeRestoreTransaction(recoveryRoot, &brokenRecovery); err != nil {
 		t.Fatalf("write broken recovery journal: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), recoveryRoot); err == nil || !recovered {
-		t.Fatalf("Recover missing old target: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), recoveryRoot); err == nil || outcome != RecoveryNone {
+		t.Fatalf("Recover missing old target: outcome=%v err=%v", outcome, err)
 	}
 
 	cleanupRoot := t.TempDir()
@@ -563,8 +563,8 @@ func TestRestoreTransactionAdditionalFailureBoundaries(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(cleanupRoot, ".state-restore-transaction-blocked.partial"), 0o700); err != nil {
 		t.Fatalf("mkdir blocked cleanup partial: %v", err)
 	}
-	if recovered, err := Recover(context.Background(), cleanupRoot); err == nil || !recovered {
-		t.Fatalf("Recover cleanup failure: recovered=%v err=%v", recovered, err)
+	if outcome, err := Recover(context.Background(), cleanupRoot); err == nil || outcome != RecoveryNone {
+		t.Fatalf("Recover cleanup failure: outcome=%v err=%v", outcome, err)
 	}
 
 	blockedRoot := filepath.Join(t.TempDir(), "blocked")

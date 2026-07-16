@@ -62,6 +62,8 @@ backup 前に次を実施します。
 
 archive は一時 `.partial` を `0600` で作成し、age stream、gzip、tar をすべて close / sync できた後だけ最終名へ no-replace で公開します。失敗・cancel 時の partial は削除します。出力 directory は `0700`、archive は `0600` に固定します。
 
+`--output-dir` と `--archive` のdata tree内外判定は文字列pathではなく、symlinkを解決した物理pathで行います。未作成output directoryは最寄りの実在ancestorを解決してから残りのsuffixを評価し、親directory symlink経由で`data/`配下へ戻る配置も拒否します。
+
 ## manifest と consistency group
 
 暗号化 archive 内の `manifest.json` は次を記録します。
@@ -98,14 +100,14 @@ bun run state:backup restore \
 
 restore は次の順で処理します。
 
-1. archive を復号し、manifest、全 payload hash、group、schema compatibility を read-only preflight する。
+1. archive をsymlinkを辿らず一度だけopenし、検証した同一file descriptorへ固定したまま復号して、manifest、全 payload hash、group、schema compatibility を read-only preflight する。
 2. 両 writer lock を取得する。
-3. staging 開始前に `data/.state-restore-transaction.json` を `0600` で durable に記録し、`data/.restore-staging-<generation>` を `0700` で作って2回目の復号で payload を元 mode へ staging する。
+3. staging 開始前に `data/.state-restore-transaction.json` を `0600` で durable に記録し、`data/.restore-staging-<generation>` を `0700` で作って同じarchive descriptorの2回目の復号で payload を元 mode へ staging する。2回のmanifest全体と全file recordが一致しなければ公開前に拒否する。
 4. staging tree に state doctor を実行する。
 5. publish plan と進捗を journal へ同期し、`NF-CANONICAL`、`VA-CORE`、`VA-EXTRACTION`、`VA-HISTORY` の順に同一 filesystem 内で publish する。各 rename は source / destination directory を `fsync` してから次へ進む。
 6. archive に含まれない character profile、job index、reader search cache と、archive payloadにしない旧 `library.sqlite-shm` を削除対象としてpublishする。
-7. live tree に state doctor を実行し、error finding があれば publish 前 generation へ rollback する。
-8. commit phase を journal へ同期してから staging / rollback tree と journal を削除し、検証済み report を返す。
+7. live tree に state doctor を実行し、error findingに加えて`insecure_file_mode`、`sensitive_symlink`、`sensitive_file_outside_state`、frontier / active-job findingがあれば publish 前 generation へ rollback する。doctorから除外するのはdurable journalが指す正確なstaging / rollback top-level pathだけで、prefixが似た未管理directoryは除外しない。
+8. commit phase を journal へ同期してから staging / rollback tree と journal を削除し、cleanup後の通常scanと同じ検証済み report を返す。
 
 通常の error / `SIGINT` / `SIGTERM` では lock を保持したまま旧 generation へ rollback します。`SIGKILL`、process crash、host / filesystem 障害で途中終了した場合も、journal と staging / rollback tree は意図的に残します。次の `restore` は新しい publish より先に旧 generation へ自動 recovery します。新しい restore を開始せず復旧だけ行う場合は、両 writer を停止したまま次を実行します。
 
@@ -113,7 +115,7 @@ restore は次の順で処理します。
 bun run state:backup recover --data-dir ./data
 ```
 
-`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、commit cleanup 中断なら検証済み新 generation の cleanup を完了します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
+`recover` は journal の fixed target plan 以外を操作せず、publish / verify 中断なら旧 generation へ rollback、staging中断ならlive generationを変更せずcleanup、commit cleanup 中断なら検証済み新 generation を維持してcleanupを完了します。CLIはこの3結果を区別して表示します。journal が malformed、symlink、権限不正、または必要な live / rollback target が両方欠落している場合は推測で進めず fail-closed にします。
 
 restore staging は復号済み機微データです。tool は成功・失敗時に管理 path から削除しますが、一般 filesystem、COW、SSD の物理 secure erase は保証しません。backup は平文 staging を作らず、restore staging の寿命だけを短くしています。
 

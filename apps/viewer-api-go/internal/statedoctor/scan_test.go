@@ -601,3 +601,12 @@ func reportHasSchemaKind(report Report, schemaID string, kind string) bool {
 	}
 	return false
 }
+
+func reportHasPath(report Report, path string) bool {
+	for _, finding := range report.Findings {
+		if finding.Path == path {
+			return true
+		}
+	}
+	return false
+}

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"narou-viewer/apps/viewer-api-go/internal/statebackup"
 )
 
 func TestRunRejectsUnknownAndIncompleteCommands(t *testing.T) {
@@ -57,6 +59,20 @@ func TestRunRecoverReportsCleanDataTree(t *testing.T) {
 	}
 	if !bytes.Contains(stdout.Bytes(), []byte("no interrupted restore")) {
 		t.Fatalf("recover output=%q", stdout.String())
+	}
+}
+
+func TestRecoveryMessagesDistinguishRollbackFromCommittedCleanup(t *testing.T) {
+	rolledBack, err := recoveryMessage(statebackup.RecoveryRolledBack)
+	if err != nil || !bytes.Contains([]byte(rolledBack), []byte("rolled back")) {
+		t.Fatalf("rollback message=%q err=%v", rolledBack, err)
+	}
+	committed, err := recoveryMessage(statebackup.RecoveryCommittedCleanup)
+	if err != nil || !bytes.Contains([]byte(committed), []byte("preserved")) || bytes.Contains([]byte(committed), []byte("rolled back")) {
+		t.Fatalf("committed cleanup message=%q err=%v", committed, err)
+	}
+	if _, err := recoveryMessage(statebackup.RecoveryOutcome("unsupported")); err == nil {
+		t.Fatal("unsupported recovery outcome should fail")
 	}
 }
 

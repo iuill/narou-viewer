@@ -121,6 +121,39 @@ func TestBackupRestoreEncryptedColdGeneration(t *testing.T) {
 	}
 	if report, err := statedoctor.Scan(context.Background(), dataDir); err != nil || report.Summary.Errors != 0 {
 		t.Fatalf("post-restore doctor: summary=%+v err=%v", report.Summary, err)
+	} else {
+		returnedJSON, _ := json.Marshal(restored.Report)
+		cleanJSON, _ := json.Marshal(report)
+		if !bytes.Equal(returnedJSON, cleanJSON) {
+			t.Fatalf("returned doctor report differs from cleanup-state scan\nreturned=%s\nclean=%s", returnedJSON, cleanJSON)
+		}
+	}
+}
+
+func TestRestoreRejectsInsecureSensitiveFileMode(t *testing.T) {
+	sourceData, _ := seedCleanBackupData(t)
+	sourcePath := filepath.Join(sourceData, "state", "ai_usage.sqlite")
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("stat AI usage source: %v", err)
+	}
+	manifest := validEmptyManifest("insecure-mode-test")
+	for index := range manifest.Schemas {
+		if manifest.Schemas[index].SchemaID == "VA-AI-USAGE" {
+			manifest.Schemas[index] = SchemaRecord{SchemaID: "VA-AI-USAGE", Path: "state/ai_usage.sqlite", Observed: "1", Supported: "1", Status: "schema_current", Group: GroupVAHistory}
+		}
+	}
+	recipient, identity := testScryptPair(t)
+	archivePath := filepath.Join(t.TempDir(), "insecure-mode"+ArchiveSuffix)
+	if err := writeEncryptedArchive(context.Background(), archivePath, recipient, []sourceFile{{
+		absolute: sourcePath,
+		record:   FileRecord{Path: "state/ai_usage.sqlite", Group: GroupVAHistory, Size: info.Size(), Mode: 0o644},
+	}}, &manifest, time.Now().UTC()); err != nil {
+		t.Fatalf("write insecure-mode archive: %v", err)
+	}
+	targetData, _ := seedCleanBackupData(t)
+	if _, err := Restore(context.Background(), RestoreOptions{DataDir: targetData, ArchivePath: archivePath, KeyReference: "local-test-key", Identities: []age.Identity{identity}}); err == nil || !strings.Contains(err.Error(), "insecure_file_mode") {
+		t.Fatalf("restore should reject insecure sensitive file mode: %v", err)
 	}
 }
 

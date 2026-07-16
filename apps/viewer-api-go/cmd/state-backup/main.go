@@ -63,16 +63,31 @@ func runRecover(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	if flags.NArg() != 0 {
 		return errors.New("recover does not accept positional arguments")
 	}
-	recovered, err := statebackup.Recover(ctx, *dataDir)
+	outcome, err := statebackup.Recover(ctx, *dataDir)
 	if err != nil {
 		return err
 	}
-	if recovered {
-		fmt.Fprintln(stdout, "interrupted restore rolled back and temporary data removed")
-	} else {
-		fmt.Fprintln(stdout, "no interrupted restore transaction found")
+	message, err := recoveryMessage(outcome)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintln(stdout, message)
 	return nil
+}
+
+func recoveryMessage(outcome statebackup.RecoveryOutcome) (string, error) {
+	switch outcome {
+	case statebackup.RecoveryNone:
+		return "no interrupted restore transaction found", nil
+	case statebackup.RecoveryStagingCleanup:
+		return "interrupted restore staging removed; live generation was unchanged", nil
+	case statebackup.RecoveryRolledBack:
+		return "interrupted restore rolled back to the previous generation and temporary data removed", nil
+	case statebackup.RecoveryCommittedCleanup:
+		return "committed restore generation preserved and temporary data removed", nil
+	default:
+		return "", fmt.Errorf("unsupported restore recovery outcome: %s", outcome)
+	}
 }
 
 func runBackup(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -211,21 +212,46 @@ func writeOversizedHeaderArchive(t *testing.T, path string, recipient age.Recipi
 	}
 }
 
-func TestRestoreDetectsArchiveSwapAndExistingRollbackGeneration(t *testing.T) {
+func TestRestorePinsOpenedArchiveAcrossSameGenerationPathSwap(t *testing.T) {
+	recipient, identity := testScryptPair(t)
+	sourceData, _ := seedCleanBackupData(t)
+	readingPath := filepath.Join(sourceData, "state", "reading_state.yaml")
+	originalReading, err := os.ReadFile(readingPath)
+	if err != nil {
+		t.Fatalf("read first-generation state: %v", err)
+	}
+	first, err := Backup(context.Background(), BackupOptions{
+		DataDir: sourceData, OutputDir: filepath.Join(t.TempDir(), "first"), KeyReference: "local-test-key", Recipient: recipient,
+		GenerationID: func() (string, error) { return "shared-generation", nil },
+	})
+	if err != nil {
+		t.Fatalf("backup first generation: %v", err)
+	}
+	replacementReading := append(append([]byte{}, originalReading...), []byte("\n# replacement payload\n")...)
+	if err := os.WriteFile(readingPath, replacementReading, 0o600); err != nil {
+		t.Fatalf("mutate replacement source: %v", err)
+	}
+	second, err := Backup(context.Background(), BackupOptions{
+		DataDir: sourceData, OutputDir: filepath.Join(t.TempDir(), "second"), KeyReference: "local-test-key", Recipient: recipient,
+		GenerationID: func() (string, error) { return "shared-generation", nil },
+	})
+	if err != nil {
+		t.Fatalf("backup replacement generation: %v", err)
+	}
+	swapping := &swapAfterUnwrapIdentity{Identity: identity, target: first.ArchivePath, replacement: second.ArchivePath}
+	targetData, _ := seedCleanBackupData(t)
+	if _, err := Restore(context.Background(), RestoreOptions{DataDir: targetData, ArchivePath: first.ArchivePath, KeyReference: "local-test-key", Identities: []age.Identity{swapping}}); err != nil {
+		t.Fatalf("restore pinned archive: %v", err)
+	}
+	if restored, err := os.ReadFile(filepath.Join(targetData, "state", "reading_state.yaml")); err != nil || !bytes.Equal(restored, originalReading) {
+		t.Fatalf("restore followed swapped path instead of pinned descriptor: err=%v", err)
+	}
+}
+
+func TestRestoreRejectsExistingRollbackGeneration(t *testing.T) {
 	recipient, identity := testScryptPair(t)
 	root := t.TempDir()
-	archive := filepath.Join(root, "archive"+ArchiveSuffix)
-	replacement := filepath.Join(root, "replacement"+ArchiveSuffix)
 	manifestA, _ := json.Marshal(validEmptyManifest("generation-a"))
-	manifestB, _ := json.Marshal(validEmptyManifest("generation-b"))
-	writeTestEncryptedArchive(t, archive, recipient, []testArchiveEntry{{name: ManifestName, raw: manifestA}})
-	writeTestEncryptedArchive(t, replacement, recipient, []testArchiveEntry{{name: ManifestName, raw: manifestB}})
-	swapping := &swapAfterUnwrapIdentity{Identity: identity, target: archive, replacement: replacement}
-	dataDir := filepath.Join(t.TempDir(), "data")
-	if _, err := Restore(context.Background(), RestoreOptions{DataDir: dataDir, ArchivePath: archive, KeyReference: "local-test-key", Identities: []age.Identity{swapping}}); err == nil {
-		t.Fatal("archive generation swap should fail")
-	}
-
 	stableArchive := filepath.Join(root, "stable"+ArchiveSuffix)
 	writeTestEncryptedArchive(t, stableArchive, recipient, []testArchiveEntry{{name: ManifestName, raw: manifestA}})
 	stableData := filepath.Join(t.TempDir(), "data")
@@ -358,6 +384,165 @@ func TestPayloadSelectionRejectsInvalidRootsAndExactStateFiles(t *testing.T) {
 	if err := validateManifest(validEmptyManifest("count-mismatch"), map[string]FileRecord{"state/reading_state.yaml": {}}, "local-test-key"); err == nil {
 		t.Fatal("payload count mismatch should fail")
 	}
+}
+
+func TestArchiveScanIdentityAndPhysicalPathHelperBoundaries(t *testing.T) {
+	manifest := validEmptyManifest("identity-test")
+	base := scannedArchive{manifest: manifest, files: map[string]FileRecord{
+		"state/reading_state.yaml": {Path: "state/reading_state.yaml", Group: GroupVACore, Size: 3, Mode: 0o600, SHA256: "sha256:a"},
+	}}
+	if !archiveScansEqual(base, base) {
+		t.Fatal("identical archive scans should match")
+	}
+	changedManifest := base
+	changedManifest.manifest.GenerationID = "other-generation"
+	if archiveScansEqual(base, changedManifest) {
+		t.Fatal("different manifests should not match")
+	}
+	if archiveScansEqual(base, scannedArchive{manifest: manifest, files: map[string]FileRecord{}}) {
+		t.Fatal("different file counts should not match")
+	}
+	changedRecord := scannedArchive{manifest: manifest, files: map[string]FileRecord{
+		"state/reading_state.yaml": {Path: "state/reading_state.yaml", Group: GroupVACore, Size: 4, Mode: 0o600, SHA256: "sha256:b"},
+	}}
+	if archiveScansEqual(base, changedRecord) {
+		t.Fatal("different file records should not match")
+	}
+
+	root := t.TempDir()
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("fixture"), 0o600); err != nil {
+		t.Fatalf("write physical path fixture: %v", err)
+	}
+	if _, err := physicalPath(filepath.Join(file, "child")); err == nil {
+		t.Fatal("physicalPath should reject a non-directory ancestor")
+	}
+	if _, err := pathsOverlapPhysically(filepath.Join(file, "child"), root); err == nil {
+		t.Fatal("pathsOverlapPhysically should propagate left resolution errors")
+	}
+	if _, err := pathsOverlapPhysically(root, filepath.Join(file, "child")); err == nil {
+		t.Fatal("pathsOverlapPhysically should propagate right resolution errors")
+	}
+	if _, err := pathWithinPhysical(filepath.Join(file, "child"), root); err == nil {
+		t.Fatal("pathWithinPhysical should propagate root resolution errors")
+	}
+	if _, err := pathWithinPhysical(root, filepath.Join(file, "child")); err == nil {
+		t.Fatal("pathWithinPhysical should propagate target resolution errors")
+	}
+	closed, err := os.Open(file)
+	if err != nil {
+		t.Fatalf("open closed archive fixture: %v", err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close archive fixture: %v", err)
+	}
+	if _, err := scanEncryptedArchiveFile(context.Background(), closed, nil, nil); err == nil {
+		t.Fatal("scanEncryptedArchiveFile should reject an unseekable closed descriptor")
+	}
+	directoryInfo, err := os.Stat(root)
+	if err != nil {
+		t.Fatalf("stat directory fixture: %v", err)
+	}
+	if err := validateArchiveInfo(directoryInfo, true); err == nil {
+		t.Fatal("validateArchiveInfo should reject a directory")
+	}
+	if err := os.Chmod(file, 0o644); err != nil {
+		t.Fatalf("chmod archive fixture: %v", err)
+	}
+	fileInfo, err := os.Stat(file)
+	if err != nil {
+		t.Fatalf("stat archive fixture: %v", err)
+	}
+	if err := validateArchiveInfo(fileInfo, false); err == nil {
+		t.Fatal("validateArchiveInfo should reject an insecure mode")
+	}
+	if err := validateArchiveInfo(fileInfo, true); err != nil {
+		t.Fatalf("validateArchiveInfo should allow an explicitly accepted mode: %v", err)
+	}
+	if err := validateArchiveFile(filepath.Join(root, "missing"), false); err == nil {
+		t.Fatal("validateArchiveFile should report a missing archive")
+	}
+	if err := os.Chmod(file, 0o600); err != nil {
+		t.Fatalf("restore private archive mode: %v", err)
+	}
+	if err := validateArchiveFile(file, false); err != nil {
+		t.Fatalf("validateArchiveFile should accept a private regular file: %v", err)
+	}
+	loop := filepath.Join(root, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatalf("create symlink loop: %v", err)
+	}
+	if _, err := physicalPath(loop); err == nil {
+		t.Fatal("physicalPath should reject a symlink loop")
+	}
+}
+
+func TestBackupAndRestorePropagatePhysicalAndTransactionPreflightFailures(t *testing.T) {
+	recipient, identity := testScryptPair(t)
+	fileRoot := filepath.Join(t.TempDir(), "file-root")
+	if err := os.WriteFile(fileRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write file root: %v", err)
+	}
+	if _, err := Backup(context.Background(), BackupOptions{
+		DataDir: filepath.Join(fileRoot, "data"), OutputDir: t.TempDir(), KeyReference: "local-test-key", Recipient: recipient,
+	}); err == nil || !strings.Contains(err.Error(), "resolve backup output location") {
+		t.Fatalf("Backup should report physical path resolution failure: %v", err)
+	}
+
+	sourceData, _ := seedCleanBackupData(t)
+	backup, err := Backup(context.Background(), BackupOptions{
+		DataDir: sourceData, OutputDir: filepath.Join(t.TempDir(), "backups"), KeyReference: "local-test-key", Recipient: recipient,
+		GenerationID: func() (string, error) { return "preflight-failure-test", nil },
+	})
+	if err != nil {
+		t.Fatalf("create restore preflight fixture: %v", err)
+	}
+	baseOptions := RestoreOptions{DataDir: filepath.Join(t.TempDir(), "data"), ArchivePath: backup.ArchivePath, KeyReference: "local-test-key", Identities: []age.Identity{identity}}
+	physicalFailure := baseOptions
+	physicalFailure.DataDir = filepath.Join(fileRoot, "data")
+	if _, err := Restore(context.Background(), physicalFailure); err == nil || !strings.Contains(err.Error(), "resolve restore archive location") {
+		t.Fatalf("Restore should report physical path resolution failure: %v", err)
+	}
+	missingArchive := baseOptions
+	missingArchive.ArchivePath = filepath.Join(t.TempDir(), "missing"+ArchiveSuffix)
+	if _, err := Restore(context.Background(), missingArchive); err == nil {
+		t.Fatal("Restore should report a missing archive after physical containment validation")
+	}
+	if err := os.MkdirAll(baseOptions.DataDir, 0o700); err != nil {
+		t.Fatalf("mkdir restore target: %v", err)
+	}
+	if err := os.WriteFile(restoreJournalPath(baseOptions.DataDir), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write malformed restore journal: %v", err)
+	}
+	if _, err := Restore(context.Background(), baseOptions); err == nil || !strings.Contains(err.Error(), "recover interrupted restore transaction") {
+		t.Fatalf("Restore should propagate transaction recovery failure: %v", err)
+	}
+	if _, err := Backup(context.Background(), BackupOptions{
+		DataDir: baseOptions.DataDir, OutputDir: filepath.Join(t.TempDir(), "blocked-backups"), KeyReference: "local-test-key", Recipient: recipient,
+	}); err == nil {
+		t.Fatal("Backup should reject a data tree with a restore transaction journal")
+	}
+	if err := os.Remove(restoreJournalPath(baseOptions.DataDir)); err != nil {
+		t.Fatalf("remove malformed restore journal: %v", err)
+	}
+	failingIdentity := &failAfterFirstUnwrapIdentity{Identity: identity}
+	baseOptions.Identities = []age.Identity{failingIdentity}
+	if _, err := Restore(context.Background(), baseOptions); err == nil || !strings.Contains(err.Error(), "decrypt restore staging") {
+		t.Fatalf("Restore should stop when the pinned archive cannot be decrypted a second time: %v", err)
+	}
+}
+
+type failAfterFirstUnwrapIdentity struct {
+	age.Identity
+	calls int
+}
+
+func (identity *failAfterFirstUnwrapIdentity) Unwrap(stanzas []*age.Stanza) ([]byte, error) {
+	identity.calls++
+	if identity.calls > 1 {
+		return nil, errors.New("synthetic second unwrap failure")
+	}
+	return identity.Identity.Unwrap(stanzas)
 }
 
 func TestBackupPropagatesCredentialInspectionAndArchiveCreationFailures(t *testing.T) {
