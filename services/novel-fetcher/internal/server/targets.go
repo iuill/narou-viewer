@@ -1,25 +1,25 @@
 package server
 
 import (
-	"net/url"
-	"regexp"
 	"strings"
 
-	"narou-viewer/services/novel-fetcher/internal/model"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
-var (
-	downloadTargetNcodePattern       = regexp.MustCompile(`(?i)n\d+[a-z]+`)
-	downloadTargetKakuyomuPathRegexp = regexp.MustCompile(`^/works/(\d+)(?:/.*)?$`)
-)
-
-func normalizeStrings(values []string) []string {
+func normalizeDownloadTargets(values []string) []string {
 	normalized := []string{}
+	seen := map[string]struct{}{}
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			normalized = append(normalized, trimmed)
+		if trimmed == "" {
+			continue
 		}
+		key := normalizeDownloadTargetKey(trimmed)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, trimmed)
 	}
 	return normalized
 }
@@ -70,39 +70,7 @@ func (a *App) existingDownloadNovelIDsByTarget(targets []string) (map[string][]i
 }
 
 func normalizeDownloadTargetKey(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return ""
-	}
-
-	if parsed, err := url.Parse(trimmed); err == nil && parsed.Host != "" {
-		host := strings.ToLower(parsed.Host)
-		if host == "ncode.syosetu.com" {
-			if match := downloadTargetNcodePattern.FindString(parsed.Path); match != "" {
-				return downloadTargetSiteKey(string(model.SiteSyosetu), strings.ToLower(match))
-			}
-		}
-		if host == "kakuyomu.jp" {
-			if match := downloadTargetKakuyomuPathRegexp.FindStringSubmatch(parsed.Path); len(match) >= 2 {
-				return downloadTargetSiteKey(string(model.SiteKakuyomu), match[1])
-			}
-		}
-		parsed.Scheme = "https"
-		parsed.Host = host
-		parsed.Path = strings.TrimRight(parsed.Path, "/")
-		parsed.RawQuery = ""
-		parsed.Fragment = ""
-		return "url:" + strings.ToLower(parsed.String())
-	}
-
-	if match := downloadTargetNcodePattern.FindString(trimmed); match != "" {
-		return downloadTargetSiteKey(string(model.SiteSyosetu), strings.ToLower(match))
-	}
-	return "url:" + strings.ToLower(strings.TrimRight(trimmed, "/"))
-}
-
-func downloadTargetSiteKey(site string, siteWorkID string) string {
-	return "site:" + site + ":" + strings.ToLower(siteWorkID)
+	return taskstate.CanonicalTarget(value)
 }
 
 func parseDownloadTargetSiteKey(key string) (string, string, bool) {

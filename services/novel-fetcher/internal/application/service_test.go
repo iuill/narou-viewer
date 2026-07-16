@@ -207,8 +207,9 @@ func (r *recordingReporter) SetTaskTarget(_ string, target string) {
 	r.targets = append(r.targets, target)
 }
 
-func (r *recordingReporter) AddTaskNovelID(_ string, novelID int) {
+func (r *recordingReporter) AddTaskNovelID(_ string, novelID int) error {
 	r.novelIDs = append(r.novelIDs, novelID)
+	return nil
 }
 
 func (r *recordingReporter) SetTaskSavedEpisodeCount(_ string, count int) {

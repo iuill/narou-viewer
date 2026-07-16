@@ -55,6 +55,11 @@ type countingFetcher struct {
 
 type cancelingAssetFetcher struct{}
 
+type blockingAssetFetcher struct {
+	entered chan struct{}
+	once    sync.Once
+}
+
 func (f *blockingTocFetcher) FetchToc(ctx context.Context, target string, report sites.ProgressReporter) (model.Work, error) {
 	f.enterOnce.Do(func() {
 		close(f.entered)
@@ -188,6 +193,12 @@ func firstNonEmpty(values ...string) string {
 
 func (f cancelingAssetFetcher) FetchBytes(_ context.Context, _ string, _ fetcher.FetchPolicy) (fetcher.BinaryResponse, error) {
 	return fetcher.BinaryResponse{}, context.Canceled
+}
+
+func (f *blockingAssetFetcher) FetchBytes(ctx context.Context, _ string, _ fetcher.FetchPolicy) (fetcher.BinaryResponse, error) {
+	f.once.Do(func() { close(f.entered) })
+	<-ctx.Done()
+	return fetcher.BinaryResponse{}, ctx.Err()
 }
 
 func TestReadEndpointsReturnStoredWorkAndEpisodes(t *testing.T) {
@@ -546,7 +557,7 @@ func TestMutationEndpointsValidateBodiesAndQueueTasks(t *testing.T) {
 	}
 }
 
-func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
+func TestDownloadEquivalentTargetsAreDeduplicatedBeforeFetch(t *testing.T) {
 	store, stored := newTestStoreWithWork(t)
 	fetcher := &blockingTocFetcher{
 		entered: make(chan struct{}),
@@ -582,6 +593,13 @@ func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
 	if download.Code != http.StatusAccepted {
 		t.Fatalf("download status = %d: %s", download.Code, download.Body.String())
 	}
+	downloadData := decodeObject(t, download)["data"].(map[string]any)
+	if targets := downloadData["targets"].([]any); len(targets) != 1 {
+		t.Fatalf("download targets = %#v, want one canonical work request", targets)
+	}
+	if taskIDs := downloadData["task_ids"].([]any); len(taskIDs) != 1 {
+		t.Fatalf("download task_ids = %#v, want one task", taskIDs)
+	}
 
 	select {
 	case <-fetcher.entered:
@@ -600,12 +618,8 @@ func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
 		t.Fatalf("download task novel_ids = %#v, want %s", novelIDs, storedID(stored.ID))
 	}
 	queued := summaryData["queued"].([]any)
-	if len(queued) != 1 {
-		t.Fatalf("queued tasks = %#v, want one queued task", queued)
-	}
-	queuedNovelIDs := queued[0].(map[string]any)["novel_ids"].([]any)
-	if !containsStringValue(queuedNovelIDs, storedID(stored.ID)) {
-		t.Fatalf("queued download task novel_ids = %#v, want %s", queuedNovelIDs, storedID(stored.ID))
+	if len(queued) != 0 {
+		t.Fatalf("queued tasks = %#v, want equivalent target deduplication", queued)
 	}
 
 	releaseOnce.Do(func() {
@@ -800,6 +814,20 @@ func TestNewRecordsTaskStateInitializationError(t *testing.T) {
 	}
 }
 
+func TestTaskStateReadEndpointsSurfaceStorageErrors(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	app := New(Options{Store: store, Logger: slog.Default()})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v2/system/queue", "/api/v2/tasks/summary"} {
+		response := performRequest(app, http.MethodGet, path, "")
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("%s status = %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestRunningTaskControlAcknowledgesCancellationRequest(t *testing.T) {
 	store, _ := newTestStoreWithWork(t)
 	fetcher := &blockingTocFetcher{
@@ -859,6 +887,57 @@ func TestRunningTaskCancelEndpointAcknowledgesCancellationRequest(t *testing.T) 
 	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
 	if canceled.Code != http.StatusAccepted {
 		t.Fatalf("running cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	waitForIdleApp(t, app)
+}
+
+func TestRunningTaskCancelInterruptsAssetHTTPBeforeDurableControlWrite(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetFetcher := &blockingAssetFetcher{entered: make(chan struct{})}
+	store.SetAssetFetcher(assetFetcher, fetcher.FetchPolicy{})
+	app := New(Options{
+		Config: config.Config{},
+		Store:  store,
+		Fetcher: staticFetcher{work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n7777ab", Title: "asset制御作品", Author: "作者",
+			Episodes: []model.Episode{{
+				Index: "1", Href: "/n7777ab/1/", Title: "第一話", FetchedAt: time.Now(),
+				Element: model.EpisodeElement{DataType: "html", Body: `<p><img src="https://example.com/image.png"></p>`},
+			}},
+		}},
+		Logger: slog.Default(),
+	})
+	startApp(t, app)
+	t.Cleanup(func() {
+		app.Shutdown(context.Background())
+		_ = store.Close()
+	})
+
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://ncode.syosetu.com/n7777ab/"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	taskID := decodeObject(t, created)["data"].(map[string]any)["task_ids"].([]any)[0].(string)
+	select {
+	case <-assetFetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("asset fetch did not start")
+	}
+
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	}()
+	select {
+	case canceled := <-response:
+		if canceled.Code != http.StatusOK && canceled.Code != http.StatusAccepted {
+			t.Fatalf("cancel status = %d: %s", canceled.Code, canceled.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel waited for the blocked asset HTTP request")
 	}
 	waitForIdleApp(t, app)
 }

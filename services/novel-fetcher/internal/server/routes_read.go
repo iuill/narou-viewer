@@ -27,7 +27,14 @@ func (a *App) handleVersion(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
-	counts := a.queue.StatusCounts()
+	counts, err := a.queue.StatusCountsWithError()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("failed to read task queue state", "error", err)
+		}
+		writeError(writer, http.StatusInternalServerError, "failed to read task queue state")
+		return
+	}
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
 		"total":       counts.Total,
@@ -41,7 +48,14 @@ func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) handleTasksSummary(writer http.ResponseWriter, _ *http.Request) {
-	summary := a.queue.Summary()
+	summary, err := a.queue.SummaryWithError()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("failed to read task summary state", "error", err)
+		}
+		writeError(writer, http.StatusInternalServerError, "failed to read task summary state")
+		return
+	}
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
 		"current":           summary.Current,

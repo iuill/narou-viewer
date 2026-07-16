@@ -69,15 +69,25 @@ func (r *SQLiteRepository) Enqueue(ctx context.Context, tasks []*Task) (EnqueueR
 		if !errors.Is(err, sql.ErrNoRows) {
 			return EnqueueResult{}, err
 		}
+		primaryWorkID := task.PrimaryWorkID
+		if primaryWorkID == 0 && len(task.NovelIDs) == 1 {
+			primaryWorkID = task.NovelIDs[0]
+		}
+		if primaryWorkID > 0 {
+			var reservedBy string
+			err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, primaryWorkID).Scan(&reservedBy)
+			if err == nil {
+				return EnqueueResult{}, fmt.Errorf("%w: work %d is already reserved by task %s", ErrTaskAlreadyActive, primaryWorkID, reservedBy)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return EnqueueResult{}, err
+			}
+		}
 		if task.ID == "" {
 			task.ID = NewTaskID(task.Kind)
 		}
 		if task.CreatedAt.IsZero() {
 			task.CreatedAt = time.Now().UTC()
-		}
-		primaryWorkID := task.PrimaryWorkID
-		if primaryWorkID == 0 && task.Kind != "download" && len(task.NovelIDs) == 1 {
-			primaryWorkID = task.NovelIDs[0]
 		}
 		warningsJSON, _ := json.Marshal(task.Warnings)
 		if len(task.Warnings) == 0 {
@@ -406,7 +416,12 @@ func (r *SQLiteRepository) AddNovelID(ctx context.Context, ref TaskRef, novelID 
 	if novelID == 0 {
 		return nil
 	}
-	task, found, err := r.Get(ctx, ref.TaskID)
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, found, err := r.getTx(ctx, tx, ref.TaskID)
 	if err != nil {
 		return err
 	}
@@ -415,8 +430,16 @@ func (r *SQLiteRepository) AddNovelID(ctx context.Context, ref TaskRef, novelID 
 	}
 	for _, current := range task.NovelIDs {
 		if current == novelID {
-			return nil
+			return tx.Commit()
 		}
+	}
+	var reservedBy string
+	err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, novelID, ref.TaskID).Scan(&reservedBy)
+	if err == nil {
+		return fmt.Errorf("%w: work %d is already reserved by task %s", ErrTaskAlreadyActive, novelID, reservedBy)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	task.NovelIDs = append(task.NovelIDs, novelID)
 	request, dedupe, fingerprint, err := RequestForTask(task)
@@ -424,11 +447,14 @@ func (r *SQLiteRepository) AddNovelID(ctx context.Context, ref TaskRef, novelID 
 		return err
 	}
 	requestJSON, _ := json.Marshal(request)
-	result, err := r.db.ExecContext(ctx, `UPDATE fetch_tasks SET request_json = ?, dedupe_key = ?, request_fingerprint = ?, primary_work_id = ?, updated_at = ? WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, string(requestJSON), dedupe, fingerprint, novelID, time.Now().UTC().Format(time.RFC3339Nano), ref.TaskID, ref.Attempt)
+	result, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET request_json = ?, dedupe_key = ?, request_fingerprint = ?, primary_work_id = ?, updated_at = ? WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, string(requestJSON), dedupe, fingerprint, novelID, time.Now().UTC().Format(time.RFC3339Nano), ref.TaskID, ref.Attempt)
 	if err != nil {
 		return err
 	}
-	return requireAttemptUpdate(result)
+	if err := requireAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *SQLiteRepository) SetSavedEpisodeCount(ctx context.Context, ref TaskRef, count int) error {
@@ -536,8 +562,7 @@ func (r *SQLiteRepository) RecoverOnStartup(ctx context.Context, now time.Time) 
 		message := "Task interrupted during process recovery"
 		if committed != 0 {
 			status, message = StatusSucceeded, "Task completed"
-		}
-		if action == RequestedActionCancel {
+		} else if action == RequestedActionCancel {
 			status, message = StatusCanceled, "Task cancelled during process recovery"
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET status = ?, requested_action = '', message = ?, finished_at = ?, updated_at = ?, paused_at = '', interrupted_at = CASE WHEN ? = 'interrupted' THEN ? ELSE interrupted_at END WHERE task_id = ? AND status = 'running'`, status, message, stamp, stamp, status, stamp, taskID); err != nil {

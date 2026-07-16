@@ -10,9 +10,11 @@
 - `interrupted`: shutdown、異常終了、または recovery により実行が確定しなかった task。自動再実行せず、明示的な再開を待つ。
 - `failed`: 処理エラーで終了した task。原因を確認してから再試行する。
 - `canceled`: 利用者が破棄した task。task-level resume は行わず、必要なら新しい取得要求を投入する。
-- `succeeded`: 保存処理の commit fence まで完了した task。
+- `succeeded`: 保存処理の commit fence まで完了した task。commit 後に遅れて cancel が記録された場合も、起動時 recovery は確定済みの保存結果を優先する。
 
 `running` の `requestedAction` が `pause` または `cancel` の間は、実行中の HTTP request・retry wait・host rate-limit wait が停止するのを待ちます。UI は optimistic に最終状態を確定せず、次の polling 結果を正本として扱います。
+
+download の予約 identity は、対応サイトの作品 ID を正規形とします。同じ作品を N コードと小説家になろう URL、またはカクヨムの作品 URL と episode URL で重ねて投入しても同一作品として扱います。同じ identity・option の要求は既存 task ID へ dedupe し、option が異なる要求や同じ作品への update / resume は先行 task が予約を解放するまで conflict にします。
 
 ## 通常の確認
 
@@ -43,6 +45,8 @@ bun run state:doctor --data-dir ./data
 ```
 
 `queued` task に queue row がない、queued 以外に queue row がある、未知の request version、同一作品の予約 task 重複などは自動推測で修復しません。対応 build または同じ consistency group の supported backup を使って復旧してください。
+
+task state の読み取りに失敗した場合、sidecar は空キューとして成功応答を返しません。HTTP 5xx と `failed to read task ... state` のログを storage 障害として扱い、SQLite と canonical file の診断を行ってください。
 
 ## 一時停止・中止の判断
 

@@ -25,7 +25,7 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	targets := normalizeStrings(body.Targets)
+	targets := normalizeDownloadTargets(body.Targets)
 	if len(targets) == 0 {
 		writeError(writer, http.StatusBadRequest, "targets must be a non-empty string array")
 		return
@@ -202,7 +202,21 @@ func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
+	// Signal the running context first. Episode asset localization shares the
+	// single SQLite writer connection, so waiting for the durable write before
+	// cancellation can otherwise make the control request wait on the HTTP work
+	// that it is supposed to stop.
+	signaled := a.runner.SignalCancel(taskID)
 	result, err := a.queue.RequestCancel(taskID)
+	if err != nil && signaled && errors.Is(err, taskstate.ErrTaskStateConflict) {
+		// The runner may finalize the canceled task between the in-memory signal
+		// and the durable request. Treat that completed handoff as the requested
+		// cancellation while preserving conflict responses for repeated calls.
+		if task, found, getErr := a.queue.GetTask(taskID); getErr == nil && found && task.Status == taskqueue.StatusCanceled {
+			result = taskstate.ControlResult{Task: task, Changed: true}
+			err = nil
+		}
+	}
 	if err != nil {
 		writeTaskStateError(writer, err)
 		return
@@ -235,6 +249,7 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	var err error
 	switch action {
 	case "pause":
+		a.runner.SignalPause(taskID)
 		result, err = a.queue.RequestPause(taskID)
 	case "resume":
 		result, err = a.queue.RequestResume(taskID)

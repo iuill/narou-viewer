@@ -118,6 +118,51 @@ func TestSQLiteRepositoryDeduplicatesExactRequestAndRejectsDifferentOptions(t *t
 	}
 }
 
+func TestSQLiteRepositoryDeduplicatesEquivalentDownloadTargets(t *testing.T) {
+	_, repository := newRepository(t)
+	first := NewTask("download")
+	first.Targets = []string{"n1234ab"}
+	first.NovelIDs = []int{42}
+	second := NewTask("download")
+	second.Targets = []string{"https://ncode.syosetu.com/n1234ab/1/"}
+	second.NovelIDs = []int{42}
+
+	if _, err := repository.Enqueue(context.Background(), []*Task{first}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := repository.Enqueue(context.Background(), []*Task{second})
+	if err != nil || len(result.DeduplicatedIDs) != 1 || second.ID != first.ID {
+		t.Fatalf("equivalent download enqueue = %#v, err = %v", result, err)
+	}
+
+	update := NewTask("update")
+	update.NovelIDs = []int{42}
+	if _, err := repository.Enqueue(context.Background(), []*Task{update}); !errors.Is(err, ErrTaskAlreadyActive) {
+		t.Fatalf("cross-kind reservation error = %v", err)
+	}
+}
+
+func TestSQLiteRepositoryRejectsWorkReservationDiscoveredDuringDownload(t *testing.T) {
+	_, repository := newRepository(t)
+	download := NewTask("download")
+	download.Targets = []string{"https://ncode.syosetu.com/n1234ab/"}
+	if _, err := repository.Enqueue(context.Background(), []*Task{download}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim = %#v, err = %v", claimed, err)
+	}
+	update := NewTask("update")
+	update.NovelIDs = []int{42}
+	if _, err := repository.Enqueue(context.Background(), []*Task{update}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.AddNovelID(context.Background(), TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}, 42); !errors.Is(err, ErrTaskAlreadyActive) {
+		t.Fatalf("late reservation error = %v", err)
+	}
+}
+
 func TestSQLiteRepositoryRecoveryDoesNotAutoResumeRunningTask(t *testing.T) {
 	_, repository := newRepository(t)
 	task := NewTask("download")
@@ -307,7 +352,7 @@ func TestRequestHelpersNormalizeAndValidate(t *testing.T) {
 	task := NewTask("download")
 	task.Targets = []string{"HTTPS://Example.com/work/?page=1#fragment"}
 	_, key, fingerprint, err := RequestForTask(task)
-	if err != nil || key != "https://example.com/work" || fingerprint == "" {
+	if err != nil || key != "url:https://example.com/work" || fingerprint == "" {
 		t.Fatalf("request = key %q, fingerprint %q, err %v", key, fingerprint, err)
 	}
 	if _, err := DecodeRequest("{}"); err == nil {
@@ -329,6 +374,7 @@ func TestSQLiteRepositoryControlIdempotencyAndRecoveryOutcomes(t *testing.T) {
 		wantStatus Status
 	}{
 		{name: "committed", committed: true, wantStatus: StatusSucceeded},
+		{name: "committed with late cancel", request: RequestedActionCancel, committed: true, wantStatus: StatusSucceeded},
 		{name: "cancel", request: RequestedActionCancel, wantStatus: StatusCanceled},
 		{name: "pause", request: RequestedActionPause, wantStatus: StatusInterrupted},
 	} {
@@ -344,7 +390,7 @@ func TestSQLiteRepositoryControlIdempotencyAndRecoveryOutcomes(t *testing.T) {
 				t.Fatalf("claim = %#v, err = %v", claimed, err)
 			}
 			if test.committed {
-				if _, err := store.Exec(`UPDATE fetch_tasks SET execution_committed = 1 WHERE task_id = ?`, task.ID); err != nil {
+				if _, err := store.Exec(`UPDATE fetch_tasks SET execution_committed = 1, requested_action = ? WHERE task_id = ?`, test.request, task.ID); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -792,8 +838,11 @@ func TestTaskStateSmallValidationHelpers(t *testing.T) {
 	if _, err := optionalTime("bad-time"); err == nil {
 		t.Fatal("invalid optional time was accepted")
 	}
-	if got := canonicalizeTarget(" n1234ab/ "); got != "n1234ab" {
+	if got := CanonicalTarget(" n1234ab/ "); got != "site:syosetu:n1234ab" {
 		t.Fatalf("canonical target = %q", got)
+	}
+	if got := CanonicalTarget("https://kakuyomu.jp/works/123/episodes/456"); got != "site:kakuyomu:123" {
+		t.Fatalf("canonical Kakuyomu target = %q", got)
 	}
 }
 

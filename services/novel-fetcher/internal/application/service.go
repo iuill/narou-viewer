@@ -43,7 +43,7 @@ type TaskReporter interface {
 	SetTaskMessage(taskID string, message string)
 	AddTaskWarning(taskID string, warning string)
 	SetTaskTarget(taskID string, target string)
-	AddTaskNovelID(taskID string, novelID int)
+	AddTaskNovelID(taskID string, novelID int) error
 	SetTaskSavedEpisodeCount(taskID string, count int)
 	SetTaskFailureEpisode(taskID string, failedEpisodeID string, resumeEpisodeID string)
 }
@@ -102,7 +102,9 @@ func (s *Service) runDownload(ctx context.Context, next *taskqueue.Task) error {
 		if err != nil {
 			return err
 		}
-		s.reporter.AddTaskNovelID(next.ID, stored.ID)
+		if err := s.reporter.AddTaskNovelID(next.ID, stored.ID); err != nil {
+			return err
+		}
 		if err := s.fetchAndSaveEpisodes(ctx, next, work, stored, 0, !next.Force, previousEpisodes); err != nil {
 			return err
 		}

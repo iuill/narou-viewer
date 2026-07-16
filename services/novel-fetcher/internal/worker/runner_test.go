@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,17 @@ type blockingExecutor struct {
 	entered chan struct{}
 	once    sync.Once
 	err     error
+}
+
+type closingStoreExecutor struct {
+	store  *storage.Store
+	closed chan struct{}
+}
+
+func (e *closingStoreExecutor) RunTask(_ context.Context, _ *taskqueue.Task) error {
+	_ = e.store.Close()
+	close(e.closed)
+	return nil
 }
 
 func TestRunnerStartAndStopAreIdempotent(t *testing.T) {
@@ -226,4 +238,76 @@ func TestRunnerWaitForNextWorkHonorsIntervalAndCancellation(t *testing.T) {
 	if runner.waitForNextWork(ctx) {
 		t.Fatal("waitForNextWork returned true after context cancellation")
 	}
+}
+
+func TestRunnerSignalMethodsOnlyCancelMatchingRunningTask(t *testing.T) {
+	runner := NewRunner(Options{Queue: taskqueue.NewQueue()})
+	cancelCtx, cancel := context.WithCancelCause(context.Background())
+	runner.setRunningTask("cancel", cancel)
+	if runner.SignalCancel("other") {
+		t.Fatal("different task was signaled")
+	}
+	if !runner.SignalCancel("cancel") || !errors.Is(context.Cause(cancelCtx), taskstate.ErrTaskCancelRequested) {
+		t.Fatalf("cancel signal cause = %v", context.Cause(cancelCtx))
+	}
+
+	pauseCtx, pause := context.WithCancelCause(context.Background())
+	runner.setRunningTask("pause", pause)
+	if !runner.SignalPause("pause") || !errors.Is(context.Cause(pauseCtx), taskstate.ErrTaskPauseRequested) {
+		t.Fatalf("pause signal cause = %v", context.Cause(pauseCtx))
+	}
+}
+
+func TestRunnerRetryWaitUsesBackoffAndHonorsCancellation(t *testing.T) {
+	runner := NewRunner(Options{WorkInterval: time.Millisecond})
+	if !runner.waitForRetry(context.Background()) {
+		t.Fatal("retry wait ended before its configured delay")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if NewRunner(Options{}).waitForRetry(canceled) {
+		t.Fatal("default retry wait ignored cancellation")
+	}
+}
+
+func TestRunnerStopsRetryingWhenTaskStoreCannotBeRead(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := taskqueue.NewPersistentQueue(taskstate.NewSQLiteRepository(store.DB()))
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(Options{Queue: queue, WorkInterval: time.Hour, Logger: slog.Default()})
+	runner.Start(context.Background())
+	time.Sleep(20 * time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runner.Stop(stopCtx)
+}
+
+func TestRunnerRetriesFailedTaskFinalizationUntilShutdown(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := taskqueue.NewPersistentQueue(taskstate.NewSQLiteRepository(store.DB()))
+	executor := &closingStoreExecutor{store: store, closed: make(chan struct{})}
+	runner := NewRunner(Options{Queue: queue, Executor: executor, WorkInterval: time.Hour, Logger: slog.Default()})
+	runner.Start(context.Background())
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{"https://example.invalid/finalize-error"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.closed:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not close the task store")
+	}
+	time.Sleep(20 * time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runner.Stop(stopCtx)
 }

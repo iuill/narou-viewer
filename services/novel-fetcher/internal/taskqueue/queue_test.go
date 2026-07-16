@@ -265,3 +265,50 @@ func TestMemoryQueueRejectsDurableControls(t *testing.T) {
 		t.Fatal("memory get unexpectedly succeeded")
 	}
 }
+
+func TestPersistentQueueErrorAwareReadsDoNotReportClosedStoreAsEmpty(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := NewPersistentQueue(taskstate.NewSQLiteRepository(store.DB()))
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := queue.StatusCountsWithError(); err == nil {
+		t.Fatal("closed store was reported as empty status counts")
+	}
+	if _, err := queue.SummaryWithError(); err == nil {
+		t.Fatal("closed store was reported as an empty summary")
+	}
+	if _, err := queue.PopNextWithError(); err == nil {
+		t.Fatal("closed store was reported as no next task")
+	}
+	if _, err := queue.HasQueuedTasksWithError(); err == nil {
+		t.Fatal("closed store was reported as no queued tasks")
+	}
+	if err := queue.AddTaskNovelID("missing", 1); err == nil {
+		t.Fatal("closed store accepted a task identity update")
+	}
+}
+
+func TestPersistentQueueRejectsIdentityUpdateForNonRunningTask(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	queue := NewPersistentQueue(taskstate.NewSQLiteRepository(store.DB()))
+	task := NewTask("download")
+	task.Targets = []string{"https://example.invalid/queued"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.AddTaskNovelID(task.ID, 1); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+		t.Fatalf("queued identity update error = %v", err)
+	}
+	if err := queue.AddTaskNovelID(task.ID, 0); err != nil {
+		t.Fatalf("zero identity update error = %v", err)
+	}
+}
