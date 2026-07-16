@@ -45,10 +45,13 @@ type VersionResponse struct {
 }
 
 type QueueResponse struct {
-	Total     int  `json:"total"`
-	WebWorker int  `json:"webWorker"`
-	Worker    int  `json:"worker"`
-	Running   bool `json:"running"`
+	Total       int  `json:"total"`
+	Queued      int  `json:"queued"`
+	WebWorker   int  `json:"webWorker"`
+	Worker      int  `json:"worker"`
+	Running     bool `json:"running"`
+	Paused      int  `json:"paused"`
+	Interrupted int  `json:"interrupted"`
 }
 
 type TaskPayload map[string]json.RawMessage
@@ -222,10 +225,13 @@ type versionData struct {
 }
 
 type queueData struct {
-	Total     IntValue `json:"total"`
-	WebWorker IntValue `json:"web_worker"`
-	Worker    IntValue `json:"worker"`
-	Running   *bool    `json:"running"`
+	Total       IntValue `json:"total"`
+	Queued      IntValue `json:"queued"`
+	WebWorker   IntValue `json:"web_worker"`
+	Worker      IntValue `json:"worker"`
+	Running     *bool    `json:"running"`
+	Paused      IntValue `json:"paused"`
+	Interrupted IntValue `json:"interrupted"`
 }
 
 type taskSummaryData struct {
@@ -399,10 +405,13 @@ func (c *Client) Queue(ctx context.Context) (QueueResponse, error) {
 		running = total > 0
 	}
 	return QueueResponse{
-		Total:     total,
-		WebWorker: int(payload.WebWorker),
-		Worker:    int(payload.Worker),
-		Running:   running,
+		Total:       total,
+		Queued:      int(payload.Queued),
+		WebWorker:   int(payload.WebWorker),
+		Worker:      int(payload.Worker),
+		Running:     running,
+		Paused:      int(payload.Paused),
+		Interrupted: int(payload.Interrupted),
 	}, nil
 }
 

@@ -177,12 +177,15 @@ func (s *Server) handleFetcherTaskAction(w http.ResponseWriter, r *http.Request)
 
 func queueShape() map[string]any {
 	return map[string]any{
-		"total":     0,
-		"webWorker": 0,
-		"worker":    0,
-		"running":   false,
-		"available": false,
-		"degraded":  true,
+		"total":       0,
+		"queued":      0,
+		"webWorker":   0,
+		"worker":      0,
+		"running":     false,
+		"paused":      0,
+		"interrupted": 0,
+		"available":   false,
+		"degraded":    true,
 	}
 }
 

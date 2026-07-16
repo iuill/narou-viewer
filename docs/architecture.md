@@ -129,6 +129,9 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 ### 5.1 `novel-fetcher` が管理
 
 - `novel-fetcher/library.sqlite`
+  - `fetch_tasks` が取得要求・状態・進捗・制御要求、`fetch_task_queue` が queue 順序、`fetch_task_episode_checkpoints` が task 内の episode 完了実績を保持する。
+  - process 再起動時は `queued` だけを queue へ復帰し、旧 `running` は `succeeded` / `canceled` / `interrupted` のいずれかへ recovery してから worker を起動する。
+  - `/api/v2/system/queue` の `total` は `queued + running` を表し、`paused` / `interrupted` は自動実行対象外の件数として別に返す。
 - `novel-fetcher/works/**/episodes/*.json`
   - canonical episode として本文ブロックに加え、取得元の話単位 `source_url` も保持する
 - `novel-fetcher/works/**/raw/episodes/*.html`
@@ -194,6 +197,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - 一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。asset 配信だけは `viewer-api` が `VIEWER_DATA_DIR/novel-fetcher` 配下の保存済みファイルを検証して返す。
 - `viewer-api` の取得 sidecar 操作用 API は `/api/fetcher/*` とする。旧 `/api/narou/*` 互換 API は廃止済みで、現行 frontend / contract test / 正本 docs は `/api/fetcher/*` だけを公開 BFF として扱う。実体は `novel-fetcher` sidecar への中継で構成し、取得 backend 側 work 削除が成功した後は、`viewer-api` が reader state / bookmarks / character state / AI usage の孤立 state を novel 単位で pruning する。
 - `novel-fetcher` の内部 API は、保存済み work の読み取りに `/api/v1/works...`、取得・更新・削除・task 操作に `/api/v2/...` を使う。これは sidecar 内部 API の分割であり、ブラウザへ直接公開する API バージョンではない。
+- task の運用正本は `library.sqlite` 内の task table とし、in-memory queue は wake 通知と実行中 task の cancellation signal だけに利用する。同一 task の episode 保存と checkpoint 更新は SQLite transaction で確定する。
 - fetcher 操作 option は camelCase の request DTO で受ける。`force`、`forceRedownload`、`skipUnchanged` は `novel-fetcher` の実行経路へ反映する。`convertAfterDownload`、`mail`、`includeFrozen`、`convertAfterUpdate` は現行 `novel-fetcher` では未対応のため、true 指定時は 501 として拒否する。
 
 ### 6.2 `viewer-api` 提供 API
@@ -216,6 +220,10 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
   - viewer 側の `novelId` を取得 backend 側の小説 ID に解決して削除を依頼する。削除成功後は reader state / bookmarks / character state / AI usage の孤立 state を pruning する
 - `POST /api/fetcher/tasks/{taskId}/cancel`
   - 更新 UI からのキャンセル操作を取得 backend へ中継する
+- `POST /api/fetcher/tasks/{taskId}/pause`
+  - queued task は即時に一時停止し、running task は制御要求を永続化してから実行中 context を停止する
+- `POST /api/fetcher/tasks/{taskId}/resume`
+  - paused / interrupted / failed task を同じ task ID のまま queue 末尾へ戻す
 - `GET /api/system/storage`
   - サーバ側 `data/` 配下の現行データのファイル論理サイズを走査し、`小説データ` / `キャッシュ` / `その他` のカテゴリ別合計と、作品単位の合計・内訳を返す
   - 旧作品データのディレクトリは走査・集計の対象外とする

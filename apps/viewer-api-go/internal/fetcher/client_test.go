@@ -17,7 +17,7 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 		case "/api/v2/system/version":
 			writeEnvelope(t, w, map[string]any{"current": "novel-fetcher/v1.0.0", "latest": ""})
 		case "/api/v2/system/queue":
-			writeEnvelope(t, w, map[string]any{"total": "2", "web_worker": 1, "worker": 1})
+			writeEnvelope(t, w, map[string]any{"total": "2", "queued": 1, "web_worker": 1, "worker": 1, "running": true, "paused": 2, "interrupted": 3})
 		case "/api/v2/tasks/summary":
 			writeEnvelope(t, w, map[string]any{
 				"current": map[string]any{
@@ -68,7 +68,7 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status returned error: %v", err)
 	}
-	if status.Version.Current == nil || *status.Version.Current != "novel-fetcher/v1.0.0" || !status.Queue.Running {
+	if status.Version.Current == nil || *status.Version.Current != "novel-fetcher/v1.0.0" || !status.Queue.Running || status.Queue.Queued != 1 || status.Queue.Paused != 2 || status.Queue.Interrupted != 3 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	summary, err := client.TasksSummary(context.Background())

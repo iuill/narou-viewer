@@ -204,14 +204,18 @@ func (r *SQLiteRepository) Summary(ctx context.Context, recentLimit int) (Summar
 }
 
 func (r *SQLiteRepository) QueueCounts(ctx context.Context) (QueueCounts, error) {
-	var queued, running int
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'queued'`).Scan(&queued); err != nil {
+	var queued, running, paused, interrupted int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END), 0)
+		FROM fetch_tasks
+	`).Scan(&queued, &running, &paused, &interrupted); err != nil {
 		return QueueCounts{}, err
 	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'running'`).Scan(&running); err != nil {
-		return QueueCounts{}, err
-	}
-	return QueueCounts{Total: queued + running, Running: running > 0}, nil
+	return QueueCounts{Total: queued + running, Queued: queued, Running: running > 0, Paused: paused, Interrupted: interrupted}, nil
 }
 
 func (r *SQLiteRepository) HasQueuedTasks(ctx context.Context) (bool, error) {

@@ -2,9 +2,12 @@ export type JsonRecord = Record<string, unknown>;
 
 export type FetcherQueueResponse = {
   total: number;
+  queued?: number;
   webWorker: number;
   worker: number;
   running: boolean;
+  paused?: number;
+  interrupted?: number;
   available?: boolean;
   degraded?: boolean;
 };

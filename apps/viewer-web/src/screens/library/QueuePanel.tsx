@@ -94,7 +94,9 @@ export function QueuePanel({ formatDate, onToggle, queue }: QueuePanelComponentP
             <span className={`queue-chip ${fetcherQueue?.running ? "active" : ""}`}>
               実行中: {fetcherQueue?.running ? "yes" : "no"}
             </span>
-            <span className="queue-chip">待機: {fetcherQueue?.total ?? 0}</span>
+            <span className="queue-chip">待機: {fetcherQueue?.queued ?? fetcherQueue?.total ?? 0}</span>
+            <span className="queue-chip">一時停止: {fetcherQueue?.paused ?? 0}</span>
+            <span className="queue-chip">中断: {fetcherQueue?.interrupted ?? 0}</span>
             <span className="queue-chip">worker: {fetcherQueue?.worker ?? 0}</span>
             <span className="queue-chip">web: {fetcherQueue?.webWorker ?? 0}</span>
           </div>

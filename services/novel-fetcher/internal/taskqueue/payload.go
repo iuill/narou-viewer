@@ -17,8 +17,11 @@ type Summary struct {
 }
 
 type StatusCounts struct {
-	Total   int
-	Running bool
+	Total       int
+	Queued      int
+	Running     bool
+	Paused      int
+	Interrupted int
 }
 
 func Payloads(tasks []*Task) []map[string]any {

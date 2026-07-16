@@ -5,16 +5,23 @@ function expectCanonicalTaskSummaryShape(value: unknown): void {
   expect(value).toEqual(
     expect.objectContaining({
       queued: expect.any(Array),
+      paused: expect.any(Array),
+      interrupted: expect.any(Array),
       recentCompleted: expect.any(Array),
       recentFailed: expect.any(Array),
       completedCount: expect.any(Number),
       failedCount: expect.any(Number),
+      canceledCount: expect.any(Number),
+      pausedCount: expect.any(Number),
+      interruptedCount: expect.any(Number),
       convertQueued: expect.any(Array),
     }),
   );
   const record = value as Record<string, unknown>;
   expect(record).toHaveProperty("current");
   expect(record).toHaveProperty("convertCurrent");
+  expect(record).not.toHaveProperty("paused_count");
+  expect(record).not.toHaveProperty("interrupted_count");
   expect(record).not.toHaveProperty("recent_completed");
   expect(record).not.toHaveProperty("recent_failed");
   expect(record).not.toHaveProperty("completed_count");
@@ -42,9 +49,12 @@ describe("fetcher canonical API contract", () => {
     expect(queue.json).toEqual(
       expect.objectContaining({
         total: expect.any(Number),
+        queued: expect.any(Number),
         webWorker: expect.any(Number),
         worker: expect.any(Number),
         running: expect.any(Boolean),
+        paused: expect.any(Number),
+        interrupted: expect.any(Number),
       }),
     );
 
@@ -109,5 +119,19 @@ describe("fetcher canonical API contract", () => {
     expect([404, 502]).toContain(missingTask.status);
     expect(missingTask.contentType).toContain("application/json");
     expectErrorShape(missingTask.json);
+
+    const missingPauseTask = await requestJson("/api/fetcher/tasks/__api_contract_missing__/pause", {
+      method: "POST",
+    });
+    expect([404, 502]).toContain(missingPauseTask.status);
+    expect(missingPauseTask.contentType).toContain("application/json");
+    expectErrorShape(missingPauseTask.json);
+
+    const missingResumeTask = await requestJson("/api/fetcher/tasks/__api_contract_missing__/resume", {
+      method: "POST",
+    });
+    expect([404, 502]).toContain(missingResumeTask.status);
+    expect(missingResumeTask.contentType).toContain("application/json");
+    expectErrorShape(missingResumeTask.json);
   });
 });

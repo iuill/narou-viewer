@@ -66,7 +66,7 @@ func (q *Queue) StatusCounts() StatusCounts {
 		if err != nil {
 			return StatusCounts{}
 		}
-		return StatusCounts{Total: counts.Total, Running: counts.Running}
+		return StatusCounts{Total: counts.Total, Queued: counts.Queued, Running: counts.Running, Paused: counts.Paused, Interrupted: counts.Interrupted}
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -75,7 +75,7 @@ func (q *Queue) StatusCounts() StatusCounts {
 	if running {
 		total++
 	}
-	return StatusCounts{Total: total, Running: running}
+	return StatusCounts{Total: total, Queued: len(q.queue), Running: running, Paused: len(q.recentPaused), Interrupted: len(q.recentInterrupted)}
 }
 
 func (q *Queue) Summary() Summary {

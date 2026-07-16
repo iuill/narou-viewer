@@ -81,7 +81,7 @@ backup writerはrestore readerと同じarchive契約を公開前に適用し、e
 
 | group | backup 対象 |
 | --- | --- |
-| `NF-CANONICAL` | `library.sqlite`、停止後に残る WAL、`works/**` |
+| `NF-CANONICAL` | `library.sqlite`（task queue・checkpoint を含む）、停止後に残る WAL、`works/**` |
 | `VA-CORE` | reading、bookmarks、preferences、novel settings、AI settings、publications |
 | `VA-EXTRACTION` | character events、term profiles、job、checkpoint |
 | `VA-HISTORY` | `ai_usage.sqlite` と停止後に残る rollback journal |
@@ -122,6 +122,8 @@ bun run state:backup recover --data-dir ./data
 restore staging は復号済み機微データです。tool は成功・失敗時に管理 path から削除しますが、一般 filesystem、COW、SSD の物理 secure erase は保証しません。backup は平文 staging を作らず、restore staging の寿命だけを短くしています。
 
 restore 後、対応 build を一度起動して supported startup migration と derived state の lazy rebuild を行い、再停止して state doctor を実行します。
+
+`library.sqlite` に保存された `fetch_tasks`、`fetch_task_queue`、`fetch_task_episode_checkpoints` も `NF-CANONICAL` と同じ generation で復元されます。起動時は task recovery が先に走り、queue に残る `queued` だけが自動実行されます。復元時点で `running` だった task は、成功 commit 済みなら `succeeded`、保留中の cancel があれば `canceled`、それ以外は `interrupted` となるため、必要な task は画面または task API から明示的に再開してください。
 
 ```bash
 docker compose -f docker-compose.prod.yml start novel-fetcher viewer-api

@@ -30,10 +30,13 @@ func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
 	counts := a.queue.StatusCounts()
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
-		"total":      counts.Total,
-		"web_worker": 0,
-		"worker":     counts.Total,
-		"running":    counts.Running,
+		"total":       counts.Total,
+		"queued":      counts.Queued,
+		"paused":      counts.Paused,
+		"interrupted": counts.Interrupted,
+		"web_worker":  0,
+		"worker":      counts.Total,
+		"running":     counts.Running,
 	}, nil)
 }
 

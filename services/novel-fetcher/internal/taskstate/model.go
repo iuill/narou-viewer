@@ -110,8 +110,11 @@ type Summary struct {
 }
 
 type QueueCounts struct {
-	Total   int
-	Running bool
+	Total       int
+	Queued      int
+	Running     bool
+	Paused      int
+	Interrupted int
 }
 
 type EnqueueResult struct {

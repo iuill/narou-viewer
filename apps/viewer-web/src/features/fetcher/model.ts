@@ -331,7 +331,7 @@ export function getFetcherResumableTaskEntries(summary: FetcherTaskSummary | nul
     return [];
   }
 
-  return getFetcherTaskListEntries([...summary.paused, ...summary.interrupted]);
+  return getFetcherTaskListEntries([...summary.paused, ...summary.interrupted, ...summary.recentFailed]);
 }
 
 export function getFetcherBusyFetcherWorkIds(summary: FetcherTaskSummary | null): Set<string> {

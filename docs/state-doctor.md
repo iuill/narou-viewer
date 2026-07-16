@@ -39,7 +39,7 @@ report の各 finding は `id`、`schema_id`、`path`、`kind`、`severity`、`o
 - `ai_generation_settings.yaml`、`ai_usage.sqlite`、`reader_search.sqlite` の `0600` と想定外配置
 - `ai_generation_settings.yaml` の非空 legacy `api_key`。値自体は読取結果へ含めない
 
-novel-fetcher の `schema_migrations` latest `3` と canonical episode version `1` は別 Go module の契約値を doctor 側にも持ちます。novel-fetcher の定数を変更する PR は doctor の契約値と fixture も同時に更新します。
+novel-fetcher の `schema_migrations` latest `4` と canonical episode version `1` は別 Go module の契約値を doctor 側にも持ちます。novel-fetcher の定数を変更する PR は doctor の契約値と fixture も同時に更新します。task request・queue・checkpoint の invariant は novel-fetcher の startup recovery が診断し、state-doctor は SQLite の schema / integrity と canonical file の整合を診断します。
 
 ## 限定 repair
 

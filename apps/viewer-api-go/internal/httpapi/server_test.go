@@ -5093,7 +5093,7 @@ func assertFetcherUnavailableFallback(t *testing.T, handler http.Handler) {
 		}
 	}
 	queue := requestJSON(t, handler, http.MethodGet, "/api/fetcher/queue", nil, http.StatusOK)
-	if queue["running"] != false || queue["total"] != float64(0) || queue["webWorker"] != float64(0) || queue["worker"] != float64(0) {
+	if queue["running"] != false || queue["total"] != float64(0) || queue["queued"] != float64(0) || queue["paused"] != float64(0) || queue["interrupted"] != float64(0) || queue["webWorker"] != float64(0) || queue["worker"] != float64(0) {
 		t.Fatalf("fallback queue should be idle: %+v", queue)
 	}
 	if queue["available"] != false || queue["degraded"] != true {

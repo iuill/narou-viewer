@@ -347,24 +347,36 @@ export function LibraryPanel({
                       ) : null}
                       {task.canResume ? (
                         <button
-                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}を再開`}
+                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}${task.status === "failed" ? "を再試行" : "を再開"}`}
                           className="queue-task-action-button resume"
                           disabled={controllingFetcherTaskIds.has(task.id)}
                           onClick={() => void onResumeFetcherTask(task.id)}
                           type="button"
                         >
-                          {controllingFetcherTaskIds.has(task.id) ? "再開中..." : "再開"}
+                          {controllingFetcherTaskIds.has(task.id)
+                            ? task.status === "failed"
+                              ? "再試行中..."
+                              : "再開中..."
+                            : task.status === "failed"
+                              ? "再試行"
+                              : "再開"}
                         </button>
                       ) : null}
                       {task.canCancel ? (
                         <button
-                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}を中止`}
+                          aria-label={`${getFetcherTaskTargetLabel(task) ?? "タスク"}${task.status === "failed" ? "を破棄" : "を中止"}`}
                           className="queue-task-cancel-button"
                           disabled={controllingFetcherTaskIds.has(task.id)}
                           onClick={() => void onCancelFetcherTask(task.id)}
                           type="button"
                         >
-                          {cancelingFetcherTaskIds.has(task.id) ? "中止中..." : "中止"}
+                          {cancelingFetcherTaskIds.has(task.id)
+                            ? task.status === "failed"
+                              ? "破棄中..."
+                              : "中止中..."
+                            : task.status === "failed"
+                              ? "破棄"
+                              : "中止"}
                         </button>
                       ) : null}
                     </div>
