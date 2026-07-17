@@ -197,7 +197,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - 一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。asset 配信だけは `viewer-api` が `VIEWER_DATA_DIR/novel-fetcher` 配下の保存済みファイルを検証して返す。
 - `viewer-api` の取得 sidecar 操作用 API は `/api/fetcher/*` とする。旧 `/api/narou/*` 互換 API は廃止済みで、現行 frontend / contract test / 正本 docs は `/api/fetcher/*` だけを公開 BFF として扱う。実体は `novel-fetcher` sidecar への中継で構成し、取得 backend 側 work 削除が成功した後は、`viewer-api` が reader state / bookmarks / character state / AI usage の孤立 state を novel 単位で pruning する。
 - `novel-fetcher` の内部 API は、保存済み work の読み取りに `/api/v1/works...`、取得・更新・削除・task 操作に `/api/v2/...` を使う。これは sidecar 内部 API の分割であり、ブラウザへ直接公開する API バージョンではない。
-- task の運用正本は `library.sqlite` 内の task table とし、in-memory queue は wake 通知と実行中 task の cancellation signal だけに利用する。同一 task の episode 保存と checkpoint 更新は SQLite transaction で確定する。
+- task の運用正本は `library.sqlite` 内の task table とする。`taskqueue.Queue` は永続 repository と wake 通知をまとめるだけの adapter とし、runner は実行中 task の cancellation signal だけを memory に保持する。同一 task の episode 保存と checkpoint 更新は SQLite transaction で確定する。
 - fetcher 操作 option は camelCase の request DTO で受ける。`force`、`forceRedownload`、`skipUnchanged` は `novel-fetcher` の実行経路へ反映する。`convertAfterDownload`、`mail`、`includeFrozen`、`convertAfterUpdate` は現行 `novel-fetcher` では未対応のため、true 指定時は 501 として拒否する。
 
 ### 6.2 `viewer-api` 提供 API

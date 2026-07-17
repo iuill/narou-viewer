@@ -1635,7 +1635,11 @@ func waitForIdleApp(t *testing.T, app *App) {
 		case <-deadline:
 			t.Fatal("app did not become idle")
 		case <-ticker.C:
-			if app.queue.IsIdle() {
+			counts, err := app.queue.StatusCounts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if counts.Total == 0 {
 				return
 			}
 		}

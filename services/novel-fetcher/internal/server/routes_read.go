@@ -27,7 +27,7 @@ func (a *App) handleVersion(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
-	counts, err := a.queue.StatusCountsWithError()
+	counts, err := a.queue.StatusCounts()
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Error("failed to read task queue state", "error", err)
@@ -48,7 +48,7 @@ func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) handleTasksSummary(writer http.ResponseWriter, _ *http.Request) {
-	summary, err := a.queue.SummaryWithError()
+	summary, err := a.queue.Summary()
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Error("failed to read task summary state", "error", err)

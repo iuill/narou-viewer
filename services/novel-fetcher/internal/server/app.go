@@ -48,7 +48,7 @@ func NewWithError(options Options) (*App, error) {
 	if err := repository.RecoverOnStartup(context.Background(), time.Now().UTC()); err != nil {
 		return nil, err
 	}
-	queue := taskqueue.NewPersistentQueue(repository)
+	queue := taskqueue.NewQueue(repository)
 	service := application.NewService(application.Options{
 		Store:    options.Store,
 		Fetcher:  options.Fetcher,
