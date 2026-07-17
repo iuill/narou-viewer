@@ -26,8 +26,51 @@ type RemoveResponse = CommandResponse & {
 type CancelResponse = {
   message?: string;
   taskId?: string;
+  status?: string;
+  requestedAction?: string;
+  changed?: boolean;
   cancelled?: boolean;
 };
+
+type TaskPayload = {
+  taskId?: string;
+  status?: string;
+};
+
+type TaskSummaryResponse = {
+  current?: TaskPayload | null;
+  queued?: TaskPayload[];
+  paused?: TaskPayload[];
+  interrupted?: TaskPayload[];
+  recentCompleted?: TaskPayload[];
+  recentFailed?: TaskPayload[];
+};
+
+async function waitForCanceledTask(taskId: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  let lastStatus = "not found";
+
+  while (Date.now() < deadline) {
+    const summary = await requestJson<TaskSummaryResponse>("/api/fetcher/tasks/summary");
+    expectJsonResponse(summary);
+    const tasks = [
+      ...(summary.json.current ? [summary.json.current] : []),
+      ...(summary.json.queued ?? []),
+      ...(summary.json.paused ?? []),
+      ...(summary.json.interrupted ?? []),
+      ...(summary.json.recentCompleted ?? []),
+      ...(summary.json.recentFailed ?? []),
+    ];
+    const task = tasks.find((candidate) => candidate.taskId === taskId);
+    lastStatus = task?.status ?? "not found";
+    if (lastStatus === "canceled") {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error(`Task ${taskId} did not reach canceled status; last status: ${lastStatus}`);
+}
 
 function requireSafeDestructiveFetcherTarget(): string {
   const url = new URL(API_BASE_URL);
@@ -131,12 +174,13 @@ describe("fetcher mutating flow contract", () => {
       expect([200, 404, 409]).toContain(cancel.status);
       expect(cancel.contentType).toContain("application/json");
       if (cancel.status === 200) {
-        expect(cancel.json).toEqual(
-          expect.objectContaining({
-            taskId,
-            cancelled: true,
-          }),
-        );
+        expect(cancel.json).toEqual(expect.objectContaining({ taskId, changed: true }));
+        const cancellationRequested =
+          cancel.json.status === "running" && cancel.json.requestedAction === "cancel";
+        const cancellationCompleted =
+          cancel.json.status === "canceled" && cancel.json.cancelled === true;
+        expect(cancellationRequested || cancellationCompleted).toBe(true);
+        await waitForCanceledTask(taskId);
       }
 
       const remove = await requestJson<RemoveResponse>(

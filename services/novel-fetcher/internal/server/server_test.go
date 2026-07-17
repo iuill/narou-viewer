@@ -726,6 +726,10 @@ func TestCancelQueuedTask(t *testing.T) {
 	if payload["success"] != true {
 		t.Fatalf("cancel payload = %#v", payload)
 	}
+	data := payload["data"].(map[string]any)
+	if data["changed"] != true || data["cancelled"] != true || data["status"] != string(taskqueue.StatusCanceled) {
+		t.Fatalf("cancel data = %#v", data)
+	}
 
 	missing := performRequest(app, http.MethodPost, "/api/v2/tasks/missing/cancel", "")
 	if missing.Code != http.StatusNotFound {
@@ -758,7 +762,7 @@ func TestPersistentTaskControlEndpointsExposeDurableState(t *testing.T) {
 		t.Fatalf("pause status = %d: %s", paused.Code, paused.Body.String())
 	}
 	pausedData := decodeObject(t, paused)["data"].(map[string]any)
-	if pausedData["status"] != string(taskqueue.StatusPaused) || pausedData["can_resume"] != true {
+	if pausedData["status"] != string(taskqueue.StatusPaused) || pausedData["can_resume"] != true || pausedData["changed"] != true {
 		t.Fatalf("pause data = %#v", pausedData)
 	}
 	pausedAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
@@ -769,9 +773,17 @@ func TestPersistentTaskControlEndpointsExposeDurableState(t *testing.T) {
 	if resumed.Code != http.StatusAccepted {
 		t.Fatalf("resume status = %d: %s", resumed.Code, resumed.Body.String())
 	}
+	resumedData := decodeObject(t, resumed)["data"].(map[string]any)
+	if resumedData["status"] != string(taskqueue.StatusQueued) || resumedData["changed"] != true {
+		t.Fatalf("resume data = %#v", resumedData)
+	}
 	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
 	if canceled.Code != http.StatusOK {
 		t.Fatalf("cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	canceledData := decodeObject(t, canceled)["data"].(map[string]any)
+	if canceledData["status"] != string(taskqueue.StatusCanceled) || canceledData["changed"] != true || canceledData["cancelled"] != true {
+		t.Fatalf("cancel data = %#v", canceledData)
 	}
 	canceledAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
 	if canceledAgain.Code != http.StatusConflict {

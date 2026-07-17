@@ -228,7 +228,7 @@ func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request
 	if result.Task != nil && result.Task.Status == taskqueue.StatusRunning && result.Changed {
 		status = http.StatusAccepted
 	}
-	writeEnvelope(writer, status, taskqueue.Payload(result.Task), "Task cancelled")
+	writeEnvelope(writer, status, taskControlPayload(result, "cancel"), "Task cancelled")
 }
 
 func (a *App) handlePauseTask(writer http.ResponseWriter, request *http.Request) {
@@ -268,7 +268,19 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 		status = http.StatusAccepted
 	}
 	message := "Task " + action
-	writeEnvelope(writer, status, taskqueue.Payload(result.Task), message)
+	writeEnvelope(writer, status, taskControlPayload(result, action), message)
+}
+
+func taskControlPayload(result taskstate.ControlResult, action string) map[string]any {
+	payload := taskqueue.Payload(result.Task)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["changed"] = result.Changed
+	if action == "cancel" {
+		payload["cancelled"] = result.Task != nil && result.Task.Status == taskqueue.StatusCanceled
+	}
+	return payload
 }
 
 func writeTaskStateError(writer http.ResponseWriter, err error) {
