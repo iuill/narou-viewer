@@ -247,14 +247,28 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	}
 	var result taskstate.ControlResult
 	var err error
+	signaled := false
 	switch action {
 	case "pause":
-		a.runner.SignalPause(taskID)
+		signaled = a.runner.SignalPause(taskID)
 		result, err = a.queue.RequestPause(taskID)
 	case "resume":
 		result, err = a.queue.RequestResume(taskID)
 	default:
 		err = errors.New("unknown task action")
+	}
+	if action == "pause" && signaled {
+		if err != nil && errors.Is(err, taskstate.ErrTaskStateConflict) {
+			// The runner may persist the paused outcome between the in-memory
+			// signal and the durable request. Preserve the acknowledgement of
+			// this request while keeping later repeated pauses idempotent.
+			if task, found, getErr := a.queue.GetTask(taskID); getErr == nil && found && task.Status == taskqueue.StatusPaused {
+				result = taskstate.ControlResult{Task: task, Changed: true}
+				err = nil
+			}
+		} else if err == nil && result.Task != nil && result.Task.Status == taskqueue.StatusPaused && !result.Changed {
+			result.Changed = true
+		}
 	}
 	if err != nil {
 		writeTaskStateError(writer, err)
@@ -264,7 +278,7 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 		a.runner.Pause(taskID)
 	}
 	status := http.StatusOK
-	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {
+	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued || action == "pause" && signaled) {
 		status = http.StatusAccepted
 	}
 	message := "Task " + action

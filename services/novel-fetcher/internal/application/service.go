@@ -29,7 +29,7 @@ type LibraryStore interface {
 // it optional preserves the small fake stores used by application tests and
 // callers that only need the pre-persistence service contract.
 type TaskCheckpointStore interface {
-	IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string) (bool, error)
+	IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int) (valid bool, found bool, err error)
 	RecordTaskEpisodeCheckpoint(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string, sortOrder int, nextEpisodeID string) error
 	SaveEpisodeBodyForTask(ctx context.Context, ref taskstate.TaskRef, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int, nextEpisodeID string) (model.StoredEpisode, error)
 }
@@ -198,11 +198,15 @@ func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
 		if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
 			return err
 		}
+		previousEpisodes, err := s.store.ListEpisodes(work.ID)
+		if err != nil {
+			return err
+		}
 		stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
 		if err != nil {
 			return err
 		}
-		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, true, nil); err != nil {
+		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, true, previousEpisodes); err != nil {
 			return err
 		}
 		if err := s.completeWork(ctx, next, stored.ID); err != nil {
@@ -250,7 +254,7 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 			nextEpisodeID = CanonicalTaskEpisodeID(work.Episodes[index+1], index+1)
 		}
 		if hasCheckpoints && next.AttemptCount > 0 {
-			valid, err := checkpointStore.IsTaskEpisodeCheckpointValid(ctx, taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, stored.ID, episodeID)
+			valid, found, err := checkpointStore.IsTaskEpisodeCheckpointValid(ctx, taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, work, stored, episodeRef, index)
 			if err != nil {
 				return err
 			}
@@ -258,6 +262,12 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 				savedEpisodeCount++
 				s.reporter.SetTaskSavedEpisodeCount(next.ID, savedEpisodeCount)
 				continue
+			}
+			// A checkpoint for an older source revision must force a refetch. Do
+			// not fall back to the timestamp-based local skip path after the
+			// stronger durable revision check has rejected it.
+			if found {
+				delete(completeEpisodes, episodeID)
 			}
 		}
 		if completeEpisodes[episodeID] {

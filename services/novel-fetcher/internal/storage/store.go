@@ -845,40 +845,61 @@ func (s *Store) RecordTaskEpisodeCheckpoint(ctx context.Context, ref taskstate.T
 	return tx.Commit()
 }
 
-func (s *Store) IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string) (bool, error) {
+func (s *Store) IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, work model.Work, storedWork model.StoredWork, episodeRef model.Episode, sortOrder int) (bool, bool, error) {
+	episodeID := canonicalEpisodeID(episodeRef, sortOrder)
 	var checkpointHash string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT c.content_hash
 		FROM fetch_task_episode_checkpoints c
 		JOIN fetch_tasks t ON t.task_id = c.task_id
 		WHERE c.task_id = ? AND c.work_id = ? AND c.episode_id = ? AND c.completed_attempt <= ?
-	`, ref.TaskID, workID, episodeID, ref.Attempt).Scan(&checkpointHash)
+	`, ref.TaskID, storedWork.ID, episodeID, ref.Attempt).Scan(&checkpointHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	episode, found, err := s.FindEpisode(workID, episodeID)
+	episode, found, err := s.FindEpisode(storedWork.ID, episodeID)
 	if err != nil || !found || episode.BodyStatus != BodyStatusComplete || episode.ContentHash == "" || episode.ContentHash != checkpointHash {
-		return false, err
+		return false, true, err
 	}
-	return s.validateStoredEpisodeFile(episode)
+	document, valid, err := s.readStoredEpisodeFile(episode)
+	if err != nil || !valid {
+		return false, true, err
+	}
+	return document.EpisodeID == episodeID &&
+		document.SiteEpisodeID == episodeRef.Index &&
+		strings.TrimSpace(document.SourceURL) == episodeSourceURL(work.SourceURL, episodeRef) &&
+		document.PublishedAt == episodeRef.PublishedAt &&
+		document.UpdatedAt == episodeRef.ModifiedAt, true, nil
 }
 
 func (s *Store) validateStoredEpisodeFile(episode model.StoredEpisode) (bool, error) {
+	_, valid, err := s.readStoredEpisodeFile(episode)
+	return valid, err
+}
+
+func (s *Store) readStoredEpisodeFile(episode model.StoredEpisode) (model.CanonicalEpisode, bool, error) {
 	path := filepath.Join(s.rootDir, episode.BodyPath)
 	bytes, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return model.CanonicalEpisode{}, false, nil
 		}
-		return false, err
+		return model.CanonicalEpisode{}, false, err
 	}
 	if err := validateCanonicalEpisodeSchema(path, bytes); err != nil {
-		return false, err
+		return model.CanonicalEpisode{}, false, err
 	}
-	return sha256Hex(bytes) == episode.ContentHash, nil
+	if sha256Hex(bytes) != episode.ContentHash {
+		return model.CanonicalEpisode{}, false, nil
+	}
+	var document model.CanonicalEpisode
+	if err := json.Unmarshal(bytes, &document); err != nil {
+		return model.CanonicalEpisode{}, false, err
+	}
+	return document, true, nil
 }
 
 func validateUniqueEpisodeIDs(episodes []model.Episode) error {

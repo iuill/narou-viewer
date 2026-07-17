@@ -32,6 +32,7 @@ type fakeStore struct {
 	updateErrorMessage string
 	saveErr            error
 	checkpointValid    bool
+	checkpointExists   bool
 	checkpointCalls    int
 	recordCalls        int
 	taskSaveCalls      int
@@ -131,9 +132,9 @@ func (s *fakeStore) SaveEpisodeBody(_ context.Context, _ model.Work, _ model.Sto
 	return model.StoredEpisode{EpisodeID: episode.Index, BodyStatus: storage.BodyStatusComplete}, nil
 }
 
-func (s *fakeStore) IsTaskEpisodeCheckpointValid(_ context.Context, _ taskstate.TaskRef, _ int, _ string) (bool, error) {
+func (s *fakeStore) IsTaskEpisodeCheckpointValid(_ context.Context, _ taskstate.TaskRef, _ model.Work, _ model.StoredWork, _ model.Episode, _ int) (bool, bool, error) {
 	s.checkpointCalls++
-	return s.checkpointValid, nil
+	return s.checkpointValid, s.checkpointExists || s.checkpointValid, nil
 }
 
 func (s *fakeStore) RecordTaskEpisodeCheckpoint(_ context.Context, _ taskstate.TaskRef, _ int, _ string, _ int, _ string) error {
@@ -641,6 +642,33 @@ func TestRunTaskUsesTaskCheckpointBeforeLocalSkipAndSave(t *testing.T) {
 		}
 		if store.checkpointCalls != 1 || store.taskSaveCalls != 1 || len(fetcher.fetched) != 1 {
 			t.Fatalf("save path = calls:%d saves:%d fetched:%#v", store.checkpointCalls, store.taskSaveCalls, fetcher.fetched)
+		}
+	})
+
+	t.Run("stale checkpoint cannot fall back to local timestamp skip", func(t *testing.T) {
+		store := &fakeStore{
+			work:             model.StoredWork{ID: 65, Site: model.SiteSyosetu, SiteWorkID: "checkpoint-work", SourceURL: "https://example.invalid/checkpoint/"},
+			foundByID:        true,
+			checkpointExists: true,
+			episodes: []model.StoredEpisode{{
+				EpisodeID:  "1",
+				BodyStatus: storage.BodyStatusComplete,
+				UpdatedAt:  "2026/05/09 12:00",
+			}},
+		}
+		workWithRevision := work
+		workWithRevision.Episodes = []model.Episode{{Index: "1", Title: "第一話", ModifiedAt: "2026/05/09 12:00"}}
+		fetcher := &fakeFetcher{work: workWithRevision}
+		service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: &recordingReporter{}})
+		task := taskqueue.NewTask("update")
+		task.NovelIDs = []int{65}
+		task.SkipUnchanged = true
+		task.AttemptCount = 2
+		if err := service.RunTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+		if store.checkpointCalls != 1 || store.recordCalls != 0 || store.taskSaveCalls != 1 || len(fetcher.fetched) != 1 {
+			t.Fatalf("stale checkpoint path = checks:%d records:%d saves:%d fetched:%#v", store.checkpointCalls, store.recordCalls, store.taskSaveCalls, fetcher.fetched)
 		}
 	})
 }

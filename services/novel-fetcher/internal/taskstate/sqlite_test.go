@@ -735,6 +735,27 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 	if _, err := repository.RequestResume(context.Background(), conflict.ID); !errors.Is(err, ErrTaskAlreadyActive) {
 		t.Fatalf("resume conflict error = %v", err)
 	}
+
+	failedDownload := NewTask("download")
+	failedDownload.Targets = []string{"https://example.com/control/resume-dedupe"}
+	if _, err := repository.Enqueue(context.Background(), []*Task{failedDownload}); err != nil {
+		t.Fatal(err)
+	}
+	claimedDownload, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Finalize(context.Background(), TaskRef{TaskID: claimedDownload.ID, Attempt: claimedDownload.AttemptCount}, Outcome{Status: StatusFailed, Error: errors.New("temporary")}); err != nil {
+		t.Fatal(err)
+	}
+	activeDownload := NewTask("download")
+	activeDownload.Targets = append([]string(nil), failedDownload.Targets...)
+	if _, err := repository.Enqueue(context.Background(), []*Task{activeDownload}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.RequestResume(context.Background(), failedDownload.ID); !errors.Is(err, ErrTaskAlreadyActive) {
+		t.Fatalf("resume dedupe conflict error = %v", err)
+	}
 }
 
 func TestSQLiteRepositoryRejectsUnknownRequestVersionAndInvalidFinalization(t *testing.T) {
@@ -760,6 +781,21 @@ func TestSQLiteRepositoryRejectsUnknownRequestVersionAndInvalidFinalization(t *t
 	}
 	if _, err := DecodeRequest("{"); err == nil {
 		t.Fatal("malformed JSON was accepted")
+	}
+}
+
+func TestActiveReservationConstraintClassification(t *testing.T) {
+	if !isActiveReservationConstraint(errors.New("constraint failed: UNIQUE constraint failed: fetch_tasks.dedupe_key (2067)")) {
+		t.Fatal("active dedupe unique constraint was not classified")
+	}
+	if !isActiveReservationConstraint(errors.New("UNIQUE constraint failed: idx_fetch_tasks_active_dedupe")) {
+		t.Fatal("active dedupe index constraint was not classified")
+	}
+	if isActiveReservationConstraint(errors.New("UNIQUE constraint failed: fetch_task_queue.task_id")) {
+		t.Fatal("unrelated unique constraint was classified as an active reservation")
+	}
+	if isActiveReservationConstraint(errors.New("database is locked")) {
+		t.Fatal("non-constraint error was classified as an active reservation")
 	}
 }
 

@@ -804,6 +804,7 @@ func TestPersistentTaskControlEndpointsExposeDurableState(t *testing.T) {
 func TestNewWithErrorRequiresStorage(t *testing.T) {
 	app := New(Options{Logger: slog.Default()})
 	app.Start(context.Background())
+	app.Shutdown(context.Background())
 	if app == nil || app.initErr == nil {
 		t.Fatal("missing storage did not produce initialization error")
 	}
@@ -871,7 +872,41 @@ func TestRunningTaskControlAcknowledgesCancellationRequest(t *testing.T) {
 	if paused.Code != http.StatusAccepted {
 		t.Fatalf("running pause status = %d: %s", paused.Code, paused.Body.String())
 	}
+	pausedData := decodeObject(t, paused)["data"].(map[string]any)
+	if pausedData["changed"] != true {
+		t.Fatalf("running pause data = %#v", pausedData)
+	}
 	waitForIdleApp(t, app)
+}
+
+func TestResumeTaskReturnsConflictWhenDownloadTargetIsAlreadyActive(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	defer store.Close()
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
+
+	failed := taskqueue.NewTask("download")
+	failed.Targets = []string{"https://example.com/resume-target-conflict"}
+	if err := app.queue.Enqueue(failed); err != nil {
+		t.Fatal(err)
+	}
+	repository := taskstate.NewSQLiteRepository(store.DB())
+	claimed, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNext() = %#v, err = %v", claimed, err)
+	}
+	if err := repository.Finalize(context.Background(), taskstate.TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}, taskstate.Outcome{Status: taskstate.StatusFailed, Error: errors.New("temporary")}); err != nil {
+		t.Fatal(err)
+	}
+	active := taskqueue.NewTask("download")
+	active.Targets = append([]string(nil), failed.Targets...)
+	if err := app.queue.Enqueue(active); err != nil {
+		t.Fatal(err)
+	}
+
+	response := performRequest(app, http.MethodPost, "/api/v2/tasks/"+failed.ID+"/resume", "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("resume conflict status = %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestRunningTaskCancelEndpointAcknowledgesCancellationRequest(t *testing.T) {

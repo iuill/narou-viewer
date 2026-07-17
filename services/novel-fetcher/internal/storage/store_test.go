@@ -238,23 +238,29 @@ func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
 	if err := store.RecordTaskEpisodeCheckpoint(context.Background(), ref, stored.ID, "missing", 0, ""); err == nil {
 		t.Fatal("missing episode checkpoint unexpectedly succeeded")
 	}
-	valid, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	valid, _, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, work.Episodes[0], 0)
 	if err != nil || valid {
 		t.Fatalf("checkpoint before record = %v, err = %v", valid, err)
 	}
 	if err := store.RecordTaskEpisodeCheckpoint(context.Background(), ref, stored.ID, "1", 0, ""); err != nil {
 		t.Fatal(err)
 	}
-	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	valid, _, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, work.Episodes[0], 0)
 	if err != nil || !valid {
 		t.Fatalf("checkpoint after record = %v, err = %v", valid, err)
+	}
+	newRevision := work.Episodes[0]
+	newRevision.ModifiedAt = "2026/05/10 12:00"
+	valid, _, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, newRevision, 0)
+	if err != nil || valid {
+		t.Fatalf("checkpoint for older source revision = %v, err = %v", valid, err)
 	}
 	updatedEpisode := work.Episodes[0]
 	updatedEpisode.Element.Body = "<p>更新本文</p>"
 	if _, err := store.SaveEpisodeBodyForTask(context.Background(), ref, work, stored, updatedEpisode, 0, ""); err != nil {
 		t.Fatalf("SaveEpisodeBodyForTask() error = %v", err)
 	}
-	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	valid, _, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, updatedEpisode, 0)
 	if err != nil || !valid {
 		t.Fatalf("checkpoint after atomic save = %v, err = %v", valid, err)
 	}
@@ -279,21 +285,21 @@ func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.rootDir, episode.BodyPath), []byte(`{"schema_version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	valid, _, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, updatedEpisode, 0)
 	if err != nil || valid {
 		t.Fatalf("checkpoint after body mutation = %v, err = %v", valid, err)
 	}
 	if err := os.Remove(filepath.Join(store.rootDir, episode.BodyPath)); err != nil {
 		t.Fatal(err)
 	}
-	valid, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1")
+	valid, _, err = store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, updatedEpisode, 0)
 	if err != nil || valid {
 		t.Fatalf("checkpoint after body removal = %v, err = %v", valid, err)
 	}
 	if err := os.WriteFile(filepath.Join(store.rootDir, episode.BodyPath), []byte(`{"schema_version":99}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, stored.ID, "1"); err == nil {
+	if _, _, err := store.IsTaskEpisodeCheckpointValid(context.Background(), ref, work, stored, updatedEpisode, 0); err == nil {
 		t.Fatal("future episode schema was accepted")
 	}
 }

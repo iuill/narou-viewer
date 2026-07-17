@@ -77,7 +77,9 @@ func (a *App) Start(ctx context.Context) {
 }
 
 func (a *App) Shutdown(ctx context.Context) {
-	a.runner.Stop(ctx)
+	if a.runner != nil {
+		a.runner.Stop(ctx)
+	}
 }
 
 func (a *App) Handler() http.Handler {

@@ -262,6 +262,14 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 	if task.Status == StatusCanceled || task.Status == StatusSucceeded || task.Status == StatusQueued || task.Status == StatusRunning {
 		return ControlResult{Task: task, Changed: false}, fmt.Errorf("%w: task %s cannot resume from %s", ErrTaskStateConflict, taskID, task.Status)
 	}
+	var dedupeConflict string
+	err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE dedupe_key = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, task.DedupeKey, taskID).Scan(&dedupeConflict)
+	if err == nil {
+		return ControlResult{}, fmt.Errorf("%w: resource %s is already reserved by task %s", ErrTaskAlreadyActive, task.DedupeKey, dedupeConflict)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return ControlResult{}, err
+	}
 	if task.PrimaryWorkID > 0 {
 		var conflict string
 		err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, task.PrimaryWorkID, taskID).Scan(&conflict)
@@ -274,6 +282,9 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET status = 'queued', requested_action = '', execution_committed = 0, finished_at = '', paused_at = '', interrupted_at = '', last_enqueued_at = ?, updated_at = ? WHERE task_id = ?`, now, now, taskID); err != nil {
+		if isActiveReservationConstraint(err) {
+			return ControlResult{}, fmt.Errorf("%w: resource %s became reserved while resuming task %s", ErrTaskAlreadyActive, task.DedupeKey, taskID)
+		}
 		return ControlResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO fetch_task_queue(task_id, enqueued_at) VALUES (?, ?)`, taskID, now); err != nil {
@@ -290,6 +301,12 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 		return ControlResult{}, err
 	}
 	return ControlResult{Task: task, Changed: true}, nil
+}
+
+func isActiveReservationConstraint(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint") &&
+		(strings.Contains(message, "fetch_tasks.dedupe_key") || strings.Contains(message, "idx_fetch_tasks_active_dedupe"))
 }
 
 func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, action RequestedAction) (ControlResult, error) {
