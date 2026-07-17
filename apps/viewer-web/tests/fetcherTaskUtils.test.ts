@@ -9,6 +9,8 @@ import {
   getFetcherActiveTasks,
   getFetcherBusyFetcherWorkIds,
   getFetcherQueuedTasks,
+  getFetcherResumableTaskEntries,
+  getFetcherResumableTaskWorkIds,
   getFetcherTaskProgressValue,
   getFetcherTaskListEntries,
   hasFetcherTaskDeterminateProgress,
@@ -153,6 +155,27 @@ describe("fetcherTaskUtils", () => {
       "update-queued",
       "convert-queued",
     ]);
+  });
+
+  it("excludes canceled history from resumable tasks and owned work IDs", () => {
+    const summary = toFetcherTaskSummary({
+      current: null,
+      queued: [],
+      paused: [{ id: "paused", type: "update", novelIds: ["101"], status: "paused", canResume: true }],
+      interrupted: [],
+      recentCompleted: [],
+      recentFailed: [
+        { id: "failed", type: "resume", novelIds: ["102"], status: "failed", canResume: true },
+        { id: "canceled", type: "resume", novelIds: ["103"], status: "canceled", canResume: false }
+      ],
+      completedCount: 0,
+      failedCount: 2,
+      convertCurrent: null,
+      convertQueued: []
+    } satisfies FetcherTaskSummaryResponse);
+
+    expect(getFetcherResumableTaskEntries(summary).map((entry) => entry.task.id)).toEqual(["paused", "failed"]);
+    expect([...getFetcherResumableTaskWorkIds(summary)]).toEqual(["101", "102"]);
   });
 
   it("preserves current task payload fields", () => {

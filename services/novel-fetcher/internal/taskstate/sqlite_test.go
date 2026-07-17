@@ -788,7 +788,7 @@ func TestActiveReservationConstraintClassification(t *testing.T) {
 	if !isActiveReservationConstraint(errors.New("constraint failed: UNIQUE constraint failed: fetch_tasks.dedupe_key (2067)")) {
 		t.Fatal("active dedupe unique constraint was not classified")
 	}
-	if !isActiveReservationConstraint(errors.New("UNIQUE constraint failed: idx_fetch_tasks_active_dedupe")) {
+	if !isActiveReservationConstraint(errors.New("UNIQUE constraint failed: fetch_tasks_reserved_dedupe_idx")) {
 		t.Fatal("active dedupe index constraint was not classified")
 	}
 	if isActiveReservationConstraint(errors.New("UNIQUE constraint failed: fetch_task_queue.task_id")) {
@@ -796,6 +796,45 @@ func TestActiveReservationConstraintClassification(t *testing.T) {
 	}
 	if isActiveReservationConstraint(errors.New("database is locked")) {
 		t.Fatal("non-constraint error was classified as an active reservation")
+	}
+}
+
+func TestSQLiteRepositoryRejectsConflictingRunningControlActions(t *testing.T) {
+	tests := []struct {
+		name       string
+		first      RequestedAction
+		second     RequestedAction
+		requestOne func(*SQLiteRepository, context.Context, string) (ControlResult, error)
+		requestTwo func(*SQLiteRepository, context.Context, string) (ControlResult, error)
+	}{
+		{name: "pause then cancel", first: RequestedActionPause, second: RequestedActionCancel, requestOne: (*SQLiteRepository).RequestPause, requestTwo: (*SQLiteRepository).RequestCancel},
+		{name: "cancel then pause", first: RequestedActionCancel, second: RequestedActionPause, requestOne: (*SQLiteRepository).RequestCancel, requestTwo: (*SQLiteRepository).RequestPause},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, repository := newRepository(t)
+			task := NewTask("download")
+			task.Targets = []string{"https://example.com/control/" + strings.ReplaceAll(test.name, " ", "-")}
+			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.ClaimNext(context.Background(), time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			first, err := test.requestOne(repository, context.Background(), task.ID)
+			if err != nil || !first.Changed || first.Task.RequestedAction != test.first {
+				t.Fatalf("first action = %#v, err = %v", first, err)
+			}
+			second, err := test.requestTwo(repository, context.Background(), task.ID)
+			if !errors.Is(err, ErrTaskStateConflict) || second.Changed {
+				t.Fatalf("second action %s = %#v, err = %v", test.second, second, err)
+			}
+			stored, found, err := repository.Get(context.Background(), task.ID)
+			if err != nil || !found || stored.RequestedAction != test.first {
+				t.Fatalf("stored task = %#v, found = %v, err = %v", stored, found, err)
+			}
+		})
 	}
 }
 

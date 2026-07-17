@@ -12,7 +12,7 @@
 - `canceled`: 利用者が破棄した task。task-level resume は行わず、必要なら新しい取得要求を投入する。
 - `succeeded`: 保存処理の commit fence まで完了した task。commit 後に遅れて cancel が記録された場合も、起動時 recovery は確定済みの保存結果を優先する。
 
-`running` の `requestedAction` が `pause` または `cancel` の間は、実行中の HTTP request・retry wait・host rate-limit wait が停止するのを待ちます。UI は optimistic に最終状態を確定せず、次の polling 結果を正本として扱います。
+`running` の `requestedAction` が `pause` または `cancel` の間は、実行中の HTTP request・retry wait・host rate-limit wait が停止するのを待ちます。同じ action の再送は冪等に扱い、異なる action への切り替えは `409 Conflict` とするため、最初の action が terminal state へ確定してから次の操作を行います。UI は optimistic に最終状態を確定せず、次の polling 結果を正本として扱います。
 
 download の予約 identity は、対応サイトの作品 ID を正規形とします。同じ作品を N コードと小説家になろう URL、またはカクヨムの作品 URL と episode URL で重ねて投入しても同一作品として扱います。同じ identity・option の要求は既存 task ID へ dedupe し、option が異なる要求や同じ作品への update / resume は先行 task が予約を解放するまで conflict にします。
 

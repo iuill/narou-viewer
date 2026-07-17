@@ -13,6 +13,7 @@ import {
   getFetcherBusyFetcherWorkIds,
   getFetcherQueuedTasks,
   getFetcherResumableTaskEntries,
+  getFetcherResumableTaskWorkIds,
   getFetcherTaskListEntries
 } from "../../features/fetcher/model";
 import { extractDroppedDownloadTarget } from "../../features/library/downloadTarget";
@@ -572,18 +573,7 @@ export function useFetcherLibraryModel({
     () => getFetcherTaskListEntries(fetcherTasks?.interrupted.slice(0, 3) ?? []),
     [fetcherTasks]
   );
-  const taskOwnedResumeWorkIds = useMemo(() => {
-    const workIds = new Set<string>();
-    for (const task of [...(fetcherTasks?.paused ?? []), ...(fetcherTasks?.interrupted ?? []), ...(fetcherTasks?.recentFailed ?? [])]) {
-      if (task.novelId) {
-        workIds.add(task.novelId);
-      }
-      for (const novelId of task.novelIds) {
-        workIds.add(novelId);
-      }
-    }
-    return workIds;
-  }, [fetcherTasks]);
+  const taskOwnedResumeWorkIds = useMemo(() => getFetcherResumableTaskWorkIds(fetcherTasks), [fetcherTasks]);
   const resumableNovels = useMemo(
     () => novels.filter((novel) => canResumeLibraryNovel(novel) && !taskOwnedResumeWorkIds.has(novel.fetcherWorkId ?? "")),
     [novels, taskOwnedResumeWorkIds]

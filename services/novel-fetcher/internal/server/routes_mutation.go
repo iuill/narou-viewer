@@ -206,7 +206,11 @@ func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request
 	// single SQLite writer connection, so waiting for the durable write before
 	// cancellation can otherwise make the control request wait on the HTTP work
 	// that it is supposed to stop.
-	signaled := a.runner.SignalCancel(taskID)
+	signaled, signalErr := a.runner.SignalCancel(taskID)
+	if signalErr != nil {
+		writeTaskStateError(writer, signalErr)
+		return
+	}
 	result, err := a.queue.RequestCancel(taskID)
 	if err != nil && signaled && errors.Is(err, taskstate.ErrTaskStateConflict) {
 		// The runner may finalize the canceled task between the in-memory signal
@@ -221,7 +225,7 @@ func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request
 		writeTaskStateError(writer, err)
 		return
 	}
-	if result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
+	if !signaled && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
 		a.runner.Cancel(taskID)
 	}
 	status := http.StatusOK
@@ -250,7 +254,10 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	signaled := false
 	switch action {
 	case "pause":
-		signaled = a.runner.SignalPause(taskID)
+		signaled, err = a.runner.SignalPause(taskID)
+		if err != nil {
+			break
+		}
 		result, err = a.queue.RequestPause(taskID)
 	case "resume":
 		result, err = a.queue.RequestResume(taskID)
@@ -274,7 +281,7 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 		writeTaskStateError(writer, err)
 		return
 	}
-	if action == "pause" && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
+	if action == "pause" && !signaled && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
 		a.runner.Pause(taskID)
 	}
 	status := http.StatusOK

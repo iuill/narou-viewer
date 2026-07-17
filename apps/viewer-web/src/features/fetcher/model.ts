@@ -331,7 +331,22 @@ export function getFetcherResumableTaskEntries(summary: FetcherTaskSummary | nul
     return [];
   }
 
-  return getFetcherTaskListEntries([...summary.paused, ...summary.interrupted, ...summary.recentFailed]);
+  return getFetcherTaskListEntries(
+    [...summary.paused, ...summary.interrupted, ...summary.recentFailed].filter((task) => task.canResume)
+  );
+}
+
+export function getFetcherResumableTaskWorkIds(summary: FetcherTaskSummary | null): Set<string> {
+  const workIds = new Set<string>();
+  for (const entry of getFetcherResumableTaskEntries(summary)) {
+    if (entry.task.novelId) {
+      workIds.add(entry.task.novelId);
+    }
+    for (const novelId of entry.task.novelIds) {
+      workIds.add(novelId);
+    }
+  }
+  return workIds;
 }
 
 export function getFetcherBusyFetcherWorkIds(summary: FetcherTaskSummary | null): Set<string> {

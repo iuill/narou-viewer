@@ -37,6 +37,13 @@ type blockingTocFetcher struct {
 	work      model.Work
 }
 
+type heldControlTocFetcher struct {
+	entered  chan struct{}
+	observed chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
 type staticFetcher struct {
 	work model.Work
 	err  error
@@ -83,6 +90,18 @@ func (f *blockingTocFetcher) FetchEpisode(_ context.Context, _ model.Work, episo
 	}
 	episode.RawHTML = "<p>本文</p>"
 	episode.FetchedAt = time.Now()
+	return episode, nil
+}
+
+func (f *heldControlTocFetcher) FetchToc(ctx context.Context, _ string, _ sites.ProgressReporter) (model.Work, error) {
+	close(f.entered)
+	<-ctx.Done()
+	f.once.Do(func() { close(f.observed) })
+	<-f.release
+	return model.Work{}, ctx.Err()
+}
+
+func (f *heldControlTocFetcher) FetchEpisode(_ context.Context, _ model.Work, episode model.Episode, _ sites.ProgressReporter) (model.Episode, error) {
 	return episode, nil
 }
 
@@ -936,6 +955,73 @@ func TestRunningTaskCancelEndpointAcknowledgesCancellationRequest(t *testing.T) 
 		t.Fatalf("running cancel status = %d: %s", canceled.Code, canceled.Body.String())
 	}
 	waitForIdleApp(t, app)
+}
+
+func TestRunningTaskRejectsConflictingControlActions(t *testing.T) {
+	tests := []struct {
+		name            string
+		firstAction     string
+		secondAction    string
+		requestedAction string
+		terminalStatus  string
+	}{
+		{name: "pause then cancel", firstAction: "pause", secondAction: "cancel", requestedAction: "pause", terminalStatus: string(taskqueue.StatusPaused)},
+		{name: "cancel then pause", firstAction: "cancel", secondAction: "pause", requestedAction: "cancel", terminalStatus: string(taskqueue.StatusCanceled)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, _ := newTestStoreWithWork(t)
+			fetcher := &heldControlTocFetcher{entered: make(chan struct{}), observed: make(chan struct{}), release: make(chan struct{})}
+			releaseControl := func() {
+				select {
+				case <-fetcher.release:
+				default:
+					close(fetcher.release)
+				}
+			}
+			app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+			startApp(t, app)
+			defer store.Close()
+			defer app.Shutdown(context.Background())
+			defer releaseControl()
+
+			created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/conflicting-control/`+test.requestedAction+`"]}`)
+			if created.Code != http.StatusAccepted {
+				t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+			}
+			select {
+			case <-fetcher.entered:
+			case <-time.After(time.Second):
+				t.Fatal("task did not start")
+			}
+			taskID := decodeObject(t, created)["data"].(map[string]any)["task_ids"].([]any)[0].(string)
+			first := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.firstAction, "")
+			if first.Code != http.StatusAccepted {
+				t.Fatalf("first control status = %d: %s", first.Code, first.Body.String())
+			}
+			firstData := decodeObject(t, first)["data"].(map[string]any)
+			if firstData["changed"] != true || firstData["requested_action"] != test.requestedAction {
+				t.Fatalf("first control data = %#v", firstData)
+			}
+			select {
+			case <-fetcher.observed:
+			case <-time.After(time.Second):
+				t.Fatal("executor did not observe control signal")
+			}
+
+			second := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.secondAction, "")
+			if second.Code != http.StatusConflict {
+				t.Fatalf("second control status = %d: %s", second.Code, second.Body.String())
+			}
+			releaseControl()
+			waitForIdleApp(t, app)
+			stored, found, err := app.queue.GetTask(taskID)
+			if err != nil || !found || string(stored.Status) != test.terminalStatus || stored.RequestedAction != taskstate.RequestedActionNone {
+				t.Fatalf("terminal task = %#v, found = %v, err = %v", stored, found, err)
+			}
+		})
+	}
 }
 
 func TestRunningTaskCancelInterruptsAssetHTTPBeforeDurableControlWrite(t *testing.T) {

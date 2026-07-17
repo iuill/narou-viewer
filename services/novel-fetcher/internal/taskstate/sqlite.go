@@ -306,7 +306,7 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 func isActiveReservationConstraint(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unique constraint") &&
-		(strings.Contains(message, "fetch_tasks.dedupe_key") || strings.Contains(message, "idx_fetch_tasks_active_dedupe"))
+		(strings.Contains(message, "fetch_tasks.dedupe_key") || strings.Contains(message, "fetch_tasks_reserved_dedupe_idx"))
 }
 
 func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, action RequestedAction) (ControlResult, error) {
@@ -330,6 +330,9 @@ func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, act
 	}
 	if task.Status == StatusRunning && task.RequestedAction == action {
 		return ControlResult{Task: task, Changed: false}, nil
+	}
+	if task.Status == StatusRunning && task.RequestedAction != RequestedActionNone {
+		return ControlResult{Task: task, Changed: false}, fmt.Errorf("%w: task %s already has requested action %s", ErrTaskStateConflict, taskID, task.RequestedAction)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if task.Status == StatusQueued && action == RequestedActionPause {

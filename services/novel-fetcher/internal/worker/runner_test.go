@@ -189,7 +189,7 @@ func TestRunnerCancelDuringCurrentTaskHandoff(t *testing.T) {
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer func() { cancel(nil) }()
-	runner.setRunningTask(next.ID, cancel)
+	runner.setRunningTask(taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, cancel)
 
 	select {
 	case <-ctx.Done():
@@ -220,7 +220,7 @@ func TestRunnerAppliesPersistedControlDuringHandoff(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer func() { cancel(nil) }()
 	runner := NewRunner(Options{Queue: queue})
-	runner.setRunningTask(next.ID, cancel)
+	runner.setRunningTask(taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, cancel)
 	if !errors.Is(context.Cause(ctx), taskstate.ErrTaskCancelRequested) {
 		t.Fatalf("handoff cause = %v", context.Cause(ctx))
 	}
@@ -243,18 +243,53 @@ func TestRunnerWaitForNextWorkHonorsIntervalAndCancellation(t *testing.T) {
 func TestRunnerSignalMethodsOnlyCancelMatchingRunningTask(t *testing.T) {
 	runner := NewRunner(Options{Queue: taskqueue.NewQueue()})
 	cancelCtx, cancel := context.WithCancelCause(context.Background())
-	runner.setRunningTask("cancel", cancel)
-	if runner.SignalCancel("other") {
+	runner.setRunningTask(taskstate.TaskRef{TaskID: "cancel", Attempt: 1}, cancel)
+	if signaled, err := runner.SignalCancel("other"); err != nil || signaled {
 		t.Fatal("different task was signaled")
 	}
-	if !runner.SignalCancel("cancel") || !errors.Is(context.Cause(cancelCtx), taskstate.ErrTaskCancelRequested) {
+	if signaled, err := runner.SignalCancel("cancel"); err != nil || !signaled || !errors.Is(context.Cause(cancelCtx), taskstate.ErrTaskCancelRequested) {
 		t.Fatalf("cancel signal cause = %v", context.Cause(cancelCtx))
+	}
+	if _, err := runner.SignalPause("cancel"); !errors.Is(err, taskstate.ErrTaskStateConflict) {
+		t.Fatalf("conflicting pause signal error = %v", err)
 	}
 
 	pauseCtx, pause := context.WithCancelCause(context.Background())
-	runner.setRunningTask("pause", pause)
-	if !runner.SignalPause("pause") || !errors.Is(context.Cause(pauseCtx), taskstate.ErrTaskPauseRequested) {
+	runner.setRunningTask(taskstate.TaskRef{TaskID: "pause", Attempt: 1}, pause)
+	if signaled, err := runner.SignalPause("pause"); err != nil || !signaled || !errors.Is(context.Cause(pauseCtx), taskstate.ErrTaskPauseRequested) {
 		t.Fatalf("pause signal cause = %v", context.Cause(pauseCtx))
+	}
+	if signaled, err := runner.SignalPause("pause"); err != nil || !signaled {
+		t.Fatalf("repeated pause signal = %v, err = %v", signaled, err)
+	}
+}
+
+func TestRunnerAppliesPendingControlToMatchingAttempt(t *testing.T) {
+	runner := NewRunner(Options{Queue: taskqueue.NewQueue()})
+	ref := taskstate.TaskRef{TaskID: "resume", Attempt: 1}
+	runner.markPending(ref, taskstate.ErrTaskPauseRequested)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	runner.setRunningTask(ref, cancel)
+
+	if !errors.Is(context.Cause(ctx), taskstate.ErrTaskPauseRequested) {
+		t.Fatalf("matching pending cause = %v", context.Cause(ctx))
+	}
+}
+
+func TestRunnerDoesNotApplyPendingControlToNextAttempt(t *testing.T) {
+	runner := NewRunner(Options{Queue: taskqueue.NewQueue()})
+	runner.markPending(taskstate.TaskRef{TaskID: "resume", Attempt: 1}, taskstate.ErrTaskPauseRequested)
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	runner.setRunningTask(taskstate.TaskRef{TaskID: "resume", Attempt: 2}, cancel)
+
+	select {
+	case <-ctx.Done():
+		t.Fatalf("stale pending cause reached next attempt: %v", context.Cause(ctx))
+	default:
 	}
 }
 
