@@ -1083,6 +1083,80 @@ func TestRunningTaskCancelInterruptsAssetHTTPBeforeDurableControlWrite(t *testin
 	waitForIdleApp(t, app)
 }
 
+func TestQueuedTaskControlWaitingOnSQLiteDoesNotBlockCurrentTaskCancel(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetFetcher := &blockingAssetFetcher{entered: make(chan struct{})}
+	store.SetAssetFetcher(assetFetcher, fetcher.FetchPolicy{})
+	app := New(Options{
+		Config: config.Config{},
+		Store:  store,
+		Fetcher: staticFetcher{work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n8888ab", Title: "task別制御作品", Author: "作者",
+			Episodes: []model.Episode{{
+				Index: "1", Href: "/n8888ab/1/", Title: "第一話", FetchedAt: time.Now(),
+				Element: model.EpisodeElement{DataType: "html", Body: `<p><img src="https://example.com/image.png"></p>`},
+			}},
+		}},
+		Logger: slog.Default(),
+	})
+	t.Cleanup(func() {
+		app.Shutdown(context.Background())
+		_ = store.Close()
+	})
+
+	current := taskqueue.NewTask("download")
+	current.Targets = []string{"https://example.com/current-with-asset"}
+	queued := taskqueue.NewTask("download")
+	queued.Targets = []string{"https://example.com/queued-control"}
+	if err := app.queue.Enqueue(current, queued); err != nil {
+		t.Fatal(err)
+	}
+	startApp(t, app)
+	select {
+	case <-assetFetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("asset fetch did not start")
+	}
+
+	waitCount := store.DB().Stats().WaitCount
+	queuedResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		queuedResponse <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+queued.ID+"/pause", "")
+	}()
+	deadline := time.After(time.Second)
+	for store.DB().Stats().WaitCount == waitCount {
+		select {
+		case response := <-queuedResponse:
+			t.Fatalf("queued pause returned before entering SQLite wait: %d: %s", response.Code, response.Body.String())
+		case <-deadline:
+			t.Fatal("queued pause did not wait for the SQLite connection")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	currentResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		currentResponse <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+current.ID+"/cancel", "")
+	}()
+	for name, responses := range map[string]<-chan *httptest.ResponseRecorder{
+		"queued pause":   queuedResponse,
+		"current cancel": currentResponse,
+	} {
+		select {
+		case response := <-responses:
+			if response.Code != http.StatusOK && response.Code != http.StatusAccepted {
+				t.Fatalf("%s status = %d: %s", name, response.Code, response.Body.String())
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s remained blocked", name)
+		}
+	}
+	waitForIdleApp(t, app)
+}
+
 func (f *progressFetcher) FetchToc(_ context.Context, target string, _ sites.ProgressReporter) (model.Work, error) {
 	return model.Work{
 		Site:       model.SiteSyosetu,

@@ -50,6 +50,13 @@ type blockingFinalizeRepository struct {
 	once    sync.Once
 }
 
+type postCommitFinalizeRepository struct {
+	taskstate.Repository
+	committed chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
 func (e *closingStoreExecutor) RunTask(_ context.Context, _ *taskqueue.Task) error {
 	_ = e.store.Close()
 	close(e.closed)
@@ -82,6 +89,13 @@ func (r *blockingFinalizeRepository) Finalize(ctx context.Context, ref taskstate
 	r.once.Do(func() { close(r.entered) })
 	<-r.release
 	return r.Repository.Finalize(ctx, ref, outcome)
+}
+
+func (r *postCommitFinalizeRepository) Finalize(ctx context.Context, ref taskstate.TaskRef, outcome taskstate.Outcome) error {
+	err := r.Repository.Finalize(ctx, ref, outcome)
+	r.once.Do(func() { close(r.committed) })
+	<-r.release
+	return err
 }
 
 func TestRunnerStartAndStopAreIdempotent(t *testing.T) {
@@ -226,6 +240,48 @@ func TestRunnerControlsQueuedTasksBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestRunnerStartingControlKeepsFirstInMemoryAction(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		first         func(*Runner, string) (taskstate.ControlResult, error)
+		second        func(*Runner, string) (taskstate.ControlResult, error)
+		expectedCause error
+	}{
+		{name: "pause then cancel", first: (*Runner).RequestPause, second: (*Runner).RequestCancel, expectedCause: taskstate.ErrTaskPauseRequested},
+		{name: "cancel then pause", first: (*Runner).RequestCancel, second: (*Runner).RequestPause, expectedCause: taskstate.ErrTaskCancelRequested},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queue := taskqueue.NewQueue()
+			task := taskqueue.NewTask("download")
+			if err := queue.Enqueue(task); err != nil {
+				t.Fatal(err)
+			}
+			claimed := queue.PopNext()
+			if claimed == nil {
+				t.Fatal("task was not claimed")
+			}
+			taskCtx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			runner := NewRunner(Options{Queue: queue})
+			runner.taskRef = taskstate.TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
+			runner.taskPhase = runnerPhaseStarting
+			runner.taskCancel = cancel
+
+			first, err := test.first(runner, task.ID)
+			if err != nil || !first.Changed || !errors.Is(context.Cause(taskCtx), test.expectedCause) {
+				t.Fatalf("first starting control = %#v, cause = %v, err = %v", first, context.Cause(taskCtx), err)
+			}
+			repeated, err := test.first(runner, task.ID)
+			if err != nil || repeated.Changed {
+				t.Fatalf("repeated starting control = %#v, err = %v", repeated, err)
+			}
+			if _, err := test.second(runner, task.ID); !errors.Is(err, taskstate.ErrTaskStateConflict) {
+				t.Fatalf("conflicting starting control error = %v", err)
+			}
+		})
+	}
+}
+
 func TestRunnerStartingHandoffKeepsDurableControlAsWinner(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -271,34 +327,24 @@ func TestRunnerStartingHandoffKeepsDurableControlAsWinner(t *testing.T) {
 			}
 			var firstResult taskstate.ControlResult
 			if test.first == taskstate.RequestedActionPause {
-				firstResult, err = base.RequestPause(context.Background(), task.ID)
+				firstResult, err = runner.RequestPause(task.ID)
 			} else {
-				firstResult, err = base.RequestCancel(context.Background(), task.ID)
+				firstResult, err = runner.RequestCancel(task.ID)
 			}
 			if err != nil || !firstResult.Changed || firstResult.Task.RequestedAction != test.first {
 				t.Fatalf("first durable control = %#v, err = %v", firstResult, err)
 			}
 
-			secondErr := make(chan error, 1)
-			go func() {
-				var requestErr error
-				if test.second == taskstate.RequestedActionPause {
-					_, requestErr = runner.RequestPause(task.ID)
-				} else {
-					_, requestErr = runner.RequestCancel(task.ID)
-				}
-				secondErr <- requestErr
-			}()
+			if test.second == taskstate.RequestedActionPause {
+				_, err = runner.RequestPause(task.ID)
+			} else {
+				_, err = runner.RequestCancel(task.ID)
+			}
+			if !errors.Is(err, taskstate.ErrTaskStateConflict) {
+				t.Fatalf("second control error = %v", err)
+			}
 			close(repository.release)
 			released = true
-			select {
-			case err := <-secondErr:
-				if !errors.Is(err, taskstate.ErrTaskStateConflict) {
-					t.Fatalf("second control error = %v", err)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("second control did not return")
-			}
 			waitForTaskStatus(t, base, task.ID, test.wantStatus)
 		})
 	}
@@ -460,6 +506,64 @@ func TestRunnerKeepsAcceptedControlIdempotentWhileFinalizing(t *testing.T) {
 	waitForTaskStatus(t, base, task.ID, taskstate.StatusPaused)
 }
 
+func TestRunnerRejectsResumeUntilFinalizedAttemptIsCleared(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := taskstate.NewSQLiteRepository(store.DB())
+	repository := &postCommitFinalizeRepository{
+		Repository: base,
+		committed:  make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	released := false
+	queue := taskqueue.NewPersistentQueue(repository)
+	executor := &blockingExecutor{entered: make(chan struct{})}
+	runner := NewRunner(Options{Queue: queue, Executor: executor})
+	runner.Start(context.Background())
+	defer runner.Stop(context.Background())
+	defer func() {
+		if !released {
+			close(repository.release)
+		}
+	}()
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{"https://example.invalid/finalize-resume-fence"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	if result, err := runner.RequestPause(task.ID); err != nil || !result.Changed {
+		t.Fatalf("pause = %#v, err = %v", result, err)
+	}
+	select {
+	case <-repository.committed:
+	case <-time.After(time.Second):
+		t.Fatal("paused finalization was not committed")
+	}
+	stored, found, err := base.Get(context.Background(), task.ID)
+	if err != nil || !found || stored.Status != taskstate.StatusPaused {
+		t.Fatalf("committed task = %#v, found = %v, err = %v", stored, found, err)
+	}
+	if _, err := runner.RequestResume(task.ID); !errors.Is(err, taskstate.ErrTaskStateConflict) {
+		t.Fatalf("resume before runner clear error = %v", err)
+	}
+
+	close(repository.release)
+	released = true
+	waitForRunnerPhase(t, runner, runnerPhaseIdle)
+	resumed, err := runner.RequestResume(task.ID)
+	if err != nil || !resumed.Changed || resumed.Task == nil || resumed.Task.Status != taskstate.StatusQueued {
+		t.Fatalf("resume after runner clear = %#v, err = %v", resumed, err)
+	}
+}
+
 func waitForTaskStatus(t *testing.T, repository taskstate.Repository, taskID string, want taskstate.Status) {
 	t.Helper()
 	deadline := time.After(time.Second)
@@ -471,6 +575,24 @@ func waitForTaskStatus(t *testing.T, repository taskstate.Repository, taskID str
 		select {
 		case <-deadline:
 			t.Fatalf("task %s status = %#v, found = %v, err = %v; want %s", taskID, task, found, err, want)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func waitForRunnerPhase(t *testing.T, runner *Runner, want runnerPhase) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		runner.mu.Lock()
+		phase := runner.taskPhase
+		runner.mu.Unlock()
+		if phase == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("runner phase = %s, want %s", phase, want)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

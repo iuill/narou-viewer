@@ -221,7 +221,7 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	case "cancel":
 		result, err = a.runner.RequestCancel(taskID)
 	case "resume":
-		result, err = a.queue.RequestResume(taskID)
+		result, err = a.runner.RequestResume(taskID)
 	default:
 		err = errors.New("unknown task action")
 	}

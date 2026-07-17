@@ -22,7 +22,8 @@ type Runner struct {
 	workInterval time.Duration
 	logger       *slog.Logger
 
-	controlMu     sync.Mutex
+	taskLocksMu   sync.Mutex
+	taskLocks     map[string]*runnerTaskLock
 	mu            sync.Mutex
 	cancel        context.CancelCauseFunc
 	taskRef       taskstate.TaskRef
@@ -35,6 +36,11 @@ type Runner struct {
 	done          chan struct{}
 }
 
+type runnerTaskLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type runnerPhase uint8
 
 const (
@@ -43,6 +49,19 @@ const (
 	runnerPhaseRunning
 	runnerPhaseFinalizing
 )
+
+func (p runnerPhase) String() string {
+	switch p {
+	case runnerPhaseStarting:
+		return "starting"
+	case runnerPhaseRunning:
+		return "running"
+	case runnerPhaseFinalizing:
+		return "finalizing"
+	default:
+		return "idle"
+	}
+}
 
 type Options struct {
 	Queue        *taskqueue.Queue
@@ -106,12 +125,27 @@ func (r *Runner) RequestPause(taskID string) (taskstate.ControlResult, error) {
 	return r.requestControl(taskID, taskstate.RequestedActionPause, taskstate.ErrTaskPauseRequested)
 }
 
+func (r *Runner) RequestResume(taskID string) (taskstate.ControlResult, error) {
+	unlockTask := r.lockTask(taskID)
+	defer unlockTask()
+
+	r.mu.Lock()
+	if r.taskRef.TaskID == taskID && r.taskPhase != runnerPhaseIdle {
+		phase := r.taskPhase
+		r.mu.Unlock()
+		return taskstate.ControlResult{}, fmt.Errorf("%w: task %s cannot resume while runner phase is %s", taskstate.ErrTaskStateConflict, taskID, phase)
+	}
+	r.mu.Unlock()
+	return r.queue.RequestResume(taskID)
+}
+
 // requestControl owns both the in-memory cancellation and the durable state
-// change. Serializing the complete operation prevents HTTP requests from
-// observing different winners in the runner and SQLite.
+// change for the current task. Operations are serialized per task so a
+// control waiting on SQLite for one task cannot block another task's context
+// signal. Claim handoff uses the same task lock.
 func (r *Runner) requestControl(taskID string, action taskstate.RequestedAction, cause error) (taskstate.ControlResult, error) {
-	r.controlMu.Lock()
-	defer r.controlMu.Unlock()
+	unlockTask := r.lockTask(taskID)
+	defer unlockTask()
 
 	r.mu.Lock()
 	if r.taskRef.TaskID == taskID {
@@ -126,9 +160,20 @@ func (r *Runner) requestControl(taskID string, action taskstate.RequestedAction,
 			r.mu.Unlock()
 			return taskstate.ControlResult{}, fmt.Errorf("%w: task %s is finalizing", taskstate.ErrTaskStateConflict, taskID)
 		case runnerPhaseStarting:
-			// Keep the runner lock while persisting so the initial synchronization
-			// must observe this action before execution begins.
+			if r.taskAction != taskstate.RequestedActionNone && r.taskAction != action {
+				current := r.taskAction
+				r.mu.Unlock()
+				return taskstate.ControlResult{}, fmt.Errorf("%w: task %s already has requested action %s", taskstate.ErrTaskStateConflict, taskID, current)
+			}
+			if r.taskAction == action && r.controlDone != nil {
+				result, err := r.controlResult, r.controlErr
+				result.Changed = false
+				r.mu.Unlock()
+				return result, err
+			}
+			r.mu.Unlock()
 			result, err := r.persistControl(taskID, action)
+			r.mu.Lock()
 			if err == nil && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
 				r.taskAction = action
 				r.controlResult = result
@@ -178,17 +223,33 @@ func (r *Runner) requestControl(taskID string, action taskstate.RequestedAction,
 			return result, err
 		}
 	}
-
-	// When idle, keep the lock across the durable operation so ClaimNext
-	// cannot move the same task from queued to running between classification
-	// and persistence. A different active task cannot claim this task yet.
-	if r.taskPhase == runnerPhaseIdle {
-		result, err := r.persistControl(taskID, action)
-		r.mu.Unlock()
-		return result, err
-	}
 	r.mu.Unlock()
 	return r.persistControl(taskID, action)
+}
+
+func (r *Runner) lockTask(taskID string) func() {
+	r.taskLocksMu.Lock()
+	if r.taskLocks == nil {
+		r.taskLocks = map[string]*runnerTaskLock{}
+	}
+	lock := r.taskLocks[taskID]
+	if lock == nil {
+		lock = &runnerTaskLock{}
+		r.taskLocks[taskID] = lock
+	}
+	lock.refs++
+	r.taskLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		r.taskLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(r.taskLocks, taskID)
+		}
+		r.taskLocksMu.Unlock()
+	}
 }
 
 func (r *Runner) persistControl(taskID string, action taskstate.RequestedAction) (taskstate.ControlResult, error) {
@@ -265,14 +326,16 @@ func (r *Runner) drain(ctx context.Context) bool {
 }
 
 func (r *Runner) claimNext(ctx context.Context) (*taskqueue.Task, context.Context, context.CancelCauseFunc, error) {
-	r.mu.Lock()
 	next, err := r.queue.PopNextWithError()
 	if err != nil || next == nil {
-		r.mu.Unlock()
 		return next, nil, nil, err
 	}
-	taskCtx, cancel := context.WithCancelCause(ctx)
 	ref := taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}
+	unlockTask := r.lockTask(ref.TaskID)
+	defer unlockTask()
+
+	taskCtx, cancel := context.WithCancelCause(ctx)
+	r.mu.Lock()
 	r.taskRef = ref
 	r.taskPhase = runnerPhaseStarting
 	r.taskAction = taskstate.RequestedActionNone
@@ -283,9 +346,9 @@ func (r *Runner) claimNext(ctx context.Context) (*taskqueue.Task, context.Contex
 	r.mu.Unlock()
 
 	for {
-		r.mu.Lock()
 		action, readErr := r.queue.RequestedActionWithError(ref)
 		if readErr == nil {
+			r.mu.Lock()
 			if action == taskstate.RequestedActionNone {
 				// The in-memory queue has no durable requested_action column. A
 				// control accepted while starting is nevertheless authoritative.
@@ -301,7 +364,6 @@ func (r *Runner) claimNext(ctx context.Context) (*taskqueue.Task, context.Contex
 			r.mu.Unlock()
 			return next, taskCtx, cancel, nil
 		}
-		r.mu.Unlock()
 		if r.logger != nil {
 			r.logger.Error("failed to read requested task action", "taskID", ref.TaskID, "error", readErr)
 		}
