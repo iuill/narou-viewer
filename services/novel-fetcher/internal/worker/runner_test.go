@@ -57,6 +57,13 @@ type postCommitFinalizeRepository struct {
 	once      sync.Once
 }
 
+type flakyControlRepository struct {
+	taskstate.Repository
+	mu             sync.Mutex
+	pauseFailures  int
+	cancelFailures int
+}
+
 func (e *closingStoreExecutor) RunTask(_ context.Context, _ *taskqueue.Task) error {
 	_ = e.store.Close()
 	close(e.closed)
@@ -96,6 +103,28 @@ func (r *postCommitFinalizeRepository) Finalize(ctx context.Context, ref tasksta
 	r.once.Do(func() { close(r.committed) })
 	<-r.release
 	return err
+}
+
+func (r *flakyControlRepository) RequestPause(ctx context.Context, taskID string) (taskstate.ControlResult, error) {
+	r.mu.Lock()
+	if r.pauseFailures > 0 {
+		r.pauseFailures--
+		r.mu.Unlock()
+		return taskstate.ControlResult{}, errors.New("synthetic pause persistence failure")
+	}
+	r.mu.Unlock()
+	return r.Repository.RequestPause(ctx, taskID)
+}
+
+func (r *flakyControlRepository) RequestCancel(ctx context.Context, taskID string) (taskstate.ControlResult, error) {
+	r.mu.Lock()
+	if r.cancelFailures > 0 {
+		r.cancelFailures--
+		r.mu.Unlock()
+		return taskstate.ControlResult{}, errors.New("synthetic cancel persistence failure")
+	}
+	r.mu.Unlock()
+	return r.Repository.RequestCancel(ctx, taskID)
 }
 
 func TestRunnerStartAndStopAreIdempotent(t *testing.T) {
@@ -413,6 +442,81 @@ func TestRunnerRepeatedRunningControlIsIdempotent(t *testing.T) {
 	waitForTaskStatus(t, repository, task.ID, taskstate.StatusPaused)
 }
 
+func TestRunnerRetriesSameControlAfterPersistenceFailure(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := taskstate.NewSQLiteRepository(store.DB())
+	repository := &flakyControlRepository{Repository: base, pauseFailures: 1}
+	queue := taskqueue.NewPersistentQueue(repository)
+	executor := &heldControlExecutor{entered: make(chan struct{}), observed: make(chan struct{}), release: make(chan struct{})}
+	runner := NewRunner(Options{Queue: queue, Executor: executor, WorkInterval: time.Millisecond})
+	runner.Start(context.Background())
+	defer runner.Stop(context.Background())
+	released := false
+	defer func() {
+		if !released {
+			close(executor.release)
+		}
+	}()
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{"https://example.invalid/synthetic/retry-control"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	if _, err := runner.RequestPause(task.ID); err == nil {
+		t.Fatal("first pause persistence unexpectedly succeeded")
+	}
+	select {
+	case <-executor.observed:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not observe pause after persistence failure")
+	}
+	retried, err := runner.RequestPause(task.ID)
+	if err != nil || !retried.Changed || retried.Task == nil || retried.Task.RequestedAction != taskstate.RequestedActionPause {
+		t.Fatalf("retried pause = %#v, err = %v", retried, err)
+	}
+	close(executor.release)
+	released = true
+	waitForTaskStatus(t, base, task.ID, taskstate.StatusPaused)
+}
+
+func TestRunnerPersistsAcceptedControlDuringFinalizationRetry(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := taskstate.NewSQLiteRepository(store.DB())
+	repository := &flakyControlRepository{Repository: base, cancelFailures: 1}
+	queue := taskqueue.NewPersistentQueue(repository)
+	executor := &blockingExecutor{entered: make(chan struct{})}
+	runner := NewRunner(Options{Queue: queue, Executor: executor, WorkInterval: time.Millisecond})
+	runner.Start(context.Background())
+	defer runner.Stop(context.Background())
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{"https://example.invalid/synthetic/finalize-control-retry"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	if _, err := runner.RequestCancel(task.ID); err == nil {
+		t.Fatal("first cancel persistence unexpectedly succeeded")
+	}
+	waitForTaskStatus(t, base, task.ID, taskstate.StatusCanceled)
+}
+
 func TestRunnerRejectsNewControlsWhileFinalizing(t *testing.T) {
 	store, err := storage.NewStore(t.TempDir())
 	if err != nil {
@@ -561,6 +665,34 @@ func TestRunnerRejectsResumeUntilFinalizedAttemptIsCleared(t *testing.T) {
 	resumed, err := runner.RequestResume(task.ID)
 	if err != nil || !resumed.Changed || resumed.Task == nil || resumed.Task.Status != taskstate.StatusQueued {
 		t.Fatalf("resume after runner clear = %#v, err = %v", resumed, err)
+	}
+}
+
+func TestRunnerRepeatedResumeIsIdempotentAfterTaskStarts(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	repository := taskstate.NewSQLiteRepositoryWithReader(store.DB(), store.ReadDB())
+	queue := taskqueue.NewPersistentQueue(repository)
+	executor := &blockingExecutor{entered: make(chan struct{})}
+	runner := NewRunner(Options{Queue: queue, Executor: executor})
+	runner.Start(context.Background())
+	defer runner.Stop(context.Background())
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{"https://example.invalid/synthetic/repeated-resume"}
+	if err := queue.Enqueue(task); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-executor.entered:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	result, err := runner.RequestResume(task.ID)
+	if err != nil || result.Changed || result.Task == nil || result.Task.Status != taskstate.StatusRunning {
+		t.Fatalf("repeated resume = %#v, err = %v", result, err)
 	}
 }
 

@@ -35,7 +35,7 @@ type TaskCheckpointStore interface {
 }
 
 type TaskCompletionStore interface {
-	CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int) error
+	CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int, finalWork bool) error
 }
 
 type TaskReporter interface {
@@ -82,7 +82,7 @@ func (s *Service) RunTask(ctx context.Context, next *taskqueue.Task) error {
 }
 
 func (s *Service) runDownload(ctx context.Context, next *taskqueue.Task) error {
-	for _, target := range next.Targets {
+	for index, target := range next.Targets {
 		work, err := s.fetcher.FetchToc(ctx, target, s.progressReporter(next.ID))
 		if err != nil {
 			return err
@@ -108,7 +108,7 @@ func (s *Service) runDownload(ctx context.Context, next *taskqueue.Task) error {
 		if err := s.fetchAndSaveEpisodes(ctx, next, work, stored, 0, !next.Force, previousEpisodes); err != nil {
 			return err
 		}
-		if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		if err := s.completeWork(ctx, next, stored.ID, index == len(next.Targets)-1); err != nil {
 			return err
 		}
 		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("saved %s", stored.Title))
@@ -146,7 +146,7 @@ func (s *Service) rejectDuplicateTitleAcrossSites(taskID string, work model.Work
 }
 
 func (s *Service) runUpdate(ctx context.Context, next *taskqueue.Task) error {
-	for _, id := range next.NovelIDs {
+	for index, id := range next.NovelIDs {
 		work, ok, err := s.store.FindWorkByID(id)
 		if err != nil {
 			return err
@@ -173,7 +173,7 @@ func (s *Service) runUpdate(ctx context.Context, next *taskqueue.Task) error {
 		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, next.SkipUnchanged && !next.ForceRedownload, previousEpisodes); err != nil {
 			return err
 		}
-		if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		if err := s.completeWork(ctx, next, stored.ID, index == len(next.NovelIDs)-1); err != nil {
 			return err
 		}
 		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("updated %s", stored.Title))
@@ -182,7 +182,7 @@ func (s *Service) runUpdate(ctx context.Context, next *taskqueue.Task) error {
 }
 
 func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
-	for _, id := range next.NovelIDs {
+	for index, id := range next.NovelIDs {
 		work, ok, err := s.store.FindWorkByID(id)
 		if err != nil {
 			return err
@@ -209,7 +209,7 @@ func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
 		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, true, previousEpisodes); err != nil {
 			return err
 		}
-		if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		if err := s.completeWork(ctx, next, stored.ID, index == len(next.NovelIDs)-1); err != nil {
 			return err
 		}
 		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("resumed %s", stored.Title))
@@ -367,13 +367,13 @@ func taskControlCause(ctx context.Context, err error) error {
 	return ctx.Err()
 }
 
-func (s *Service) completeWork(ctx context.Context, next *taskqueue.Task, workID int) error {
+func (s *Service) completeWork(ctx context.Context, next *taskqueue.Task, workID int, finalWork bool) error {
 	if cause := taskControlCause(ctx, nil); cause != nil {
 		s.markTaskControl(workID, "", cause)
 		return cause
 	}
 	if store, ok := s.store.(TaskCompletionStore); ok && next.AttemptCount > 0 {
-		return store.CompleteWorkForTask(ctx, taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, workID)
+		return store.CompleteWorkForTask(ctx, taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, workID, finalWork)
 	}
 	return s.store.UpdateWorkFetchStatus(ctx, workID, storage.FetchStatusComplete, "", "", nil)
 }

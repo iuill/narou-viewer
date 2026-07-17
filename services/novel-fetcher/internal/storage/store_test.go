@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -225,7 +226,7 @@ func TestCompleteWorkForTaskDoesNotCrossAcceptedControl(t *testing.T) {
 		t.Fatalf("pause = %#v, err = %v", result, err)
 	}
 	ref := taskstate.TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
-	if err := store.CompleteWorkForTask(context.Background(), ref, work.ID); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+	if err := store.CompleteWorkForTask(context.Background(), ref, work.ID, true); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
 		t.Fatalf("completion after control error = %v", err)
 	}
 	storedTask, found, err := repository.Get(context.Background(), task.ID)
@@ -235,6 +236,105 @@ func TestCompleteWorkForTaskDoesNotCrossAcceptedControl(t *testing.T) {
 	storedWork, found, err := store.FindWorkByID(work.ID)
 	if err != nil || !found || storedWork.FetchStatus != FetchStatusPartial {
 		t.Fatalf("work after rejected completion = %#v, found = %v, err = %v", storedWork, found, err)
+	}
+}
+
+func TestCompleteWorkForTaskCommitsExecutionOnlyForFinalWork(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first, err := store.UpsertWorkToc(context.Background(), model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "multi-first",
+		SourceURL:  "https://example.invalid/synthetic/multi-first",
+		Title:      "Synthetic first work",
+		FetchedAt:  time.Now(),
+	}, FetchStatusPartial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.UpsertWorkToc(context.Background(), model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "multi-second",
+		SourceURL:  "https://example.invalid/synthetic/multi-second",
+		Title:      "Synthetic second work",
+		FetchedAt:  time.Now(),
+	}, FetchStatusPartial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := taskstate.NewSQLiteRepository(store.DB())
+	task := taskstate.NewTask("update")
+	task.NovelIDs = []int{first.ID, second.ID}
+	if _, err := repository.Enqueue(context.Background(), []*taskstate.Task{task}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim = %#v, err = %v", claimed, err)
+	}
+	ref := taskstate.TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
+	if err := store.CompleteWorkForTask(context.Background(), ref, first.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	afterFirst, found, err := repository.Get(context.Background(), task.ID)
+	if err != nil || !found || afterFirst.ExecutionCommitted {
+		t.Fatalf("task after first work = %#v, found = %v, err = %v", afterFirst, found, err)
+	}
+	if err := repository.Finalize(context.Background(), ref, taskstate.Outcome{Status: taskstate.StatusFailed, Error: errors.New("synthetic second work failure")}); err != nil {
+		t.Fatal(err)
+	}
+	finalized, found, err := repository.Get(context.Background(), task.ID)
+	if err != nil || !found || finalized.Status != taskstate.StatusFailed || finalized.ExecutionCommitted {
+		t.Fatalf("finalized task = %#v, found = %v, err = %v", finalized, found, err)
+	}
+	storedFirst, found, err := store.FindWorkByID(first.ID)
+	if err != nil || !found || storedFirst.FetchStatus != FetchStatusComplete {
+		t.Fatalf("first work = %#v, found = %v, err = %v", storedFirst, found, err)
+	}
+}
+
+func TestTaskSummaryUsesReadPoolWhileWriterConnectionIsHeld(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	repository := taskstate.NewSQLiteRepositoryWithReader(store.DB(), store.ReadDB())
+	task := taskstate.NewTask("download")
+	task.Targets = []string{"https://example.invalid/synthetic/read-pool"}
+	if _, err := repository.Enqueue(context.Background(), []*taskstate.Task{task}); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := store.DB().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE works SET updated_at = updated_at`); err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		summary, err := repository.Summary(context.Background(), 20)
+		if err == nil && len(summary.Queued) != 1 {
+			err = fmt.Errorf("queued tasks = %d", len(summary.Queued))
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task summary waited for the writer connection")
 	}
 }
 
@@ -309,7 +409,7 @@ func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
 	if err != nil || !valid {
 		t.Fatalf("checkpoint after atomic save = %v, err = %v", valid, err)
 	}
-	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID); err != nil {
+	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID, true); err != nil {
 		t.Fatalf("CompleteWorkForTask() error = %v", err)
 	}
 	completedTask, found, err := repository.Get(context.Background(), task.ID)
@@ -319,7 +419,7 @@ func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
 	if err := repository.Finalize(context.Background(), ref, taskstate.Outcome{Status: taskstate.StatusSucceeded, ExecutionCommitted: true}); err != nil {
 		t.Fatalf("Finalize() error = %v", err)
 	}
-	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+	if err := store.CompleteWorkForTask(context.Background(), ref, stored.ID, true); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
 		t.Fatalf("stale CompleteWorkForTask() error = %v", err)
 	}
 

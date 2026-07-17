@@ -233,7 +233,11 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {
 		status = http.StatusAccepted
 	}
-	message := "Task " + action
+	message := map[string]string{
+		"pause":  "Task paused",
+		"resume": "Task resumed",
+		"cancel": "Task cancelled",
+	}[action]
 	writeEnvelope(writer, status, taskControlPayload(result, action), message)
 }
 

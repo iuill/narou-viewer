@@ -18,11 +18,19 @@ var (
 )
 
 type SQLiteRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
 }
 
 func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
-	return &SQLiteRepository{db: db}
+	return NewSQLiteRepositoryWithReader(db, db)
+}
+
+// NewSQLiteRepositoryWithReader keeps all mutations on the process-wide
+// single writer connection while serving independent WAL snapshots from a
+// read-only pool.
+func NewSQLiteRepositoryWithReader(db *sql.DB, readDB *sql.DB) *SQLiteRepository {
+	return &SQLiteRepository{db: db, readDB: readDB}
 }
 
 func (r *SQLiteRepository) Enqueue(ctx context.Context, tasks []*Task) (EnqueueResult, error) {
@@ -49,7 +57,7 @@ func (r *SQLiteRepository) Enqueue(ctx context.Context, tasks []*Task) (EnqueueR
 		var existingID string
 		var existingFingerprint string
 		var existingStatus Status
-		err = tx.QueryRow(`SELECT task_id, request_fingerprint, status FROM fetch_tasks WHERE dedupe_key = ? AND status IN ('queued', 'running', 'paused', 'interrupted')`, dedupeKey).Scan(&existingID, &existingFingerprint, &existingStatus)
+		err = tx.QueryRowContext(ctx, `SELECT task_id, request_fingerprint, status FROM fetch_tasks WHERE dedupe_key = ? AND status IN ('queued', 'running', 'paused', 'interrupted')`, dedupeKey).Scan(&existingID, &existingFingerprint, &existingStatus)
 		if err == nil {
 			if existingFingerprint != fingerprint {
 				return EnqueueResult{}, fmt.Errorf("%w: resource %s is already reserved by task %s", ErrTaskAlreadyActive, dedupeKey, existingID)
@@ -171,43 +179,46 @@ func (r *SQLiteRepository) Summary(ctx context.Context, recentLimit int) (Summar
 	if recentLimit <= 0 {
 		recentLimit = 20
 	}
-	var summary Summary
-	var err error
-	if summary.Current, err = r.oneByStatus(ctx, StatusRunning); err != nil {
+	tx, err := r.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
 		return Summary{}, err
 	}
-	if summary.Queued, err = r.list(ctx, `status = 'queued' ORDER BY (SELECT seq FROM fetch_task_queue WHERE task_id = fetch_tasks.task_id) ASC`); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	var summary Summary
+	if summary.Current, err = r.oneByStatus(ctx, tx, StatusRunning); err != nil {
+		return Summary{}, err
+	}
+	if summary.Queued, err = r.list(ctx, tx, `status = 'queued' ORDER BY (SELECT seq FROM fetch_task_queue WHERE task_id = fetch_tasks.task_id) ASC`); err != nil {
 		return Summary{}, err
 	}
 	for index, task := range summary.Queued {
 		position := index + 1
 		task.QueuePosition = &position
 	}
-	if summary.Paused, err = r.list(ctx, `status = 'paused' ORDER BY updated_at DESC LIMIT ?`, recentLimit); err != nil {
+	if summary.Paused, err = r.list(ctx, tx, `status = 'paused' ORDER BY updated_at DESC LIMIT ?`, recentLimit); err != nil {
 		return Summary{}, err
 	}
-	if summary.Interrupted, err = r.list(ctx, `status = 'interrupted' ORDER BY updated_at DESC LIMIT ?`, recentLimit); err != nil {
+	if summary.Interrupted, err = r.list(ctx, tx, `status = 'interrupted' ORDER BY updated_at DESC LIMIT ?`, recentLimit); err != nil {
 		return Summary{}, err
 	}
-	if summary.RecentCompleted, err = r.list(ctx, `status = 'succeeded' ORDER BY finished_at DESC LIMIT ?`, recentLimit); err != nil {
+	if summary.RecentCompleted, err = r.list(ctx, tx, `status = 'succeeded' ORDER BY finished_at DESC LIMIT ?`, recentLimit); err != nil {
 		return Summary{}, err
 	}
-	if summary.RecentFailed, err = r.list(ctx, `status IN ('failed', 'canceled') ORDER BY finished_at DESC LIMIT ?`, recentLimit); err != nil {
+	if summary.RecentFailed, err = r.list(ctx, tx, `status IN ('failed', 'canceled') ORDER BY finished_at DESC LIMIT ?`, recentLimit); err != nil {
 		return Summary{}, err
 	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'succeeded'`).Scan(&summary.CompletedCount); err != nil {
+	if err := tx.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status IN ('failed', 'canceled') THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'canceled' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = 'interrupted' THEN 1 ELSE 0 END), 0)
+		FROM fetch_tasks
+	`).Scan(&summary.CompletedCount, &summary.FailedCount, &summary.CanceledCount, &summary.PausedCount, &summary.InterruptedCount); err != nil {
 		return Summary{}, err
 	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status IN ('failed', 'canceled')`).Scan(&summary.FailedCount); err != nil {
-		return Summary{}, err
-	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'canceled'`).Scan(&summary.CanceledCount); err != nil {
-		return Summary{}, err
-	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'paused'`).Scan(&summary.PausedCount); err != nil {
-		return Summary{}, err
-	}
-	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'interrupted'`).Scan(&summary.InterruptedCount); err != nil {
+	if err := tx.Commit(); err != nil {
 		return Summary{}, err
 	}
 	return summary, nil
@@ -215,7 +226,7 @@ func (r *SQLiteRepository) Summary(ctx context.Context, recentLimit int) (Summar
 
 func (r *SQLiteRepository) QueueCounts(ctx context.Context) (QueueCounts, error) {
 	var queued, running, paused, interrupted int
-	if err := r.db.QueryRowContext(ctx, `
+	if err := r.readDB.QueryRowContext(ctx, `
 		SELECT
 			COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0),
@@ -230,12 +241,12 @@ func (r *SQLiteRepository) QueueCounts(ctx context.Context) (QueueCounts, error)
 
 func (r *SQLiteRepository) HasQueuedTasks(ctx context.Context) (bool, error) {
 	var count int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'queued'`).Scan(&count)
+	err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM fetch_tasks WHERE status = 'queued'`).Scan(&count)
 	return count > 0, err
 }
 
 func (r *SQLiteRepository) Get(ctx context.Context, taskID string) (*Task, bool, error) {
-	return r.getTx(ctx, r.db, taskID)
+	return r.getTx(ctx, r.readDB, taskID)
 }
 
 func (r *SQLiteRepository) RequestPause(ctx context.Context, taskID string) (ControlResult, error) {
@@ -259,7 +270,10 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 	if !found {
 		return ControlResult{}, ErrTaskNotFound
 	}
-	if task.Status == StatusCanceled || task.Status == StatusSucceeded || task.Status == StatusQueued || task.Status == StatusRunning {
+	if task.Status == StatusQueued || task.Status == StatusRunning {
+		return ControlResult{Task: task, Changed: false}, nil
+	}
+	if task.Status == StatusCanceled || task.Status == StatusSucceeded {
 		return ControlResult{Task: task, Changed: false}, fmt.Errorf("%w: task %s cannot resume from %s", ErrTaskStateConflict, taskID, task.Status)
 	}
 	var dedupeConflict string
@@ -391,7 +405,7 @@ func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, act
 
 func (r *SQLiteRepository) ReadRequestedAction(ctx context.Context, ref TaskRef) (RequestedAction, error) {
 	var action RequestedAction
-	err := r.db.QueryRowContext(ctx, `SELECT requested_action FROM fetch_tasks WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, ref.TaskID, ref.Attempt).Scan(&action)
+	err := r.readDB.QueryRowContext(ctx, `SELECT requested_action FROM fetch_tasks WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, ref.TaskID, ref.Attempt).Scan(&action)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RequestedActionNone, ErrStaleTaskAttempt
 	}
@@ -418,7 +432,7 @@ func (r *SQLiteRepository) AddWarning(ctx context.Context, ref TaskRef, warning 
 	if strings.TrimSpace(warning) == "" {
 		return nil
 	}
-	task, found, err := r.Get(ctx, ref.TaskID)
+	task, found, err := r.getTx(ctx, r.db, ref.TaskID)
 	if err != nil {
 		return err
 	}
@@ -556,7 +570,7 @@ func (r *SQLiteRepository) RecoverOnStartup(ctx context.Context, now time.Time) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT request_version, request_json FROM fetch_tasks`)
+	rows, err := tx.QueryContext(ctx, `SELECT request_version, request_json FROM fetch_tasks WHERE status IN ('queued', 'running', 'paused', 'interrupted', 'failed')`)
 	if err != nil {
 		return err
 	}
@@ -641,8 +655,8 @@ func (r *SQLiteRepository) getTx(ctx context.Context, q queryer, taskID string) 
 	return scanTask(row)
 }
 
-func (r *SQLiteRepository) oneByStatus(ctx context.Context, status Status) (*Task, error) {
-	rows, err := r.list(ctx, `status = ? ORDER BY updated_at DESC LIMIT 1`, status)
+func (r *SQLiteRepository) oneByStatus(ctx context.Context, q queryer, status Status) (*Task, error) {
+	rows, err := r.list(ctx, q, `status = ? ORDER BY updated_at DESC LIMIT 1`, status)
 	if err != nil {
 		return nil, err
 	}
@@ -652,9 +666,9 @@ func (r *SQLiteRepository) oneByStatus(ctx context.Context, status Status) (*Tas
 	return rows[0], nil
 }
 
-func (r *SQLiteRepository) list(ctx context.Context, clause string, args ...any) ([]*Task, error) {
+func (r *SQLiteRepository) list(ctx context.Context, q queryer, clause string, args ...any) ([]*Task, error) {
 	query := `SELECT task_id, request_version, kind, request_json, status, requested_action, dedupe_key, request_fingerprint, primary_work_id, target_label, phase, current_step, total_steps, saved_episode_count, failed_episode_id, resume_episode_id, message, warnings_json, error_message, attempt_count, execution_committed, created_at, started_at, updated_at, paused_at, interrupted_at, finished_at FROM fetch_tasks WHERE ` + clause
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

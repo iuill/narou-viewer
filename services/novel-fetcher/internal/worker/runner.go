@@ -130,7 +130,7 @@ func (r *Runner) RequestResume(taskID string) (taskstate.ControlResult, error) {
 	defer unlockTask()
 
 	r.mu.Lock()
-	if r.taskRef.TaskID == taskID && r.taskPhase != runnerPhaseIdle {
+	if r.taskRef.TaskID == taskID && r.taskPhase == runnerPhaseFinalizing {
 		phase := r.taskPhase
 		r.mu.Unlock()
 		return taskstate.ControlResult{}, fmt.Errorf("%w: task %s cannot resume while runner phase is %s", taskstate.ErrTaskStateConflict, taskID, phase)
@@ -194,7 +194,27 @@ func (r *Runner) requestControl(taskID string, action taskstate.RequestedAction,
 			}
 			if r.taskAction == action && r.controlDone != nil {
 				result, err := r.controlResult, r.controlErr
-				result.Changed = false
+				if err == nil {
+					result.Changed = false
+					r.mu.Unlock()
+					return result, nil
+				}
+				// Context cancellation cannot be undone after the first signal.
+				// Retrying the same action is therefore a retry of the pending
+				// durable write, not a new control decision.
+				done := make(chan struct{})
+				r.controlDone = done
+				r.controlResult = taskstate.ControlResult{}
+				r.controlErr = nil
+				r.mu.Unlock()
+
+				result, err = r.persistControl(taskID, action)
+				r.mu.Lock()
+				if r.taskRef.TaskID == taskID && r.controlDone == done {
+					r.controlResult = result
+					r.controlErr = err
+					close(done)
+				}
 				r.mu.Unlock()
 				return result, err
 			}
@@ -290,7 +310,7 @@ func (r *Runner) drain(ctx context.Context) bool {
 
 		ref := taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}
 		err = r.executor.RunTask(taskCtx, next)
-		err = r.beginFinalizing(ref, taskCtx, err)
+		err = r.beginFinalizing(ctx, ref, taskCtx, err)
 		cancel(nil)
 		for {
 			finalizeErr := r.queue.FinishTask(next, err, r.logger)
@@ -374,7 +394,13 @@ func (r *Runner) claimNext(ctx context.Context) (*taskqueue.Task, context.Contex
 	}
 }
 
-func (r *Runner) beginFinalizing(ref taskstate.TaskRef, taskCtx context.Context, executorErr error) error {
+func (r *Runner) beginFinalizing(ctx context.Context, ref taskstate.TaskRef, taskCtx context.Context, executorErr error) error {
+	// Finalization and same-task controls share the task lock. Once the
+	// executor has stopped, this routine owns any outstanding durable control
+	// write until it succeeds or reaches a semantic conflict.
+	unlockTask := r.lockTask(ref.TaskID)
+	defer unlockTask()
+
 	r.mu.Lock()
 	if r.taskRef != ref {
 		r.mu.Unlock()
@@ -388,12 +414,49 @@ func (r *Runner) beginFinalizing(ref taskstate.TaskRef, taskCtx context.Context,
 		<-done
 	}
 
-	r.mu.Lock()
-	action, controlErr := r.taskAction, r.controlErr
-	r.mu.Unlock()
-	if controlErr != nil {
-		return fmt.Errorf("persist requested task action: %w", controlErr)
+	for {
+		r.mu.Lock()
+		action, controlErr := r.taskAction, r.controlErr
+		r.mu.Unlock()
+		if controlErr == nil {
+			break
+		}
+		if !retryableControlPersistence(controlErr) {
+			return fmt.Errorf("persist requested task action: %w", controlErr)
+		}
+		if r.logger != nil {
+			r.logger.Error("failed to persist requested task action; retrying", "taskID", ref.TaskID, "action", action, "error", controlErr)
+		}
+		if !r.waitForRetry(ctx) {
+			if cause := context.Cause(ctx); cause != nil {
+				return cause
+			}
+			return ctx.Err()
+		}
+
+		done := make(chan struct{})
+		r.mu.Lock()
+		if r.taskRef != ref || r.taskAction != action {
+			r.mu.Unlock()
+			return executorErr
+		}
+		r.controlDone = done
+		r.controlResult = taskstate.ControlResult{}
+		r.controlErr = nil
+		r.mu.Unlock()
+
+		result, err := r.persistControl(ref.TaskID, action)
+		r.mu.Lock()
+		if r.taskRef == ref && r.controlDone == done {
+			r.controlResult = result
+			r.controlErr = err
+			close(done)
+		}
+		r.mu.Unlock()
 	}
+	r.mu.Lock()
+	action := r.taskAction
+	r.mu.Unlock()
 	switch action {
 	case taskstate.RequestedActionPause:
 		return taskstate.ErrTaskPauseRequested
@@ -406,6 +469,14 @@ func (r *Runner) beginFinalizing(ref taskstate.TaskRef, taskCtx context.Context,
 		}
 	}
 	return executorErr
+}
+
+func retryableControlPersistence(err error) bool {
+	return err != nil &&
+		!errors.Is(err, taskstate.ErrTaskNotFound) &&
+		!errors.Is(err, taskstate.ErrTaskStateConflict) &&
+		!errors.Is(err, taskstate.ErrTaskAlreadyActive) &&
+		!errors.Is(err, taskstate.ErrStaleTaskAttempt)
 }
 
 func (r *Runner) clearTask(ref taskstate.TaskRef) {

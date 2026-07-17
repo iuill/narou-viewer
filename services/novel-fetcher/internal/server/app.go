@@ -41,15 +41,14 @@ func New(options Options) *App {
 }
 
 func NewWithError(options Options) (*App, error) {
-	queue := taskqueue.NewQueue()
 	if options.Store == nil {
 		return nil, errors.New("novel-fetcher storage is required")
 	}
-	repository := taskstate.NewSQLiteRepository(options.Store.DB())
+	repository := taskstate.NewSQLiteRepositoryWithReader(options.Store.DB(), options.Store.ReadDB())
 	if err := repository.RecoverOnStartup(context.Background(), time.Now().UTC()); err != nil {
 		return nil, err
 	}
-	queue = taskqueue.NewPersistentQueue(repository)
+	queue := taskqueue.NewPersistentQueue(repository)
 	service := application.NewService(application.Options{
 		Store:    options.Store,
 		Fetcher:  options.Fetcher,
@@ -83,6 +82,11 @@ func (a *App) Shutdown(ctx context.Context) {
 }
 
 func (a *App) Handler() http.Handler {
+	if a.initErr != nil {
+		return http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writeError(writer, http.StatusServiceUnavailable, "novel-fetcher initialization failed")
+		})
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", a.handleHealth)
 	mux.HandleFunc("GET /api/v2/system/version", a.handleVersion)

@@ -348,6 +348,24 @@ func TestSQLiteRepositoryRejectsCorruptQueueInvariantAndMalformedRequest(t *test
 	}
 }
 
+func TestRecoverOnStartupIgnoresMalformedTerminalHistory(t *testing.T) {
+	store, repository := newRepository(t)
+	task := NewTask("download")
+	task.Targets = []string{"https://example.invalid/synthetic/terminal-history"}
+	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`DELETE FROM fetch_task_queue WHERE task_id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'succeeded', request_version = 99, request_json = '{}' WHERE task_id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RecoverOnStartup(context.Background(), time.Now()); err != nil {
+		t.Fatalf("terminal history blocked startup recovery: %v", err)
+	}
+}
+
 func TestRequestHelpersNormalizeAndValidate(t *testing.T) {
 	task := NewTask("download")
 	task.Targets = []string{"HTTPS://Example.com/work/?page=1#fragment"}
@@ -469,8 +487,8 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 	if _, err := repository.Enqueue(context.Background(), []*Task{queued}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.RequestResume(context.Background(), queued.ID); !errors.Is(err, ErrTaskStateConflict) {
-		t.Fatalf("queued resume error = %v", err)
+	if result, err := repository.RequestResume(context.Background(), queued.ID); err != nil || result.Changed || result.Task.Status != StatusQueued {
+		t.Fatalf("queued resume = %#v, err = %v", result, err)
 	}
 	if _, err := repository.RequestPause(context.Background(), queued.ID); err != nil {
 		t.Fatal(err)
@@ -493,8 +511,8 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 	if _, err := repository.ClaimNext(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.RequestResume(context.Background(), second.ID); !errors.Is(err, ErrTaskStateConflict) {
-		t.Fatalf("running resume error = %v", err)
+	if result, err := repository.RequestResume(context.Background(), second.ID); err != nil || result.Changed || result.Task.Status != StatusRunning {
+		t.Fatalf("running resume = %#v, err = %v", result, err)
 	}
 	if _, err := repository.RequestPause(context.Background(), second.ID); err != nil {
 		t.Fatal(err)
@@ -714,8 +732,8 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 	if _, err := repository.ClaimNext(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.RequestResume(context.Background(), running.ID); !errors.Is(err, ErrTaskStateConflict) {
-		t.Fatalf("running resume error = %v", err)
+	if result, err := repository.RequestResume(context.Background(), running.ID); err != nil || result.Changed || result.Task.Status != StatusRunning {
+		t.Fatalf("running resume = %#v, err = %v", result, err)
 	}
 	if err := repository.Finalize(context.Background(), TaskRef{TaskID: running.ID, Attempt: 1}, Outcome{Status: StatusInterrupted}); err != nil {
 		t.Fatal(err)

@@ -37,6 +37,7 @@ type fakeStore struct {
 	recordCalls        int
 	taskSaveCalls      int
 	completeCalls      int
+	completionFinals   []bool
 	recordErr          error
 	preflightErr       error
 	preflightCalls     int
@@ -147,8 +148,9 @@ func (s *fakeStore) SaveEpisodeBodyForTask(_ context.Context, _ taskstate.TaskRe
 	return model.StoredEpisode{EpisodeID: episode.Index, BodyStatus: storage.BodyStatusComplete}, nil
 }
 
-func (s *fakeStore) CompleteWorkForTask(_ context.Context, _ taskstate.TaskRef, _ int) error {
+func (s *fakeStore) CompleteWorkForTask(_ context.Context, _ taskstate.TaskRef, _ int, finalWork bool) error {
 	s.completeCalls++
+	s.completionFinals = append(s.completionFinals, finalWork)
 	return nil
 }
 
@@ -306,6 +308,34 @@ func TestRunTaskDownloadsAndSavesEpisodes(t *testing.T) {
 	}
 	if len(reporter.progress) == 0 || reporter.progress[len(reporter.progress)-1].Phase != "episode" {
 		t.Fatalf("progress = %#v", reporter.progress)
+	}
+}
+
+func TestRunTaskCommitsExecutionOnlyAfterFinalWork(t *testing.T) {
+	work := model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "Verification",
+		SiteWorkID: "multi-work",
+		Title:      "Synthetic multi-work task",
+	}
+	store := &fakeStore{work: model.StoredWork{ID: 20}}
+	service := NewService(Options{
+		Store:    store,
+		Fetcher:  &fakeFetcher{work: work},
+		Reporter: &recordingReporter{},
+	})
+	task := taskqueue.NewTask("download")
+	task.Targets = []string{
+		"https://example.invalid/synthetic/first",
+		"https://example.invalid/synthetic/second",
+	}
+	task.AttemptCount = 1
+
+	if err := service.RunTask(context.Background(), task); err != nil {
+		t.Fatalf("RunTask returned error: %v", err)
+	}
+	if want := []bool{false, true}; !reflect.DeepEqual(store.completionFinals, want) {
+		t.Fatalf("completion final flags = %#v, want %#v", store.completionFinals, want)
 	}
 }
 

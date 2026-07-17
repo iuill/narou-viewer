@@ -827,6 +827,10 @@ func TestNewWithErrorRequiresStorage(t *testing.T) {
 	if app == nil || app.initErr == nil {
 		t.Fatal("missing storage did not produce initialization error")
 	}
+	response := performRequest(app, http.MethodGet, "/api/v2/tasks/summary", "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("partially initialized app status = %d", response.Code)
+	}
 }
 
 func TestNewRecordsTaskStateInitializationError(t *testing.T) {

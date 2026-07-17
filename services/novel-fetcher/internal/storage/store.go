@@ -29,6 +29,7 @@ import (
 type Store struct {
 	rootDir           string
 	db                *sql.DB
+	readDB            *sql.DB
 	assetMaterializer *storageassets.Materializer
 }
 
@@ -102,6 +103,12 @@ func NewStore(rootDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	readDB, err := openReadOnlyDatabase(databasePath, 4)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store.readDB = readDB
 	return store, nil
 }
 
@@ -112,9 +119,19 @@ func preflightLibrarySchema(databasePath string) error {
 		return err
 	}
 
-	absolutePath, err := filepath.Abs(databasePath)
+	readOnlyDB, err := openReadOnlyDatabase(databasePath, 1)
 	if err != nil {
 		return err
+	}
+	checkErr := migration.CheckSupported(readOnlyDB, databasePath)
+	closeErr := readOnlyDB.Close()
+	return errors.Join(checkErr, closeErr)
+}
+
+func openReadOnlyDatabase(databasePath string, maxOpenConnections int) (*sql.DB, error) {
+	absolutePath, err := filepath.Abs(databasePath)
+	if err != nil {
+		return nil, err
 	}
 	readOnlyURL := url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath)}
 	query := readOnlyURL.Query()
@@ -123,23 +140,33 @@ func preflightLibrarySchema(databasePath string) error {
 
 	readOnlyDB, err := sql.Open("sqlite", readOnlyURL.String())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	readOnlyDB.SetMaxOpenConns(1)
-	checkErr := migration.CheckSupported(readOnlyDB, databasePath)
-	closeErr := readOnlyDB.Close()
-	return errors.Join(checkErr, closeErr)
+	readOnlyDB.SetMaxOpenConns(maxOpenConnections)
+	if err := readOnlyDB.Ping(); err != nil {
+		_ = readOnlyDB.Close()
+		return nil, err
+	}
+	return readOnlyDB, nil
 }
 
 func (s *Store) Close() error {
+	var readCloseErr error
+	if s.readDB != nil {
+		readCloseErr = s.readDB.Close()
+	}
 	_, optimizeErr := s.db.Exec(`PRAGMA optimize`)
 	_, checkpointErr := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	closeErr := s.db.Close()
-	return errors.Join(optimizeErr, checkpointErr, closeErr)
+	return errors.Join(readCloseErr, optimizeErr, checkpointErr, closeErr)
 }
 
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+func (s *Store) ReadDB() *sql.DB {
+	return s.readDB
 }
 
 func (s *Store) SetAssetFetcher(assetFetcher AssetFetcher, policy fetcher.FetchPolicy) {
@@ -1096,7 +1123,7 @@ func (s *Store) UpdateWorkFetchStatus(ctx context.Context, workID int, status st
 	return err
 }
 
-func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int) error {
+func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int, finalWork bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1112,9 +1139,9 @@ func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, 
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE fetch_tasks
-		SET execution_committed = 1, updated_at = ?
+		SET execution_committed = CASE WHEN ? THEN 1 ELSE execution_committed END, updated_at = ?
 		WHERE task_id = ? AND status = 'running' AND attempt_count = ? AND requested_action = ''
-	`, now, ref.TaskID, ref.Attempt)
+	`, finalWork, now, ref.TaskID, ref.Attempt)
 	if err != nil {
 		return err
 	}
