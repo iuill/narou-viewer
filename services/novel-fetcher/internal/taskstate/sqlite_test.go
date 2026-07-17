@@ -838,6 +838,76 @@ func TestSQLiteRepositoryRejectsConflictingRunningControlActions(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepositoryFinalizeUsesDurableControlAndCommitFence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		action     RequestedAction
+		committed  bool
+		wantStatus Status
+	}{
+		{name: "durable pause", action: RequestedActionPause, wantStatus: StatusPaused},
+		{name: "durable cancel", action: RequestedActionCancel, wantStatus: StatusCanceled},
+		{name: "committed result wins", action: RequestedActionCancel, committed: true, wantStatus: StatusSucceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, repository := newRepository(t)
+			task := NewTask("download")
+			task.Targets = []string{"https://example.com/finalize/" + strings.ReplaceAll(test.name, " ", "-")}
+			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := repository.ClaimNext(context.Background(), time.Now())
+			if err != nil || claimed == nil {
+				t.Fatalf("claim = %#v, err = %v", claimed, err)
+			}
+			if test.committed {
+				if _, err := store.Exec(`UPDATE fetch_tasks SET requested_action = ?, execution_committed = 1 WHERE task_id = ?`, test.action, task.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				var result ControlResult
+				if test.action == RequestedActionPause {
+					result, err = repository.RequestPause(context.Background(), task.ID)
+				} else {
+					result, err = repository.RequestCancel(context.Background(), task.ID)
+				}
+				if err != nil || !result.Changed {
+					t.Fatalf("control = %#v, err = %v", result, err)
+				}
+			}
+			ref := TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
+			if err := repository.Finalize(context.Background(), ref, Outcome{Status: StatusSucceeded}); err != nil {
+				t.Fatal(err)
+			}
+			stored, found, err := repository.Get(context.Background(), task.ID)
+			if err != nil || !found || stored.Status != test.wantStatus || stored.RequestedAction != RequestedActionNone {
+				t.Fatalf("final task = %#v, found = %v, err = %v", stored, found, err)
+			}
+		})
+	}
+}
+
+func TestSQLiteRepositoryRejectsControlAfterCommitFence(t *testing.T) {
+	store, repository := newRepository(t)
+	task := NewTask("download")
+	task.Targets = []string{"https://example.com/committed-control"}
+	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.ClaimNext(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Exec(`UPDATE fetch_tasks SET execution_committed = 1 WHERE task_id = ?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []func(context.Context, string) (ControlResult, error){repository.RequestPause, repository.RequestCancel} {
+		result, err := request(context.Background(), task.ID)
+		if !errors.Is(err, ErrTaskStateConflict) || result.Changed {
+			t.Fatalf("committed control = %#v, err = %v", result, err)
+		}
+	}
+}
+
 func TestSQLiteRepositoryNoopAndMissingControlPaths(t *testing.T) {
 	store, repository := newRepository(t)
 	if _, err := repository.RequestPause(context.Background(), "missing"); !errors.Is(err, ErrTaskNotFound) {

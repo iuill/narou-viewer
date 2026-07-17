@@ -1113,7 +1113,7 @@ func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE fetch_tasks
 		SET execution_committed = 1, updated_at = ?
-		WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+		WHERE task_id = ? AND status = 'running' AND attempt_count = ? AND requested_action = ''
 	`, now, ref.TaskID, ref.Attempt)
 	if err != nil {
 		return err

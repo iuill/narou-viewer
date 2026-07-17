@@ -328,6 +328,9 @@ func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, act
 	if task.Status == StatusPaused && action == RequestedActionPause {
 		return ControlResult{Task: task, Changed: false}, nil
 	}
+	if task.Status == StatusRunning && task.ExecutionCommitted {
+		return ControlResult{Task: task, Changed: false}, fmt.Errorf("%w: task %s has already committed its result", ErrTaskStateConflict, taskID)
+	}
 	if task.Status == StatusRunning && task.RequestedAction == action {
 		return ControlResult{Task: task, Changed: false}, nil
 	}
@@ -361,8 +364,16 @@ func (r *SQLiteRepository) requestAction(ctx context.Context, taskID string, act
 		if task.Status != StatusRunning {
 			return ControlResult{}, fmt.Errorf("%w: task %s cannot %s from %s", ErrTaskStateConflict, taskID, action, task.Status)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET requested_action = ?, updated_at = ? WHERE task_id = ? AND status = 'running'`, action, now, taskID); err != nil {
+		result, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET requested_action = ?, updated_at = ? WHERE task_id = ? AND status = 'running' AND execution_committed = 0 AND requested_action = ''`, action, now, taskID)
+		if err != nil {
 			return ControlResult{}, err
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return ControlResult{}, err
+		}
+		if changed != 1 {
+			return ControlResult{}, fmt.Errorf("%w: task %s control lost the commit fence", ErrTaskStateConflict, taskID)
 		}
 	}
 	task, found, err = r.getTx(ctx, tx, taskID)
@@ -493,6 +504,28 @@ func (r *SQLiteRepository) Finalize(ctx context.Context, ref TaskRef, outcome Ou
 	if outcome.Status == StatusQueued || outcome.Status == StatusRunning || outcome.Status == "" {
 		return fmt.Errorf("invalid terminal task status %q", outcome.Status)
 	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	task, found, err := r.getTx(ctx, tx, ref.TaskID)
+	if err != nil {
+		return err
+	}
+	if !found || task.Status != StatusRunning || task.AttemptCount != ref.Attempt {
+		return ErrStaleTaskAttempt
+	}
+	if task.ExecutionCommitted || outcome.ExecutionCommitted {
+		outcome = Outcome{Status: StatusSucceeded, Message: "Task completed", ExecutionCommitted: true}
+	} else {
+		switch task.RequestedAction {
+		case RequestedActionPause:
+			outcome.Status, outcome.Message, outcome.Error = StatusPaused, "Task paused", ErrTaskPauseRequested
+		case RequestedActionCancel:
+			outcome.Status, outcome.Message, outcome.Error = StatusCanceled, "Task cancelled", ErrTaskCancelRequested
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	message := outcome.Message
 	if message == "" {
@@ -507,11 +540,14 @@ func (r *SQLiteRepository) Finalize(ctx context.Context, ref TaskRef, outcome Ou
 	if outcome.Error != nil {
 		errorMessage = outcome.Error.Error()
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE fetch_tasks SET status = ?, requested_action = '', message = CASE WHEN ? <> '' THEN ? ELSE message END, error_message = ?, execution_committed = CASE WHEN ? THEN 1 ELSE execution_committed END, finished_at = ?, updated_at = ?, paused_at = CASE WHEN ? = 'paused' THEN ? ELSE paused_at END, interrupted_at = CASE WHEN ? = 'interrupted' THEN ? ELSE interrupted_at END WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, outcome.Status, message, message, errorMessage, outcome.ExecutionCommitted, now, now, outcome.Status, now, outcome.Status, now, ref.TaskID, ref.Attempt)
+	result, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET status = ?, requested_action = '', message = CASE WHEN ? <> '' THEN ? ELSE message END, error_message = ?, execution_committed = CASE WHEN ? THEN 1 ELSE execution_committed END, finished_at = ?, updated_at = ?, paused_at = CASE WHEN ? = 'paused' THEN ? ELSE paused_at END, interrupted_at = CASE WHEN ? = 'interrupted' THEN ? ELSE interrupted_at END WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, outcome.Status, message, message, errorMessage, outcome.ExecutionCommitted, now, now, outcome.Status, now, outcome.Status, now, ref.TaskID, ref.Attempt)
 	if err != nil {
 		return err
 	}
-	return requireAttemptUpdate(result)
+	if err := requireAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *SQLiteRepository) RecoverOnStartup(ctx context.Context, now time.Time) error {

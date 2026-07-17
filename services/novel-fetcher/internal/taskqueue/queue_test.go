@@ -238,6 +238,13 @@ func TestMemoryQueueSupportsQueuedPauseAndCurrentControls(t *testing.T) {
 	if err != nil || !result.Changed || result.Task.Status != StatusPaused {
 		t.Fatalf("queued pause = %#v, err = %v", result, err)
 	}
+	canceled := NewTask("download")
+	if err := queue.Enqueue(canceled); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := queue.RequestCancel(canceled.ID); err != nil || !result.Changed || result.Task.Status != StatusCanceled {
+		t.Fatalf("queued cancel = %#v, err = %v", result, err)
+	}
 	current := NewTask("download")
 	if err := queue.Enqueue(current); err != nil {
 		t.Fatal(err)

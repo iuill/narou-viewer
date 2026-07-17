@@ -436,8 +436,14 @@ func (q *Queue) RequestCancel(taskID string) (taskstate.ControlResult, error) {
 		if q.current != nil && q.current.ID == taskID {
 			return taskstate.ControlResult{Task: q.current, Changed: true}, nil
 		}
-		for _, queued := range q.queue {
+		for index, queued := range q.queue {
 			if queued.ID == taskID {
+				now := time.Now()
+				queued.Status, queued.FinishedAt, queued.Message = StatusCanceled, &now, "Task cancelled"
+				q.queue = append(q.queue[:index], q.queue[index+1:]...)
+				q.failedCount++
+				q.canceledCount++
+				q.recentFailed = appendRecent(q.recentFailed, queued)
 				return taskstate.ControlResult{Task: queued, Changed: true}, nil
 			}
 		}

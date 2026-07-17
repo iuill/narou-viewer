@@ -22,14 +22,27 @@ type Runner struct {
 	workInterval time.Duration
 	logger       *slog.Logger
 
-	mu         sync.Mutex
-	cancel     context.CancelCauseFunc
-	taskRef    taskstate.TaskRef
-	taskAction taskstate.RequestedAction
-	taskCancel context.CancelCauseFunc
-	pending    map[taskstate.TaskRef]error
-	done       chan struct{}
+	controlMu     sync.Mutex
+	mu            sync.Mutex
+	cancel        context.CancelCauseFunc
+	taskRef       taskstate.TaskRef
+	taskPhase     runnerPhase
+	taskAction    taskstate.RequestedAction
+	taskCancel    context.CancelCauseFunc
+	controlDone   chan struct{}
+	controlResult taskstate.ControlResult
+	controlErr    error
+	done          chan struct{}
 }
+
+type runnerPhase uint8
+
+const (
+	runnerPhaseIdle runnerPhase = iota
+	runnerPhaseStarting
+	runnerPhaseRunning
+	runnerPhaseFinalizing
+)
 
 type Options struct {
 	Queue        *taskqueue.Queue
@@ -85,86 +98,104 @@ func (r *Runner) Stop(ctx context.Context) {
 	}
 }
 
-func (r *Runner) Cancel(taskID string) bool {
-	return r.control(taskID, taskstate.ErrTaskCancelRequested)
+func (r *Runner) RequestCancel(taskID string) (taskstate.ControlResult, error) {
+	return r.requestControl(taskID, taskstate.RequestedActionCancel, taskstate.ErrTaskCancelRequested)
 }
 
-func (r *Runner) Pause(taskID string) bool {
-	return r.control(taskID, taskstate.ErrTaskPauseRequested)
+func (r *Runner) RequestPause(taskID string) (taskstate.ControlResult, error) {
+	return r.requestControl(taskID, taskstate.RequestedActionPause, taskstate.ErrTaskPauseRequested)
 }
 
-// SignalCancel and SignalPause cancel only the in-memory execution context.
-// The HTTP control path uses them before the durable state write so that a
-// task blocked in storage-owned HTTP work can release the single SQLite
-// writer connection needed to persist the requested action.
-func (r *Runner) SignalCancel(taskID string) (bool, error) {
-	return r.signalRunning(taskID, taskstate.RequestedActionCancel, taskstate.ErrTaskCancelRequested)
-}
+// requestControl owns both the in-memory cancellation and the durable state
+// change. Serializing the complete operation prevents HTTP requests from
+// observing different winners in the runner and SQLite.
+func (r *Runner) requestControl(taskID string, action taskstate.RequestedAction, cause error) (taskstate.ControlResult, error) {
+	r.controlMu.Lock()
+	defer r.controlMu.Unlock()
 
-func (r *Runner) SignalPause(taskID string) (bool, error) {
-	return r.signalRunning(taskID, taskstate.RequestedActionPause, taskstate.ErrTaskPauseRequested)
-}
-
-func (r *Runner) signalRunning(taskID string, action taskstate.RequestedAction, cause error) (bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.taskRef.TaskID != taskID || r.taskCancel == nil {
-		return false, nil
-	}
-	if r.taskAction != taskstate.RequestedActionNone {
-		if r.taskAction != action {
-			return false, fmt.Errorf("%w: task %s already has requested action %s", taskstate.ErrTaskStateConflict, taskID, r.taskAction)
+	if r.taskRef.TaskID == taskID {
+		switch r.taskPhase {
+		case runnerPhaseFinalizing:
+			if r.taskAction == action && r.controlDone != nil {
+				result, err := r.controlResult, r.controlErr
+				result.Changed = false
+				r.mu.Unlock()
+				return result, err
+			}
+			r.mu.Unlock()
+			return taskstate.ControlResult{}, fmt.Errorf("%w: task %s is finalizing", taskstate.ErrTaskStateConflict, taskID)
+		case runnerPhaseStarting:
+			// Keep the runner lock while persisting so the initial synchronization
+			// must observe this action before execution begins.
+			result, err := r.persistControl(taskID, action)
+			if err == nil && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
+				r.taskAction = action
+				r.controlResult = result
+				r.controlErr = nil
+				r.controlDone = make(chan struct{})
+				close(r.controlDone)
+				if r.taskCancel != nil {
+					r.taskCancel(cause)
+				}
+			}
+			r.mu.Unlock()
+			return result, err
+		case runnerPhaseRunning:
+			if r.taskAction != taskstate.RequestedActionNone && r.taskAction != action {
+				current := r.taskAction
+				r.mu.Unlock()
+				return taskstate.ControlResult{}, fmt.Errorf("%w: task %s already has requested action %s", taskstate.ErrTaskStateConflict, taskID, current)
+			}
+			if r.taskAction == action && r.controlDone != nil {
+				result, err := r.controlResult, r.controlErr
+				result.Changed = false
+				r.mu.Unlock()
+				return result, err
+			}
+
+			newSignal := r.taskAction == taskstate.RequestedActionNone
+			r.taskAction = action
+			done := make(chan struct{})
+			r.controlDone = done
+			r.controlResult = taskstate.ControlResult{}
+			r.controlErr = nil
+			if newSignal && r.taskCancel != nil {
+				// Signal before the SQLite write. Asset localization can own the
+				// single writer connection, and cancellation is what releases it.
+				r.taskCancel(cause)
+			}
+			r.mu.Unlock()
+
+			result, err := r.persistControl(taskID, action)
+			r.mu.Lock()
+			if r.taskRef.TaskID == taskID && r.controlDone == done {
+				r.controlResult = result
+				r.controlErr = err
+				close(done)
+			}
+			r.mu.Unlock()
+			return result, err
 		}
-		return true, nil
 	}
-	r.taskAction = action
-	r.taskCancel(cause)
-	return true, nil
+
+	// When idle, keep the lock across the durable operation so ClaimNext
+	// cannot move the same task from queued to running between classification
+	// and persistence. A different active task cannot claim this task yet.
+	if r.taskPhase == runnerPhaseIdle {
+		result, err := r.persistControl(taskID, action)
+		r.mu.Unlock()
+		return result, err
+	}
+	r.mu.Unlock()
+	return r.persistControl(taskID, action)
 }
 
-func (r *Runner) control(taskID string, cause error) bool {
-	action := taskstate.RequestedActionPause
-	if cause == taskstate.ErrTaskCancelRequested {
-		action = taskstate.RequestedActionCancel
+func (r *Runner) persistControl(taskID string, action taskstate.RequestedAction) (taskstate.ControlResult, error) {
+	if action == taskstate.RequestedActionCancel {
+		return r.queue.RequestCancel(taskID)
 	}
-	if signaled, err := r.signalRunning(taskID, action, cause); err != nil {
-		return false
-	} else if signaled {
-		return true
-	}
-
-	if cause == taskstate.ErrTaskCancelRequested {
-		if r.queue.CancelQueued(taskID) {
-			return true
-		}
-	} else if cause == taskstate.ErrTaskPauseRequested {
-		if result, err := r.queue.RequestPause(taskID); err == nil && result.Changed {
-			return true
-		}
-	}
-
-	current, err := r.queue.IsCurrentWithError(taskID)
-	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("failed to read current task state", "taskID", taskID, "error", err)
-		}
-		return false
-	}
-	if current {
-		var result taskstate.ControlResult
-		if cause == taskstate.ErrTaskCancelRequested {
-			result, err = r.queue.RequestCancel(taskID)
-		} else {
-			result, err = r.queue.RequestPause(taskID)
-		}
-		if err != nil || result.Task == nil || result.Task.Status != taskqueue.StatusRunning {
-			return false
-		}
-		r.markPending(taskstate.TaskRef{TaskID: taskID, Attempt: result.Task.AttemptCount}, cause)
-		return true
-	}
-
-	return false
+	return r.queue.RequestPause(taskID)
 }
 
 func (r *Runner) loop(ctx context.Context) {
@@ -182,7 +213,7 @@ func (r *Runner) loop(ctx context.Context) {
 
 func (r *Runner) drain(ctx context.Context) bool {
 	for {
-		next, err := r.queue.PopNextWithError()
+		next, taskCtx, cancel, err := r.claimNext(ctx)
 		if err != nil {
 			if r.logger != nil {
 				r.logger.Error("failed to claim next task", "error", err)
@@ -196,17 +227,10 @@ func (r *Runner) drain(ctx context.Context) bool {
 			return true
 		}
 
-		taskCtx, cancel := context.WithCancelCause(ctx)
 		ref := taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}
-		r.setRunningTask(ref, cancel)
 		err = r.executor.RunTask(taskCtx, next)
-		if errors.Is(err, context.Canceled) {
-			if cause := context.Cause(taskCtx); cause != nil {
-				err = cause
-			}
-		}
+		err = r.beginFinalizing(ref, taskCtx, err)
 		cancel(nil)
-		r.clearRunningTask(ref)
 		for {
 			finalizeErr := r.queue.FinishTask(next, err, r.logger)
 			if finalizeErr == nil {
@@ -219,6 +243,7 @@ func (r *Runner) drain(ctx context.Context) bool {
 				return false
 			}
 		}
+		r.clearTask(ref)
 
 		hasQueued, queueErr := r.queue.HasQueuedTasksWithError()
 		if queueErr != nil {
@@ -239,74 +264,101 @@ func (r *Runner) drain(ctx context.Context) bool {
 	}
 }
 
-func (r *Runner) setRunningTask(ref taskstate.TaskRef, cancel context.CancelCauseFunc) {
+func (r *Runner) claimNext(ctx context.Context) (*taskqueue.Task, context.Context, context.CancelCauseFunc, error) {
 	r.mu.Lock()
+	next, err := r.queue.PopNextWithError()
+	if err != nil || next == nil {
+		r.mu.Unlock()
+		return next, nil, nil, err
+	}
+	taskCtx, cancel := context.WithCancelCause(ctx)
+	ref := taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}
 	r.taskRef = ref
+	r.taskPhase = runnerPhaseStarting
 	r.taskAction = taskstate.RequestedActionNone
 	r.taskCancel = cancel
-	for pendingRef := range r.pending {
-		if pendingRef.TaskID == ref.TaskID && pendingRef != ref {
-			delete(r.pending, pendingRef)
-		}
-	}
-	pending := r.pending[ref]
-	delete(r.pending, ref)
-	if pending != nil {
-		r.taskAction = requestedActionForCause(pending)
-	}
+	r.controlDone = nil
+	r.controlResult = taskstate.ControlResult{}
+	r.controlErr = nil
 	r.mu.Unlock()
-	if pending != nil {
-		cancel(pending)
-		return
-	}
-	action, err := r.queue.RequestedActionWithError(ref)
-	if err != nil {
-		if r.logger != nil {
-			r.logger.Error("failed to read requested task action", "taskID", ref.TaskID, "error", err)
+
+	for {
+		r.mu.Lock()
+		action, readErr := r.queue.RequestedActionWithError(ref)
+		if readErr == nil {
+			if action == taskstate.RequestedActionNone {
+				// The in-memory queue has no durable requested_action column. A
+				// control accepted while starting is nevertheless authoritative.
+				action = r.taskAction
+			}
+			r.taskAction = action
+			r.taskPhase = runnerPhaseRunning
+			if action == taskstate.RequestedActionPause {
+				cancel(taskstate.ErrTaskPauseRequested)
+			} else if action == taskstate.RequestedActionCancel {
+				cancel(taskstate.ErrTaskCancelRequested)
+			}
+			r.mu.Unlock()
+			return next, taskCtx, cancel, nil
 		}
-		return
+		r.mu.Unlock()
+		if r.logger != nil {
+			r.logger.Error("failed to read requested task action", "taskID", ref.TaskID, "error", readErr)
+		}
+		if !r.waitForRetry(ctx) {
+			cancel(nil)
+			return nil, nil, nil, readErr
+		}
 	}
+}
+
+func (r *Runner) beginFinalizing(ref taskstate.TaskRef, taskCtx context.Context, executorErr error) error {
 	r.mu.Lock()
 	if r.taskRef != ref {
 		r.mu.Unlock()
+		return executorErr
+	}
+	r.taskPhase = runnerPhaseFinalizing
+	done := r.controlDone
+	r.mu.Unlock()
+
+	if done != nil {
+		<-done
+	}
+
+	r.mu.Lock()
+	action, controlErr := r.taskAction, r.controlErr
+	r.mu.Unlock()
+	if controlErr != nil {
+		return fmt.Errorf("persist requested task action: %w", controlErr)
+	}
+	switch action {
+	case taskstate.RequestedActionPause:
+		return taskstate.ErrTaskPauseRequested
+	case taskstate.RequestedActionCancel:
+		return taskstate.ErrTaskCancelRequested
+	}
+	if errors.Is(executorErr, context.Canceled) {
+		if cause := context.Cause(taskCtx); cause != nil {
+			return cause
+		}
+	}
+	return executorErr
+}
+
+func (r *Runner) clearTask(ref taskstate.TaskRef) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.taskRef != ref {
 		return
 	}
-	if r.taskAction == taskstate.RequestedActionNone {
-		r.taskAction = action
-	}
-	effectiveAction := r.taskAction
-	r.mu.Unlock()
-	if effectiveAction == taskstate.RequestedActionPause {
-		cancel(taskstate.ErrTaskPauseRequested)
-	} else if effectiveAction == taskstate.RequestedActionCancel {
-		cancel(taskstate.ErrTaskCancelRequested)
-	}
-}
-
-func (r *Runner) clearRunningTask(ref taskstate.TaskRef) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.taskRef == ref {
-		r.taskRef = taskstate.TaskRef{}
-		r.taskAction = taskstate.RequestedActionNone
-		r.taskCancel = nil
-	}
-}
-
-func (r *Runner) markPending(ref taskstate.TaskRef, cause error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.pending == nil {
-		r.pending = map[taskstate.TaskRef]error{}
-	}
-	r.pending[ref] = cause
-}
-
-func requestedActionForCause(cause error) taskstate.RequestedAction {
-	if errors.Is(cause, taskstate.ErrTaskCancelRequested) {
-		return taskstate.RequestedActionCancel
-	}
-	return taskstate.RequestedActionPause
+	r.taskRef = taskstate.TaskRef{}
+	r.taskPhase = runnerPhaseIdle
+	r.taskAction = taskstate.RequestedActionNone
+	r.taskCancel = nil
+	r.controlDone = nil
+	r.controlResult = taskstate.ControlResult{}
+	r.controlErr = nil
 }
 
 func (r *Runner) waitForNextWork(ctx context.Context) bool {

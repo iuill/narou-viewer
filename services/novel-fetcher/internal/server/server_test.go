@@ -1009,6 +1009,14 @@ func TestRunningTaskRejectsConflictingControlActions(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("executor did not observe control signal")
 			}
+			repeated := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.firstAction, "")
+			if repeated.Code != http.StatusOK {
+				t.Fatalf("repeated control status = %d: %s", repeated.Code, repeated.Body.String())
+			}
+			repeatedData := decodeObject(t, repeated)["data"].(map[string]any)
+			if repeatedData["changed"] != false || repeatedData["requested_action"] != test.requestedAction {
+				t.Fatalf("repeated control data = %#v", repeatedData)
+			}
 
 			second := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.secondAction, "")
 			if second.Code != http.StatusConflict {

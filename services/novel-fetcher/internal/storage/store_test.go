@@ -193,6 +193,51 @@ func TestStoreSavesSQLiteAndCanonicalEpisode(t *testing.T) {
 	}
 }
 
+func TestCompleteWorkForTaskDoesNotCrossAcceptedControl(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	work, err := store.UpsertWorkToc(context.Background(), model.Work{
+		Site:       model.SiteSyosetu,
+		SiteName:   "小説家になろう",
+		SiteWorkID: "n4321ab",
+		SourceURL:  "https://example.com/control-fence",
+		Title:      "制御境界テスト",
+		Author:     "作者",
+		FetchedAt:  time.Now(),
+	}, FetchStatusPartial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := taskstate.NewSQLiteRepository(store.DB())
+	task := taskstate.NewTask("update")
+	task.NovelIDs = []int{work.ID}
+	if _, err := repository.Enqueue(context.Background(), []*taskstate.Task{task}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("claim = %#v, err = %v", claimed, err)
+	}
+	if result, err := repository.RequestPause(context.Background(), task.ID); err != nil || !result.Changed {
+		t.Fatalf("pause = %#v, err = %v", result, err)
+	}
+	ref := taskstate.TaskRef{TaskID: task.ID, Attempt: claimed.AttemptCount}
+	if err := store.CompleteWorkForTask(context.Background(), ref, work.ID); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+		t.Fatalf("completion after control error = %v", err)
+	}
+	storedTask, found, err := repository.Get(context.Background(), task.ID)
+	if err != nil || !found || storedTask.ExecutionCommitted || storedTask.RequestedAction != taskstate.RequestedActionPause {
+		t.Fatalf("task after rejected completion = %#v, found = %v, err = %v", storedTask, found, err)
+	}
+	storedWork, found, err := store.FindWorkByID(work.ID)
+	if err != nil || !found || storedWork.FetchStatus != FetchStatusPartial {
+		t.Fatalf("work after rejected completion = %#v, found = %v, err = %v", storedWork, found, err)
+	}
+}
+
 func TestTaskEpisodeCheckpointRequiresMatchingCanonicalBody(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {

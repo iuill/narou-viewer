@@ -196,43 +196,7 @@ func (a *App) handleRemoveNovels(writer http.ResponseWriter, request *http.Reque
 }
 
 func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request) {
-	taskID := strings.TrimSpace(request.PathValue("taskID"))
-	if taskID == "" {
-		writeError(writer, http.StatusBadRequest, "task id is required")
-		return
-	}
-
-	// Signal the running context first. Episode asset localization shares the
-	// single SQLite writer connection, so waiting for the durable write before
-	// cancellation can otherwise make the control request wait on the HTTP work
-	// that it is supposed to stop.
-	signaled, signalErr := a.runner.SignalCancel(taskID)
-	if signalErr != nil {
-		writeTaskStateError(writer, signalErr)
-		return
-	}
-	result, err := a.queue.RequestCancel(taskID)
-	if err != nil && signaled && errors.Is(err, taskstate.ErrTaskStateConflict) {
-		// The runner may finalize the canceled task between the in-memory signal
-		// and the durable request. Treat that completed handoff as the requested
-		// cancellation while preserving conflict responses for repeated calls.
-		if task, found, getErr := a.queue.GetTask(taskID); getErr == nil && found && task.Status == taskqueue.StatusCanceled {
-			result = taskstate.ControlResult{Task: task, Changed: true}
-			err = nil
-		}
-	}
-	if err != nil {
-		writeTaskStateError(writer, err)
-		return
-	}
-	if !signaled && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
-		a.runner.Cancel(taskID)
-	}
-	status := http.StatusOK
-	if result.Task != nil && result.Task.Status == taskqueue.StatusRunning && result.Changed {
-		status = http.StatusAccepted
-	}
-	writeEnvelope(writer, status, taskControlPayload(result, "cancel"), "Task cancelled")
+	a.handleTaskControl(writer, request, "cancel")
 }
 
 func (a *App) handlePauseTask(writer http.ResponseWriter, request *http.Request) {
@@ -251,41 +215,22 @@ func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Reques
 	}
 	var result taskstate.ControlResult
 	var err error
-	signaled := false
 	switch action {
 	case "pause":
-		signaled, err = a.runner.SignalPause(taskID)
-		if err != nil {
-			break
-		}
-		result, err = a.queue.RequestPause(taskID)
+		result, err = a.runner.RequestPause(taskID)
+	case "cancel":
+		result, err = a.runner.RequestCancel(taskID)
 	case "resume":
 		result, err = a.queue.RequestResume(taskID)
 	default:
 		err = errors.New("unknown task action")
 	}
-	if action == "pause" && signaled {
-		if err != nil && errors.Is(err, taskstate.ErrTaskStateConflict) {
-			// The runner may persist the paused outcome between the in-memory
-			// signal and the durable request. Preserve the acknowledgement of
-			// this request while keeping later repeated pauses idempotent.
-			if task, found, getErr := a.queue.GetTask(taskID); getErr == nil && found && task.Status == taskqueue.StatusPaused {
-				result = taskstate.ControlResult{Task: task, Changed: true}
-				err = nil
-			}
-		} else if err == nil && result.Task != nil && result.Task.Status == taskqueue.StatusPaused && !result.Changed {
-			result.Changed = true
-		}
-	}
 	if err != nil {
 		writeTaskStateError(writer, err)
 		return
 	}
-	if action == "pause" && !signaled && result.Task != nil && result.Task.Status == taskqueue.StatusRunning {
-		a.runner.Pause(taskID)
-	}
 	status := http.StatusOK
-	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued || action == "pause" && signaled) {
+	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {
 		status = http.StatusAccepted
 	}
 	message := "Task " + action
