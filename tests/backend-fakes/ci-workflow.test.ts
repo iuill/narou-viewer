@@ -9,6 +9,12 @@ const independentAuditCondition = [
   "$",
   "{{ !cancelled() && steps.install_dependencies_for_audit.outcome == 'success' }}",
 ].join("");
+const applicationConcurrencyGroup = [
+  "ci",
+  ["$", "{{ github.workflow }}"].join(""),
+  ["$", "{{ github.event_name }}"].join(""),
+  ["$", "{{ github.ref }}"].join(""),
+].join("-");
 
 type WorkflowStep = {
   id?: string;
@@ -23,18 +29,32 @@ type WorkflowJob = {
   steps?: WorkflowStep[];
 };
 
+type BranchTrigger = {
+  branches?: string[];
+};
+
 type Workflow = {
-  on?: Record<string, unknown>;
+  concurrency?: {
+    group?: string;
+    "cancel-in-progress"?: boolean;
+  };
   jobs: Record<string, WorkflowJob>;
+  on?: {
+    pull_request?: BranchTrigger;
+    push?: BranchTrigger;
+    schedule?: unknown;
+    workflow_dispatch?: unknown;
+  };
+  permissions?: Record<string, string>;
 };
 
 function readWorkflow(fileName: string): Workflow {
   return parse(readFileSync(`${repositoryRoot}.github/workflows/${fileName}`, "utf8")) as Workflow;
 }
 
-describe.each(["ci.yml", "security-audit.yml"])("%s dependency audit", (fileName) => {
+describe("dependency-audit.yml", () => {
   it("runs every audit after dependency installation even if an earlier audit fails", () => {
-    const auditSteps = readWorkflow(fileName).jobs["dependency-audit"].steps ?? [];
+    const auditSteps = readWorkflow("dependency-audit.yml").jobs["dependency-audit"].steps ?? [];
     const installStep = auditSteps.find((step) => step.id === "install_dependencies_for_audit");
     const commands = auditSteps.filter((step) => step.run?.startsWith("bun run audit:"));
 
@@ -44,10 +64,23 @@ describe.each(["ci.yml", "security-audit.yml"])("%s dependency audit", (fileName
       expect(step.if).toBe(independentAuditCondition);
     }
   });
+
+  it("preserves pull request, main push, manual, and weekly audit entry points", () => {
+    const workflow = readWorkflow("dependency-audit.yml");
+
+    expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+      "pull_request",
+      "push",
+      "schedule",
+      "workflow_dispatch",
+    ]);
+    expect(workflow.on?.pull_request?.branches).toEqual(["main"]);
+    expect(workflow.on?.push?.branches).toEqual(["main"]);
+  });
 });
 
 describe("ci.yml application workflow", () => {
-  it("handles pull requests, main pushes, and manual dispatch in one workflow", () => {
+  it("handles only main pull requests, main pushes, and manual dispatch", () => {
     const workflow = readWorkflow("ci.yml");
 
     expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
@@ -55,13 +88,22 @@ describe("ci.yml application workflow", () => {
       "push",
       "workflow_dispatch",
     ]);
+    expect(workflow.on?.pull_request?.branches).toEqual(["main"]);
+    expect(workflow.on?.push?.branches).toEqual(["main"]);
   });
 
-  it("keeps dependency audit parallel and outside service build jobs", () => {
+  it("cancels only older runs for the same event and ref", () => {
+    const workflow = readWorkflow("ci.yml");
+
+    expect(workflow.concurrency?.group).toBe(applicationConcurrencyGroup);
+    expect(workflow.concurrency?.["cancel-in-progress"]).toBe(true);
+  });
+
+  it("keeps auxiliary checks outside application jobs", () => {
     const { jobs } = readWorkflow("ci.yml");
 
-    expect(jobs["dependency-audit"].needs).toBeUndefined();
-    expect(jobs["dependency-audit"].name).toContain("Dependency and toolchain audit");
+    expect(jobs["dependency-audit"]).toBeUndefined();
+    expect(jobs["repository-size"]).toBeUndefined();
 
     const serviceCommands = ["viewer-api-go", "novel-fetcher"].flatMap((jobName) =>
       (jobs[jobName].steps ?? []).map((step) => step.run ?? ""),
@@ -79,5 +121,25 @@ describe("ci.yml application workflow", () => {
     expect(
       e2eCommands.filter((command) => command === "bash ./scripts/wait-and-download-artifact.sh"),
     ).toHaveLength(2);
+  });
+});
+
+describe("repository-size.yml", () => {
+  it("isolates the PR-only report and its write permission", () => {
+    const workflow = readWorkflow("repository-size.yml");
+
+    expect(Object.keys(workflow.on ?? {})).toEqual(["pull_request"]);
+    expect(workflow.on?.pull_request?.branches).toEqual(["main"]);
+    expect(workflow.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "write",
+    });
+    expect(workflow.jobs["repository-size"]?.name).toBe("Repository size report");
+  });
+});
+
+describe("security-audit.yml", () => {
+  it("does not duplicate dependency auditing", () => {
+    expect(readWorkflow("security-audit.yml").jobs["dependency-audit"]).toBeUndefined();
   });
 });
