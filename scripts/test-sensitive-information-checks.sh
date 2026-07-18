@@ -68,6 +68,8 @@ path_scan_fails() {
 path_scan_fails data/private.yaml
 path_scan_fails backups/private.tar.gz
 path_scan_fails backup-synthetic.tar.gz.age
+path_scan_fails tmp/backups/private.tar.gz
+path_scan_fails tmp/backup-synthetic.tar.gz.age
 path_scan_fails config/.env
 path_scan_fails keys/id_ed25519
 printf '%s\0' data/.gitkeep config/.env.example src/example.ts |
@@ -133,5 +135,24 @@ git -C "$repo" add example.txt
 scan_fails "$repo" staged
 commit_all "$repo" allow-marker
 scan_fails "$repo" range "$clean_sha" HEAD
+
+repo="$tmpdir/pre-push"
+remote="$tmpdir/pre-push.git"
+new_repo "$repo"
+git init -q --bare "$remote"
+git -C "$repo" remote add origin "$remote"
+printf 'safe\n' >"$repo/example.txt"
+commit_all "$repo" baseline
+git -C "$repo" push -q origin main
+remote_sha="$(git -C "$repo" rev-parse HEAD)"
+
+printf 'SECRET_TEST_TOKEN\n' >"$repo/example.txt"
+commit_all "$repo" sensitive-change
+local_sha="$(git -C "$repo" rev-parse HEAD)"
+if printf 'refs/heads/main %s refs/heads/main %s\n' "$local_sha" "$remote_sha" |
+  scan_passes "$repo" pre-push origin; then
+  echo "expected pre-push scan to reject a sensitive commit" >&2
+  exit 1
+fi
 
 echo "sensitive information regression tests passed"
