@@ -233,8 +233,9 @@ bun run e2e:test:container
 
 ### 6.2 CI
 
-- CI は独立した job を並列に流し、`viewer-web-build` 完了後に Playwright E2E matrix を開始する。TypeScript coverage 閾値付き unit test、各 Go service の検証、依存・toolchain 監査、API contract はそれぞれ独立した品質ゲートとして同じ workflow 内で確認する。
-- 依存・toolchain 監査は service の build job に混在させず、独立した job として最初から並列実行する。E2E の依存先には追加せず、監査によって CI の critical path を延ばさない。
+- application CI は独立した job を並列に流し、`viewer-web-build` 完了後に Playwright E2E matrix を開始する。TypeScript coverage 閾値付き unit test、各 Go service の検証、API contract はそれぞれ独立した品質ゲートとして同じ workflow 内で確認する。
+- 依存・toolchain 監査は application CI から分離した workflow で PR、main push、manual dispatch、週次実行を扱う。E2E の依存先には追加せず、監査によって application CI の critical path を延ばさない。
+- repository-size report は `pull-requests: write` 権限を application CI から分離した PR 専用 workflow で実行する。
 - 公開入口の TLS / 認証を含む確認は、配置先や前段 proxy の責務に応じて個別に行う。app repository の常設 CI では、汎用 self-host sample とアプリ本体の検証に留める。
 - Playwright E2E job は `viewer-web-build` の成果物を前提に開始し、Go 実行ファイルは同一 workflow run の artifact を service 起動直前に取得する。
 - これにより、単純な回帰や入力正規化バグ、YAML 永続化の破壊を短時間で落とせる。
