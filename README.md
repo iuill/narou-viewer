@@ -115,6 +115,7 @@ compose の主な service:
 
 - 入口: [`docs/README.md`](docs/README.md)
 - アーキテクチャ: [`docs/architecture.md`](docs/architecture.md)
+- 品質目標: [`docs/quality-goals.md`](docs/quality-goals.md)
 - 機能別仕様: [`docs/extraction.md`](docs/extraction.md), [`docs/publication-info.md`](docs/publication-info.md), [`docs/reader-ai-assistant.md`](docs/reader-ai-assistant.md), [`docs/state-schema-policy.md`](docs/state-schema-policy.md)
 - 開発手順: [`docs/development.md`](docs/development.md)
 - テスト方針: [`docs/testing/testing-strategy.md`](docs/testing/testing-strategy.md), [`docs/testing/e2e-setup.md`](docs/testing/e2e-setup.md)
