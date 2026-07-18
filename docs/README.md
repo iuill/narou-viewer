@@ -7,10 +7,6 @@
 - [`architecture.md`](architecture.md): アーキテクチャ、責務分離、データ境界
 - [`quality-goals.md`](quality-goals.md): 利用形態、互換性、データ保護、CI、テスト、デプロイの品質目標
 
-## 設計記録
-
-- [`quality-reduction-plan.md`](quality-reduction-plan.md): state 保護スタックと sensitive-information 検査基盤を削減した際の判断と移行計画
-
 ## テスト
 
 - [`testing/testing-strategy.md`](testing/testing-strategy.md): 高速コードレベルテストと E2E の役割分担

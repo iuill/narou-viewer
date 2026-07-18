@@ -83,11 +83,7 @@ for (const file of [".devcontainer/devcontainer.json", ".devcontainer/devcontain
   }
 }
 
-for (const file of [
-  ".github/workflows/ci.yml",
-  ".github/workflows/ci-branch-push.yml",
-  ".github/workflows/security-audit.yml",
-]) {
+for (const file of [".github/workflows/ci.yml", ".github/workflows/security-audit.yml"]) {
   const content = await readFile(file, "utf8");
   const goVersionFiles = [...content.matchAll(/go-version-file:\s*([^\s]+)/g)].map((match) => match[1]);
   const driftedVersionFiles = goVersionFiles.filter((value) => value !== ".go-version");
