@@ -13,6 +13,7 @@ narou-viewer は個人利用者向けの個人開発 OSS である。
 
 - 利用者が再構築できないデータの消失や破損
 - 機微情報や第三者作品データの漏えい
+- 依存関係や build tool の更新経路から混入する悪意あるコード
 - 意図しない外部 request、重複処理、課金の再発生
 - upgrade によるデータ互換性の破壊
 - 日常的な読書を妨げる主要機能の回帰
@@ -121,6 +122,12 @@ request 単位の ledger を残すことで、aggregate だけでは判別でき
 - application CI は pull request、main push、manual dispatch を扱う 1 workflow とする。
 - lint、test、build、API contract、browser smoke は独立した job として並列実行する。
 - security、dependency、権限境界や起動 event が異なる検査は application CI から分離する。
+- 依存関係の検査では既知の脆弱性だけでなく、公開直後の version を取り込む supply-chain risk も扱う。
+- Go module は、緊急修正などで version 単位の例外を明示した場合を除き、公開から 21 日経過するまで採用を拒否する。
+- release-age 検査は安全性の保証や脆弱性監査の代替とはせず、dependency review と既知脆弱性監査を併用する。
+- pull request ごとに repository 全体と base からの規模差分を計測し、変更規模、増加した領域、意図しない生成物や責務の膨張がないかを maintainer が確認する。
+- repository size report は自動的な行数上限にはせず、必要な機能追加を妨げない review 材料として扱う。
+- repository size report の pull request 書き込み権限は application CI から分離した専用 workflow に限定する。
 - application E2E の定期実行は行わない。
 - PR では PC Chromium と smartphone WebKit で最小 smoke を実行する。
 - browser 依存の変更時と release 前は、PC Chromium と smartphone WebKit の full E2E を manual で実行する。
