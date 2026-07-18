@@ -130,6 +130,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 
 - `novel-fetcher/library.sqlite`
   - `fetch_tasks` が取得要求・状態・進捗・制御要求、`fetch_task_queue` が queue 順序、`fetch_task_episode_checkpoints` が task 内の episode 完了実績を保持する。
+  - 一括取得・更新 API は受理時に分割し、永続 task は 1 target または 1 work ID だけを処理する。
   - process 再起動時は `queued` だけを queue へ復帰し、旧 `running` は `succeeded` / `canceled` / `interrupted` のいずれかへ recovery してから worker を起動する。
   - `/api/v2/system/queue` の `total` は `queued + running` を表し、`paused` / `interrupted` は自動実行対象外の件数として別に返す。
 - `novel-fetcher/works/**/episodes/*.json`

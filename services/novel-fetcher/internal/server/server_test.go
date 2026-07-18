@@ -647,11 +647,11 @@ func TestDownloadEquivalentTargetsAreDeduplicatedBeforeFetch(t *testing.T) {
 	waitForIdleApp(t, app)
 }
 
-func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
+func TestExistingDownloadWorkIDsByTargetNormalizesTargets(t *testing.T) {
 	emptyApp := &App{}
-	emptyMatches, err := emptyApp.existingDownloadNovelIDsByTarget([]string{"  "})
+	emptyMatches, err := emptyApp.existingDownloadWorkIDsByTarget([]string{"  "})
 	if err != nil {
-		t.Fatalf("empty existingDownloadNovelIDsByTarget returned error: %v", err)
+		t.Fatalf("empty existingDownloadWorkIDsByTarget returned error: %v", err)
 	}
 	if len(emptyMatches) != 0 {
 		t.Fatalf("empty matches = %#v", emptyMatches)
@@ -661,7 +661,7 @@ func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
 	defer store.Close()
 	app := &App{store: store}
 
-	matches, err := app.existingDownloadNovelIDsByTarget([]string{
+	matches, err := app.existingDownloadWorkIDsByTarget([]string{
 		"HTTPS://NCODE.SYOSETU.COM/N1234AB",
 		"n1234ab",
 		"https://ncode.syosetu.com/n1234ab/1/",
@@ -669,11 +669,11 @@ func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
 		"https://ncode.syosetu.com/missing/",
 	})
 	if err != nil {
-		t.Fatalf("existingDownloadNovelIDsByTarget returned error: %v", err)
+		t.Fatalf("existingDownloadWorkIDsByTarget returned error: %v", err)
 	}
-	ids := matches["site:syosetu:n1234ab"]
-	if len(ids) != 1 || ids[0] != stored.ID {
-		t.Fatalf("matched ids = %#v, want [%d]", ids, stored.ID)
+	workID := matches["site:syosetu:n1234ab"]
+	if workID != stored.ID {
+		t.Fatalf("matched work id = %d, want %d", workID, stored.ID)
 	}
 	if _, ok := matches["url:https://ncode.syosetu.com/missing"]; ok {
 		t.Fatalf("missing target unexpectedly matched: %#v", matches)
@@ -734,7 +734,7 @@ func TestCancelQueuedTask(t *testing.T) {
 
 	task := taskqueue.NewTask("download")
 	task.ID = "queued-1"
-	task.Targets = []string{"https://example.com/work"}
+	task.Target = "https://example.com/work"
 	app.queue.Enqueue(task)
 
 	recorder := performRequest(app, http.MethodPost, "/api/v2/tasks/queued-1/cancel", "")
@@ -837,7 +837,7 @@ func TestNewRecordsTaskStateInitializationError(t *testing.T) {
 	store, _ := newTestStoreWithWork(t)
 	defer store.Close()
 	repositoryTask := taskqueue.NewTask("download")
-	repositoryTask.Targets = []string{"https://example.com/corrupt-startup"}
+	repositoryTask.Target = "https://example.com/corrupt-startup"
 	if _, err := taskstate.NewSQLiteRepository(store.DB()).Enqueue(context.Background(), []*taskqueue.Task{repositoryTask}); err != nil {
 		t.Fatal(err)
 	}
@@ -908,7 +908,7 @@ func TestResumeTaskReturnsConflictWhenDownloadTargetIsAlreadyActive(t *testing.T
 	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
 
 	failed := taskqueue.NewTask("download")
-	failed.Targets = []string{"https://example.com/resume-target-conflict"}
+	failed.Target = "https://example.com/resume-target-conflict"
 	if err := app.queue.Enqueue(failed); err != nil {
 		t.Fatal(err)
 	}
@@ -921,7 +921,7 @@ func TestResumeTaskReturnsConflictWhenDownloadTargetIsAlreadyActive(t *testing.T
 		t.Fatal(err)
 	}
 	active := taskqueue.NewTask("download")
-	active.Targets = append([]string(nil), failed.Targets...)
+	active.Target = failed.Target
 	if err := app.queue.Enqueue(active); err != nil {
 		t.Fatal(err)
 	}
@@ -1112,9 +1112,9 @@ func TestQueuedTaskControlWaitingOnSQLiteDoesNotBlockCurrentTaskCancel(t *testin
 	})
 
 	current := taskqueue.NewTask("download")
-	current.Targets = []string{"https://example.com/current-with-asset"}
+	current.Target = "https://example.com/current-with-asset"
 	queued := taskqueue.NewTask("download")
-	queued.Targets = []string{"https://example.com/queued-control"}
+	queued.Target = "https://example.com/queued-control"
 	if err := app.queue.Enqueue(current, queued); err != nil {
 		t.Fatal(err)
 	}

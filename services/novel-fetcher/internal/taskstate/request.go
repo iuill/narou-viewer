@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"path"
 	"regexp"
@@ -19,8 +20,8 @@ var (
 
 type Request struct {
 	Kind    string         `json:"kind"`
-	Targets []string       `json:"targets,omitempty"`
-	WorkIDs []int          `json:"work_ids,omitempty"`
+	Target  string         `json:"target,omitempty"`
+	WorkID  int            `json:"work_id,omitempty"`
 	Options RequestOptions `json:"options"`
 }
 
@@ -32,33 +33,28 @@ type RequestOptions struct {
 
 func RequestForTask(task *Task) (Request, string, string, error) {
 	request := Request{
-		Kind:    task.Kind,
-		Targets: append([]string{}, task.Targets...),
-		WorkIDs: append([]int{}, task.NovelIDs...),
+		Kind:   task.Kind,
+		Target: task.Target,
+		WorkID: task.WorkID,
 		Options: RequestOptions{
 			Force:           task.Force,
 			ForceRedownload: task.ForceRedownload,
 			SkipUnchanged:   task.SkipUnchanged,
 		},
 	}
-	canonicalTarget := ""
-	if request.Kind != "download" && len(request.WorkIDs) > 0 {
-		canonicalTarget = "work:" + strconv.Itoa(request.WorkIDs[0])
-	} else if len(request.Targets) > 0 {
-		canonicalTarget = CanonicalTarget(request.Targets[0])
-	}
-	if canonicalTarget == "" {
-		return Request{}, "", "", fmt.Errorf("task %q has no target", task.ID)
+	canonicalTarget, err := validateRequest(request)
+	if err != nil {
+		return Request{}, "", "", fmt.Errorf("task %q: %w", task.ID, err)
 	}
 	fingerprintInput := struct {
 		Kind            string         `json:"kind"`
 		CanonicalTarget string         `json:"canonical_target"`
-		WorkIDs         []int          `json:"work_ids,omitempty"`
+		WorkID          int            `json:"work_id,omitempty"`
 		Options         RequestOptions `json:"options"`
 	}{
 		Kind:            request.Kind,
 		CanonicalTarget: canonicalTarget,
-		WorkIDs:         request.WorkIDs,
+		WorkID:          request.WorkID,
 		Options:         request.Options,
 	}
 	requestJSON, err := json.Marshal(fingerprintInput)
@@ -71,13 +67,56 @@ func RequestForTask(task *Task) (Request, string, string, error) {
 
 func DecodeRequest(raw string) (Request, error) {
 	var request Request
-	if err := json.Unmarshal([]byte(raw), &request); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
 		return Request{}, err
 	}
-	if request.Kind == "" || (len(request.Targets) == 0 && len(request.WorkIDs) == 0) {
-		return Request{}, fmt.Errorf("task request is missing kind or target")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return Request{}, fmt.Errorf("task request contains trailing JSON")
+		}
+		return Request{}, err
+	}
+	if _, err := validateRequest(request); err != nil {
+		return Request{}, err
 	}
 	return request, nil
+}
+
+func validateRequest(request Request) (string, error) {
+	switch request.Kind {
+	case "download":
+		if request.Options.ForceRedownload || request.Options.SkipUnchanged {
+			return "", fmt.Errorf("download task request contains unsupported update options")
+		}
+		if request.WorkID < 0 {
+			return "", fmt.Errorf("download task request contains an invalid work id")
+		}
+		canonicalTarget := CanonicalTarget(request.Target)
+		if canonicalTarget == "" {
+			return "", fmt.Errorf("download task request contains an empty target")
+		}
+		return canonicalTarget, nil
+	case "update":
+		if request.Target != "" || request.WorkID <= 0 {
+			return "", fmt.Errorf("update task request must contain one work id and no target")
+		}
+		if request.Options.Force {
+			return "", fmt.Errorf("update task request contains unsupported download options")
+		}
+		return "work:" + strconv.Itoa(request.WorkID), nil
+	case "resume":
+		if request.Target != "" || request.WorkID <= 0 {
+			return "", fmt.Errorf("resume task request must contain one work id and no target")
+		}
+		if request.Options.Force || request.Options.ForceRedownload || request.Options.SkipUnchanged {
+			return "", fmt.Errorf("resume task request contains unsupported options")
+		}
+		return "work:" + strconv.Itoa(request.WorkID), nil
+	default:
+		return "", fmt.Errorf("unsupported task request kind %q", request.Kind)
+	}
 }
 
 // CanonicalTarget returns the durable identity used to reserve a download

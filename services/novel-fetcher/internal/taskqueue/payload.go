@@ -39,6 +39,14 @@ func Payload(task *Task) map[string]any {
 		return nil
 	}
 
+	targets := []string{}
+	if task.Target != "" {
+		targets = append(targets, task.Target)
+	}
+	novelIDs := []int{}
+	if task.WorkID > 0 {
+		novelIDs = append(novelIDs, task.WorkID)
+	}
 	payload := map[string]any{
 		"id":               task.ID,
 		"task_id":          task.ID,
@@ -46,8 +54,8 @@ func Payload(task *Task) map[string]any {
 		"status":           task.Status,
 		"requested_action": task.RequestedAction,
 		"attempt_count":    task.AttemptCount,
-		"targets":          task.Targets,
-		"novel_ids":        IntIDsToStrings(task.NovelIDs),
+		"targets":          targets,
+		"novel_ids":        IntIDsToStrings(novelIDs),
 		"message":          task.Message,
 		"created_at":       task.CreatedAt.Format(time.RFC3339Nano),
 	}

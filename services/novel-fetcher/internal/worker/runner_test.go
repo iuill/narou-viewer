@@ -175,7 +175,7 @@ func TestRunnerStartAndStopCancelsCurrentTask(t *testing.T) {
 	defer runner.Stop(context.Background())
 
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/stop"}
+	task.Target = "https://example.invalid/synthetic/stop"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestRunnerCancelCancelsCurrentTask(t *testing.T) {
 	defer runner.Stop(context.Background())
 
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/cancel"}
+	task.Target = "https://example.invalid/synthetic/cancel"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestRunnerPausePreservesResumableTaskState(t *testing.T) {
 	defer runner.Stop(context.Background())
 
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/pause"}
+	task.Target = "https://example.invalid/synthetic/pause"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestRunnerControlsQueuedTasksBeforeExecution(t *testing.T) {
 	queue, _ := newRunnerTestQueue(t)
 	runner := NewRunner(Options{Queue: queue, Executor: &blockingExecutor{entered: make(chan struct{})}})
 	paused := taskqueue.NewTask("download")
-	paused.Targets = []string{"https://example.invalid/synthetic/queued-pause"}
+	paused.Target = "https://example.invalid/synthetic/queued-pause"
 	if err := queue.Enqueue(paused); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestRunnerControlsQueuedTasksBeforeExecution(t *testing.T) {
 		t.Fatalf("queued pause = %#v, err = %v", result, err)
 	}
 	canceled := taskqueue.NewTask("download")
-	canceled.Targets = []string{"https://example.invalid/synthetic/queued-cancel"}
+	canceled.Target = "https://example.invalid/synthetic/queued-cancel"
 	if err := queue.Enqueue(canceled); err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestRunnerStartingHandoffKeepsDurableControlAsWinner(t *testing.T) {
 			released := false
 			queue := taskqueue.NewQueue(repository)
 			task := taskqueue.NewTask("download")
-			task.Targets = []string{"https://example.invalid/handoff/" + test.name}
+			task.Target = "https://example.invalid/handoff/" + test.name
 			if err := queue.Enqueue(task); err != nil {
 				t.Fatal(err)
 			}
@@ -401,7 +401,7 @@ func TestRunnerRepeatedRunningControlIsIdempotent(t *testing.T) {
 		}
 	}()
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/idempotent-control"}
+	task.Target = "https://example.invalid/idempotent-control"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestRunnerRetriesSameControlAfterPersistenceFailure(t *testing.T) {
 		}
 	}()
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/retry-control"}
+	task.Target = "https://example.invalid/synthetic/retry-control"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +491,7 @@ func TestRunnerPersistsAcceptedControlDuringFinalizationRetry(t *testing.T) {
 	runner.Start(context.Background())
 	defer runner.Stop(context.Background())
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/finalize-control-retry"}
+	task.Target = "https://example.invalid/synthetic/finalize-control-retry"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestRunnerRejectsNewControlsWhileFinalizing(t *testing.T) {
 		}
 	}()
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/finalizing-control"}
+	task.Target = "https://example.invalid/finalizing-control"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -569,7 +569,7 @@ func TestRunnerKeepsAcceptedControlIdempotentWhileFinalizing(t *testing.T) {
 		}
 	}()
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/finalizing-idempotent"}
+	task.Target = "https://example.invalid/finalizing-idempotent"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -623,7 +623,7 @@ func TestRunnerRejectsResumeUntilFinalizedAttemptIsCleared(t *testing.T) {
 		}
 	}()
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/finalize-resume-fence"}
+	task.Target = "https://example.invalid/finalize-resume-fence"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +670,7 @@ func TestRunnerRepeatedResumeIsIdempotentAfterTaskStarts(t *testing.T) {
 	runner.Start(context.Background())
 	defer runner.Stop(context.Background())
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/repeated-resume"}
+	task.Target = "https://example.invalid/synthetic/repeated-resume"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -775,7 +775,7 @@ func TestRunnerRetriesFailedTaskFinalizationUntilShutdown(t *testing.T) {
 	runner := NewRunner(Options{Queue: queue, Executor: executor, WorkInterval: time.Hour, Logger: slog.Default()})
 	runner.Start(context.Background())
 	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://example.invalid/finalize-error"}
+	task.Target = "https://example.invalid/finalize-error"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}

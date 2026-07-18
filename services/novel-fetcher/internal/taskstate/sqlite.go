@@ -77,10 +77,7 @@ func (r *SQLiteRepository) Enqueue(ctx context.Context, tasks []*Task) (EnqueueR
 		if !errors.Is(err, sql.ErrNoRows) {
 			return EnqueueResult{}, err
 		}
-		primaryWorkID := task.PrimaryWorkID
-		if primaryWorkID == 0 && len(task.NovelIDs) == 1 {
-			primaryWorkID = task.NovelIDs[0]
-		}
+		primaryWorkID := task.WorkID
 		if primaryWorkID > 0 {
 			var reservedBy string
 			err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, primaryWorkID).Scan(&reservedBy)
@@ -122,7 +119,6 @@ func (r *SQLiteRepository) Enqueue(ctx context.Context, tasks []*Task) (EnqueueR
 		task.Status = StatusQueued
 		task.RequestedAction = RequestedActionNone
 		task.AttemptCount = 0
-		task.PrimaryWorkID = primaryWorkID
 		task.DedupeKey = dedupeKey
 		task.RequestFingerprint = fingerprint
 		task.UpdatedAt, _ = parseTime(now)
@@ -284,9 +280,9 @@ func (r *SQLiteRepository) RequestResume(ctx context.Context, taskID string) (Co
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ControlResult{}, err
 	}
-	if task.PrimaryWorkID > 0 {
+	if task.WorkID > 0 {
 		var conflict string
-		err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, task.PrimaryWorkID, taskID).Scan(&conflict)
+		err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, task.WorkID, taskID).Scan(&conflict)
 		if err == nil {
 			return ControlResult{}, fmt.Errorf("%w: work is reserved by task %s", ErrTaskAlreadyActive, conflict)
 		}
@@ -457,9 +453,9 @@ func (r *SQLiteRepository) SetTarget(ctx context.Context, ref TaskRef, target st
 	return r.updateString(ctx, ref, `target_label`, target)
 }
 
-func (r *SQLiteRepository) AddNovelID(ctx context.Context, ref TaskRef, novelID int) error {
-	if novelID == 0 {
-		return nil
+func (r *SQLiteRepository) SetWorkID(ctx context.Context, ref TaskRef, workID int) error {
+	if workID <= 0 {
+		return fmt.Errorf("work id must be positive")
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -473,26 +469,27 @@ func (r *SQLiteRepository) AddNovelID(ctx context.Context, ref TaskRef, novelID 
 	if !found || task.AttemptCount != ref.Attempt || task.Status != StatusRunning {
 		return ErrStaleTaskAttempt
 	}
-	for _, current := range task.NovelIDs {
-		if current == novelID {
-			return tx.Commit()
-		}
+	if task.WorkID == workID {
+		return tx.Commit()
+	}
+	if task.WorkID != 0 {
+		return fmt.Errorf("task %s already belongs to work %d", ref.TaskID, task.WorkID)
 	}
 	var reservedBy string
-	err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, novelID, ref.TaskID).Scan(&reservedBy)
+	err = tx.QueryRowContext(ctx, `SELECT task_id FROM fetch_tasks WHERE primary_work_id = ? AND task_id != ? AND status IN ('queued', 'running', 'paused', 'interrupted') LIMIT 1`, workID, ref.TaskID).Scan(&reservedBy)
 	if err == nil {
-		return fmt.Errorf("%w: work %d is already reserved by task %s", ErrTaskAlreadyActive, novelID, reservedBy)
+		return fmt.Errorf("%w: work %d is already reserved by task %s", ErrTaskAlreadyActive, workID, reservedBy)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	task.NovelIDs = append(task.NovelIDs, novelID)
+	task.WorkID = workID
 	request, dedupe, fingerprint, err := RequestForTask(task)
 	if err != nil {
 		return err
 	}
 	requestJSON, _ := json.Marshal(request)
-	result, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET request_json = ?, dedupe_key = ?, request_fingerprint = ?, primary_work_id = ?, updated_at = ? WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, string(requestJSON), dedupe, fingerprint, novelID, time.Now().UTC().Format(time.RFC3339Nano), ref.TaskID, ref.Attempt)
+	result, err := tx.ExecContext(ctx, `UPDATE fetch_tasks SET request_json = ?, dedupe_key = ?, request_fingerprint = ?, primary_work_id = ?, updated_at = ? WHERE task_id = ? AND status = 'running' AND attempt_count = ?`, string(requestJSON), dedupe, fingerprint, workID, time.Now().UTC().Format(time.RFC3339Nano), ref.TaskID, ref.Attempt)
 	if err != nil {
 		return err
 	}
@@ -570,14 +567,15 @@ func (r *SQLiteRepository) RecoverOnStartup(ctx context.Context, now time.Time) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT request_version, request_json FROM fetch_tasks WHERE status IN ('queued', 'running', 'paused', 'interrupted', 'failed')`)
+	rows, err := tx.QueryContext(ctx, `SELECT kind, request_version, request_json FROM fetch_tasks WHERE status IN ('queued', 'running', 'paused', 'interrupted', 'failed')`)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
+		var kind string
 		var requestVersion int
 		var requestJSON string
-		if err := rows.Scan(&requestVersion, &requestJSON); err != nil {
+		if err := rows.Scan(&kind, &requestVersion, &requestJSON); err != nil {
 			_ = rows.Close()
 			return err
 		}
@@ -585,9 +583,14 @@ func (r *SQLiteRepository) RecoverOnStartup(ctx context.Context, now time.Time) 
 			_ = rows.Close()
 			return fmt.Errorf("unsupported task request version %d", requestVersion)
 		}
-		if _, err := DecodeRequest(requestJSON); err != nil {
+		request, err := DecodeRequest(requestJSON)
+		if err != nil {
 			_ = rows.Close()
 			return err
+		}
+		if request.Kind != kind {
+			_ = rows.Close()
+			return fmt.Errorf("task request kind %q does not match stored kind %q", request.Kind, kind)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -688,22 +691,25 @@ func (r *SQLiteRepository) list(ctx context.Context, q queryer, clause string, a
 
 func scanTask(row interface{ Scan(...any) error }) (*Task, bool, error) {
 	var task Task
+	var primaryWorkID int
 	var requestVersion int
 	var requestJSON, status, requestedAction, warningsJSON string
 	var committed int
 	var createdAt, startedAt, updatedAt, pausedAt, interruptedAt, finishedAt string
-	if err := row.Scan(&task.ID, &requestVersion, &task.Kind, &requestJSON, &status, &requestedAction, &task.DedupeKey, &task.RequestFingerprint, &task.PrimaryWorkID, &task.TargetLabel, &task.Phase, &task.CurrentStep, &task.TotalSteps, &task.SavedEpisodeCount, &task.FailedEpisodeID, &task.ResumeEpisodeID, &task.Message, &warningsJSON, &task.ErrorMessage, &task.AttemptCount, &committed, &createdAt, &startedAt, &updatedAt, &pausedAt, &interruptedAt, &finishedAt); err != nil {
+	if err := row.Scan(&task.ID, &requestVersion, &task.Kind, &requestJSON, &status, &requestedAction, &task.DedupeKey, &task.RequestFingerprint, &primaryWorkID, &task.TargetLabel, &task.Phase, &task.CurrentStep, &task.TotalSteps, &task.SavedEpisodeCount, &task.FailedEpisodeID, &task.ResumeEpisodeID, &task.Message, &warningsJSON, &task.ErrorMessage, &task.AttemptCount, &committed, &createdAt, &startedAt, &updatedAt, &pausedAt, &interruptedAt, &finishedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
 	request, err := DecodeRequest(requestJSON)
-	if err != nil || requestVersion != CurrentRequestVersion {
+	if err != nil || requestVersion != CurrentRequestVersion || request.Kind != task.Kind {
 		return nil, false, fmt.Errorf("unsupported task request version or malformed request for %s", task.ID)
 	}
-	task.Targets = append([]string{}, request.Targets...)
-	task.NovelIDs = append([]int{}, request.WorkIDs...)
+	if primaryWorkID != request.WorkID {
+		return nil, false, fmt.Errorf("task %s has inconsistent work identity", task.ID)
+	}
+	task.Target, task.WorkID = request.Target, request.WorkID
 	task.Force, task.ForceRedownload, task.SkipUnchanged = request.Options.Force, request.Options.ForceRedownload, request.Options.SkipUnchanged
 	task.Status, task.RequestedAction, task.ExecutionCommitted = Status(status), RequestedAction(requestedAction), committed != 0
 	if err := json.Unmarshal([]byte(warningsJSON), &task.Warnings); err != nil {

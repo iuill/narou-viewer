@@ -110,15 +110,12 @@ func (q *Queue) SetTaskTarget(taskID string, target string) {
 	}
 }
 
-func (q *Queue) AddTaskNovelID(taskID string, novelID int) error {
-	if novelID == 0 {
-		return nil
-	}
+func (q *Queue) SetTaskWorkID(taskID string, workID int) error {
 	ref, err := q.runningRef(taskID)
 	if err != nil {
 		return err
 	}
-	return q.repository.AddNovelID(context.Background(), ref, novelID)
+	return q.repository.SetWorkID(context.Background(), ref, workID)
 }
 
 func (q *Queue) SetTaskSavedEpisodeCount(taskID string, count int) {

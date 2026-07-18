@@ -20,7 +20,7 @@ type Repository interface {
 	UpdateMessage(ctx context.Context, ref TaskRef, message string) error
 	AddWarning(ctx context.Context, ref TaskRef, warning string) error
 	SetTarget(ctx context.Context, ref TaskRef, target string) error
-	AddNovelID(ctx context.Context, ref TaskRef, novelID int) error
+	SetWorkID(ctx context.Context, ref TaskRef, workID int) error
 	SetSavedEpisodeCount(ctx context.Context, ref TaskRef, count int) error
 	SetFailureEpisode(ctx context.Context, ref TaskRef, failedEpisodeID string, resumeEpisodeID string) error
 	Finalize(ctx context.Context, ref TaskRef, outcome Outcome) error

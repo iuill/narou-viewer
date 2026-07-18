@@ -18,7 +18,7 @@ func TestQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	defer store.Close()
 	queue := NewQueue(taskstate.NewSQLiteRepository(store.DB()))
 	task := NewTask("update")
-	task.NovelIDs = []int{99}
+	task.WorkID = 99
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	queue.AddTaskWarning(task.ID, "warning")
 	queue.AddTaskWarning(task.ID, " ")
 	queue.SetTaskTarget(task.ID, "作品")
-	queue.AddTaskNovelID(task.ID, 100)
+	queue.SetTaskWorkID(task.ID, 100)
 	queue.SetTaskSavedEpisodeCount(task.ID, 1)
 	queue.SetTaskFailureEpisode(task.ID, "2", "2")
 	if _, err := queue.RequestCancel(task.ID); err != nil {
@@ -62,7 +62,7 @@ func TestQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	}
 
 	queued := NewTask("download")
-	queued.Targets = []string{"https://example.com/queued"}
+	queued.Target = "https://example.com/queued"
 	if err := queue.Enqueue(queued); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	}
 
 	failed := NewTask("download")
-	failed.Targets = []string{"https://example.invalid/failed"}
+	failed.Target = "https://example.invalid/failed"
 	if err := queue.Enqueue(failed); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestQueueUsesRepositoryForLifecycleAndControls(t *testing.T) {
 	}
 
 	succeeded := NewTask("download")
-	succeeded.Targets = []string{"https://example.invalid/succeeded"}
+	succeeded.Target = "https://example.invalid/succeeded"
 	if err := queue.Enqueue(succeeded); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestQueueReadsDoNotReportClosedStoreAsEmpty(t *testing.T) {
 	if _, err := queue.HasQueuedTasks(); err == nil {
 		t.Fatal("closed store was reported as no queued tasks")
 	}
-	if err := queue.AddTaskNovelID("missing", 1); err == nil {
+	if err := queue.SetTaskWorkID("missing", 1); err == nil {
 		t.Fatal("closed store accepted a task identity update")
 	}
 }
@@ -165,18 +165,18 @@ func TestQueueRejectsIdentityUpdateForNonRunningTask(t *testing.T) {
 	defer store.Close()
 	queue := NewQueue(taskstate.NewSQLiteRepository(store.DB()))
 	task := NewTask("download")
-	task.Targets = []string{"https://example.invalid/queued"}
+	task.Target = "https://example.invalid/queued"
 	if err := queue.Enqueue(task); err != nil {
 		t.Fatal(err)
 	}
-	if err := queue.AddTaskNovelID(task.ID, 1); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
+	if err := queue.SetTaskWorkID(task.ID, 1); !errors.Is(err, taskstate.ErrStaleTaskAttempt) {
 		t.Fatalf("queued identity update error = %v", err)
 	}
-	if err := queue.AddTaskNovelID("missing", 1); !errors.Is(err, taskstate.ErrTaskNotFound) {
+	if err := queue.SetTaskWorkID("missing", 1); !errors.Is(err, taskstate.ErrTaskNotFound) {
 		t.Fatalf("missing identity update error = %v", err)
 	}
-	if err := queue.AddTaskNovelID(task.ID, 0); err != nil {
-		t.Fatalf("zero identity update error = %v", err)
+	if err := queue.SetTaskWorkID(task.ID, 0); err == nil {
+		t.Fatal("zero work id was accepted")
 	}
 }
 

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"strings"
 
 	"narou-viewer/services/novel-fetcher/internal/taskstate"
@@ -24,7 +25,7 @@ func normalizeDownloadTargets(values []string) []string {
 	return normalized
 }
 
-func (a *App) existingDownloadNovelIDsByTarget(targets []string) (map[string][]int, error) {
+func (a *App) existingDownloadWorkIDsByTarget(targets []string) (map[string]int, error) {
 	targetKeys := map[string]struct{}{}
 	for _, target := range targets {
 		if key := normalizeDownloadTargetKey(target); key != "" {
@@ -32,7 +33,7 @@ func (a *App) existingDownloadNovelIDsByTarget(targets []string) (map[string][]i
 		}
 	}
 
-	matches := map[string][]int{}
+	matches := map[string]int{}
 	if len(targetKeys) == 0 {
 		return matches, nil
 	}
@@ -45,7 +46,7 @@ func (a *App) existingDownloadNovelIDsByTarget(targets []string) (map[string][]i
 				return nil, err
 			}
 			if found {
-				matches[key] = appendUniqueInt(matches[key], work.ID)
+				matches[key] = work.ID
 			}
 			continue
 		}
@@ -63,7 +64,10 @@ func (a *App) existingDownloadNovelIDsByTarget(targets []string) (map[string][]i
 	for _, work := range works {
 		key := normalizeDownloadTargetKey(work.SourceURL)
 		if _, ok := unresolvedSourceKeys[key]; ok {
-			matches[key] = appendUniqueInt(matches[key], work.ID)
+			if current := matches[key]; current != 0 && current != work.ID {
+				return nil, fmt.Errorf("multiple works match download target %q", key)
+			}
+			matches[key] = work.ID
 		}
 	}
 	return matches, nil
@@ -84,16 +88,4 @@ func parseDownloadTargetSiteKey(key string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
-}
-
-func appendUniqueInt(values []int, next int) []int {
-	if next == 0 {
-		return values
-	}
-	for _, value := range values {
-		if value == next {
-			return values
-		}
-	}
-	return append(values, next)
 }

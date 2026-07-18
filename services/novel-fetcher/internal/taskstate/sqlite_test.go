@@ -3,6 +3,7 @@ package taskstate
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -63,9 +64,9 @@ func TestSQLiteRepositoryPersistsQueueOrderAcrossStoreReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := NewTask("download")
-	first.Targets = []string{"https://example.com/first"}
+	first.Target = "https://example.com/first"
 	second := NewTask("download")
-	second.Targets = []string{"https://example.com/second"}
+	second.Target = "https://example.com/second"
 	repository := NewSQLiteRepository(store)
 	if _, err := repository.Enqueue(context.Background(), []*Task{first, second}); err != nil {
 		t.Fatal(err)
@@ -97,10 +98,10 @@ func TestSQLiteRepositoryPersistsQueueOrderAcrossStoreReopen(t *testing.T) {
 func TestSQLiteRepositoryDeduplicatesExactRequestAndRejectsDifferentOptions(t *testing.T) {
 	_, repository := newRepository(t)
 	first := NewTask("update")
-	first.NovelIDs = []int{42}
+	first.WorkID = 42
 	first.SkipUnchanged = true
 	second := NewTask("update")
-	second.NovelIDs = []int{42}
+	second.WorkID = 42
 	second.SkipUnchanged = true
 	result, err := repository.Enqueue(context.Background(), []*Task{first})
 	if err != nil || len(result.Tasks) != 1 || result.Tasks[0].ID != first.ID {
@@ -111,7 +112,7 @@ func TestSQLiteRepositoryDeduplicatesExactRequestAndRejectsDifferentOptions(t *t
 		t.Fatalf("duplicate enqueue = %#v, err = %v", result, err)
 	}
 	conflict := NewTask("update")
-	conflict.NovelIDs = []int{42}
+	conflict.WorkID = 42
 	conflict.ForceRedownload = true
 	if _, err := repository.Enqueue(context.Background(), []*Task{conflict}); !errors.Is(err, ErrTaskAlreadyActive) {
 		t.Fatalf("conflicting enqueue error = %v", err)
@@ -121,11 +122,11 @@ func TestSQLiteRepositoryDeduplicatesExactRequestAndRejectsDifferentOptions(t *t
 func TestSQLiteRepositoryDeduplicatesEquivalentDownloadTargets(t *testing.T) {
 	_, repository := newRepository(t)
 	first := NewTask("download")
-	first.Targets = []string{"n1234ab"}
-	first.NovelIDs = []int{42}
+	first.Target = "n1234ab"
+	first.WorkID = 42
 	second := NewTask("download")
-	second.Targets = []string{"https://ncode.syosetu.com/n1234ab/1/"}
-	second.NovelIDs = []int{42}
+	second.Target = "https://ncode.syosetu.com/n1234ab/1/"
+	second.WorkID = 42
 
 	if _, err := repository.Enqueue(context.Background(), []*Task{first}); err != nil {
 		t.Fatal(err)
@@ -136,7 +137,7 @@ func TestSQLiteRepositoryDeduplicatesEquivalentDownloadTargets(t *testing.T) {
 	}
 
 	update := NewTask("update")
-	update.NovelIDs = []int{42}
+	update.WorkID = 42
 	if _, err := repository.Enqueue(context.Background(), []*Task{update}); !errors.Is(err, ErrTaskAlreadyActive) {
 		t.Fatalf("cross-kind reservation error = %v", err)
 	}
@@ -145,7 +146,7 @@ func TestSQLiteRepositoryDeduplicatesEquivalentDownloadTargets(t *testing.T) {
 func TestSQLiteRepositoryRejectsWorkReservationDiscoveredDuringDownload(t *testing.T) {
 	_, repository := newRepository(t)
 	download := NewTask("download")
-	download.Targets = []string{"https://ncode.syosetu.com/n1234ab/"}
+	download.Target = "https://ncode.syosetu.com/n1234ab/"
 	if _, err := repository.Enqueue(context.Background(), []*Task{download}); err != nil {
 		t.Fatal(err)
 	}
@@ -154,11 +155,11 @@ func TestSQLiteRepositoryRejectsWorkReservationDiscoveredDuringDownload(t *testi
 		t.Fatalf("claim = %#v, err = %v", claimed, err)
 	}
 	update := NewTask("update")
-	update.NovelIDs = []int{42}
+	update.WorkID = 42
 	if _, err := repository.Enqueue(context.Background(), []*Task{update}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.AddNovelID(context.Background(), TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}, 42); !errors.Is(err, ErrTaskAlreadyActive) {
+	if err := repository.SetWorkID(context.Background(), TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}, 42); !errors.Is(err, ErrTaskAlreadyActive) {
 		t.Fatalf("late reservation error = %v", err)
 	}
 }
@@ -166,7 +167,7 @@ func TestSQLiteRepositoryRejectsWorkReservationDiscoveredDuringDownload(t *testi
 func TestSQLiteRepositoryRecoveryDoesNotAutoResumeRunningTask(t *testing.T) {
 	_, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/work"}
+	task.Target = "https://example.com/work"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func TestSQLiteRepositoryRecoveryDoesNotAutoResumeRunningTask(t *testing.T) {
 func TestSQLiteRepositoryControlTransitionsArePersistent(t *testing.T) {
 	_, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/work"}
+	task.Target = "https://example.com/work"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -223,8 +224,8 @@ func TestSQLiteRepositoryControlTransitionsArePersistent(t *testing.T) {
 
 func TestSQLiteRepositoryPersistsProgressAndFinalOutcome(t *testing.T) {
 	store, repository := newRepository(t)
-	task := NewTask("update")
-	task.NovelIDs = []int{7}
+	task := NewTask("download")
+	task.Target = "https://example.invalid/progress"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -246,8 +247,8 @@ func TestSQLiteRepositoryPersistsProgressAndFinalOutcome(t *testing.T) {
 	if err := repository.UpdateMessage(context.Background(), ref, "saved"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.AddNovelID(context.Background(), ref, 0); err != nil {
-		t.Fatal(err)
+	if err := repository.SetWorkID(context.Background(), ref, 0); err == nil {
+		t.Fatal("zero work id was accepted")
 	}
 	if err := repository.AddWarning(context.Background(), ref, "warning"); err != nil {
 		t.Fatal(err)
@@ -258,11 +259,14 @@ func TestSQLiteRepositoryPersistsProgressAndFinalOutcome(t *testing.T) {
 	if err := repository.SetTarget(context.Background(), ref, "作品"); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.AddNovelID(context.Background(), ref, 8); err != nil {
+	if err := repository.SetWorkID(context.Background(), ref, 8); err != nil {
 		t.Fatal(err)
 	}
-	if err := repository.AddNovelID(context.Background(), ref, 8); err != nil {
+	if err := repository.SetWorkID(context.Background(), ref, 8); err != nil {
 		t.Fatal(err)
+	}
+	if err := repository.SetWorkID(context.Background(), ref, 9); err == nil {
+		t.Fatal("task work identity was replaced")
 	}
 	if err := repository.SetSavedEpisodeCount(context.Background(), ref, 1); err != nil {
 		t.Fatal(err)
@@ -274,7 +278,7 @@ func TestSQLiteRepositoryPersistsProgressAndFinalOutcome(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("updated = %#v, found = %v, err = %v", updated, found, err)
 	}
-	if updated.Message != "saved" || updated.Phase != "episode" || updated.CurrentStep != 1 || updated.TotalSteps != 2 || updated.SavedEpisodeCount != 1 || len(updated.Warnings) != 1 || updated.TargetLabel != "作品" || updated.FailedEpisodeID != "2" || len(updated.NovelIDs) != 2 {
+	if updated.Message != "saved" || updated.Phase != "episode" || updated.CurrentStep != 1 || updated.TotalSteps != 2 || updated.SavedEpisodeCount != 1 || len(updated.Warnings) != 1 || updated.TargetLabel != "作品" || updated.FailedEpisodeID != "2" || updated.WorkID != 8 {
 		t.Fatalf("updated = %#v", updated)
 	}
 	if err := repository.Finalize(context.Background(), ref, Outcome{Status: StatusFailed, Error: errors.New("boom")}); err != nil {
@@ -293,7 +297,7 @@ func TestSQLiteRepositoryPersistsProgressAndFinalOutcome(t *testing.T) {
 func TestSQLiteRepositoryResumeFailedTaskAndCancelTerminalCandidates(t *testing.T) {
 	_, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/work"}
+	task.Target = "https://example.com/work"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -327,11 +331,9 @@ func TestSQLiteRepositoryResumeFailedTaskAndCancelTerminalCandidates(t *testing.
 
 func TestSQLiteRepositoryRejectsCorruptQueueInvariantAndMalformedRequest(t *testing.T) {
 	store, repository := newRepository(t)
-	if _, err := repository.Enqueue(context.Background(), []*Task{func() *Task {
-		task := NewTask("download")
-		task.Targets = []string{"https://example.com/work"}
-		return task
-	}()}); err != nil {
+	task := NewTask("download")
+	task.Target = "https://example.com/work"
+	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Exec(`DELETE FROM fetch_task_queue`); err != nil {
@@ -346,12 +348,21 @@ func TestSQLiteRepositoryRejectsCorruptQueueInvariantAndMalformedRequest(t *test
 	if err := repository.RecoverOnStartup(context.Background(), time.Now()); err == nil {
 		t.Fatal("malformed request was accepted")
 	}
+	if _, err := store.Exec(`UPDATE fetch_tasks SET request_json = ?`, `{"kind":"update","work_ids":[1],"options":{}}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.Get(context.Background(), task.ID); err == nil {
+		t.Fatal("task with mismatched stored and request kinds was readable")
+	}
+	if err := repository.RecoverOnStartup(context.Background(), time.Now()); err == nil {
+		t.Fatal("task with mismatched stored and request kinds passed recovery")
+	}
 }
 
 func TestRecoverOnStartupIgnoresMalformedTerminalHistory(t *testing.T) {
 	store, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.invalid/synthetic/terminal-history"}
+	task.Target = "https://example.invalid/synthetic/terminal-history"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -368,13 +379,104 @@ func TestRecoverOnStartupIgnoresMalformedTerminalHistory(t *testing.T) {
 
 func TestRequestHelpersNormalizeAndValidate(t *testing.T) {
 	task := NewTask("download")
-	task.Targets = []string{"HTTPS://Example.com/work/?page=1#fragment"}
+	task.Target = "HTTPS://Example.com/work/?page=1#fragment"
 	_, key, fingerprint, err := RequestForTask(task)
 	if err != nil || key != "url:https://example.com/work" || fingerprint == "" {
 		t.Fatalf("request = key %q, fingerprint %q, err %v", key, fingerprint, err)
 	}
 	if _, err := DecodeRequest("{}"); err == nil {
 		t.Fatal("invalid request was accepted")
+	}
+	valid := []*Task{
+		func() *Task {
+			task := NewTask("download")
+			task.Target = "https://example.invalid/download"
+			task.WorkID = 1
+			task.Force = true
+			return task
+		}(),
+		func() *Task {
+			task := NewTask("update")
+			task.WorkID = 1
+			task.ForceRedownload = true
+			task.SkipUnchanged = true
+			return task
+		}(),
+		func() *Task {
+			task := NewTask("resume")
+			task.WorkID = 1
+			return task
+		}(),
+	}
+	for _, task := range valid {
+		request, _, fingerprint, err := RequestForTask(task)
+		if err != nil || fingerprint == "" {
+			t.Fatalf("valid %s request error = %v, fingerprint = %q", task.Kind, err, fingerprint)
+		}
+		raw, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeRequest(string(raw)); err != nil {
+			t.Fatalf("valid %s request was not decoded: %v", task.Kind, err)
+		}
+	}
+	invalid := []*Task{
+		NewTask("unknown"),
+		func() *Task {
+			task := NewTask("download")
+			task.Target = "https://example.invalid/a"
+			task.SkipUnchanged = true
+			return task
+		}(),
+		func() *Task {
+			task := NewTask("update")
+			task.Target = "https://example.invalid/a"
+			return task
+		}(),
+		func() *Task {
+			task := NewTask("update")
+			task.WorkID = 1
+			task.Force = true
+			return task
+		}(),
+		func() *Task {
+			task := NewTask("resume")
+			task.WorkID = 1
+			task.ForceRedownload = true
+			return task
+		}(),
+	}
+	for _, task := range invalid {
+		if _, _, _, err := RequestForTask(task); err == nil {
+			t.Fatalf("invalid %s task request was accepted: %#v", task.Kind, task)
+		}
+		request := Request{
+			Kind:    task.Kind,
+			Target:  task.Target,
+			WorkID:  task.WorkID,
+			Options: RequestOptions{Force: task.Force, ForceRedownload: task.ForceRedownload, SkipUnchanged: task.SkipUnchanged},
+		}
+		raw, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DecodeRequest(string(raw)); err == nil {
+			t.Fatalf("invalid %s persisted request was decoded: %s", task.Kind, raw)
+		}
+	}
+	for _, raw := range []string{
+		`{`,
+		`{"kind":"download","target":"https://example.invalid/a","options":{}} {}`,
+		`{"kind":"download","target":"https://example.invalid/a","options":{}} trailing`,
+		`{"kind":"download","target":"https://example.invalid/a","work_id":-1,"options":{}}`,
+		`{"kind":"download","targets":["https://example.invalid/a","https://example.invalid/b"],"options":{}}`,
+		`{"kind":"update","work_ids":[1,2],"options":{}}`,
+		`{"kind":"resume","work_ids":[1],"options":{}}`,
+	} {
+		if _, err := DecodeRequest(raw); err == nil {
+			t.Fatalf("legacy plural request was decoded: %s", raw)
+		}
 	}
 	if got := IntIDsToStrings([]int{1, 2}); len(got) != 2 || got[1] != "2" {
 		t.Fatalf("ids = %#v", got)
@@ -399,7 +501,7 @@ func TestSQLiteRepositoryControlIdempotencyAndRecoveryOutcomes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store, repository := newRepository(t)
 			task := NewTask("download")
-			task.Targets = []string{"https://example.com/" + test.name}
+			task.Target = "https://example.com/" + test.name
 			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 				t.Fatal(err)
 			}
@@ -442,7 +544,7 @@ func TestSQLiteRepositoryControlIdempotencyAndRecoveryOutcomes(t *testing.T) {
 func TestSQLiteRepositoryRejectsStaleAttemptForAllCriticalWrites(t *testing.T) {
 	_, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/stale"}
+	task.Target = "https://example.com/stale"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +562,7 @@ func TestSQLiteRepositoryRejectsStaleAttemptForAllCriticalWrites(t *testing.T) {
 		{"message", func() error { return repository.UpdateMessage(context.Background(), stale, "x") }},
 		{"warning", func() error { return repository.AddWarning(context.Background(), stale, "x") }},
 		{"target", func() error { return repository.SetTarget(context.Background(), stale, "x") }},
-		{"novel", func() error { return repository.AddNovelID(context.Background(), stale, 8) }},
+		{"novel", func() error { return repository.SetWorkID(context.Background(), stale, 8) }},
 		{"count", func() error { return repository.SetSavedEpisodeCount(context.Background(), stale, 1) }},
 		{"failure", func() error { return repository.SetFailureEpisode(context.Background(), stale, "1", "1") }},
 		{"finalize", func() error { return repository.Finalize(context.Background(), stale, Outcome{Status: StatusFailed}) }},
@@ -483,7 +585,7 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 	}
 
 	queued := NewTask("download")
-	queued.Targets = []string{"https://example.com/matrix"}
+	queued.Target = "https://example.com/matrix"
 	if _, err := repository.Enqueue(context.Background(), []*Task{queued}); err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +606,7 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 	}
 
 	second := NewTask("download")
-	second.Targets = []string{"https://example.com/matrix-2"}
+	second.Target = "https://example.com/matrix-2"
 	if _, err := repository.Enqueue(context.Background(), []*Task{second}); err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +624,7 @@ func TestSQLiteRepositoryCoversStateMatrixAndTerminalFields(t *testing.T) {
 	}
 
 	third := NewTask("download")
-	third.Targets = []string{"https://example.com/matrix-3"}
+	third.Target = "https://example.com/matrix-3"
 	if _, err := repository.Enqueue(context.Background(), []*Task{third}); err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +673,7 @@ func TestSQLiteRepositorySummaryIncludesPersistentHistoryBuckets(t *testing.T) {
 	store, repository := newRepository(t)
 	makeTask := func(name string) *Task {
 		task := NewTask("download")
-		task.Targets = []string{"https://example.com/summary/" + name}
+		task.Target = "https://example.com/summary/" + name
 		if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 			t.Fatal(err)
 		}
@@ -649,7 +751,7 @@ func TestSQLiteRepositorySummaryIncludesPersistentHistoryBuckets(t *testing.T) {
 func TestSQLiteRepositoryRejectsMalformedStoredTaskAndInvalidClaimState(t *testing.T) {
 	store, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/corrupt"}
+	task.Target = "https://example.com/corrupt"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +776,7 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 	store, repository := newRepository(t)
 	newTask := func(name string) *Task {
 		task := NewTask("download")
-		task.Targets = []string{"https://example.com/control/" + name}
+		task.Target = "https://example.com/control/" + name
 		if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 			t.Fatal(err)
 		}
@@ -725,7 +827,7 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 	}
 
 	running := NewTask("download")
-	running.Targets = []string{"https://example.com/control/running"}
+	running.Target = "https://example.com/control/running"
 	if _, err := repository.Enqueue(context.Background(), []*Task{running}); err != nil {
 		t.Fatal(err)
 	}
@@ -739,23 +841,32 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reserved := newTask("reserved")
-	conflict := newTask("conflict")
-	if _, err := store.Exec(`UPDATE fetch_tasks SET primary_work_id = 500 WHERE task_id = ?`, reserved.ID); err != nil {
+	conflict := NewTask("update")
+	conflict.WorkID = 500
+	if _, err := repository.Enqueue(context.Background(), []*Task{conflict}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Exec(`DELETE FROM fetch_task_queue WHERE task_id = ?`, conflict.ID); err != nil {
+	claimedConflict, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Exec(`UPDATE fetch_tasks SET status = 'failed', primary_work_id = 500 WHERE task_id = ?`, conflict.ID); err != nil {
+	if err := repository.Finalize(context.Background(), TaskRef{TaskID: claimedConflict.ID, Attempt: claimedConflict.AttemptCount}, Outcome{Status: StatusFailed, Error: errors.New("temporary")}); err != nil {
+		t.Fatal(err)
+	}
+	reserved := NewTask("update")
+	reserved.WorkID = 500
+	if _, err := repository.Enqueue(context.Background(), []*Task{reserved}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repository.RequestResume(context.Background(), conflict.ID); !errors.Is(err, ErrTaskAlreadyActive) {
 		t.Fatalf("resume conflict error = %v", err)
 	}
+	if _, err := repository.RequestCancel(context.Background(), reserved.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	failedDownload := NewTask("download")
-	failedDownload.Targets = []string{"https://example.com/control/resume-dedupe"}
+	failedDownload.Target = "https://example.com/control/resume-dedupe"
 	if _, err := repository.Enqueue(context.Background(), []*Task{failedDownload}); err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +878,7 @@ func TestSQLiteRepositoryTerminalControlMatrixAndResumeConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	activeDownload := NewTask("download")
-	activeDownload.Targets = append([]string(nil), failedDownload.Targets...)
+	activeDownload.Target = failedDownload.Target
 	if _, err := repository.Enqueue(context.Background(), []*Task{activeDownload}); err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +893,7 @@ func TestSQLiteRepositoryRejectsUnknownRequestVersionAndInvalidFinalization(t *t
 		t.Fatal(err)
 	}
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/version"}
+	task.Target = "https://example.com/version"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -833,7 +944,7 @@ func TestSQLiteRepositoryRejectsConflictingRunningControlActions(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, repository := newRepository(t)
 			task := NewTask("download")
-			task.Targets = []string{"https://example.com/control/" + strings.ReplaceAll(test.name, " ", "-")}
+			task.Target = "https://example.com/control/" + strings.ReplaceAll(test.name, " ", "-")
 			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 				t.Fatal(err)
 			}
@@ -870,7 +981,7 @@ func TestSQLiteRepositoryFinalizeUsesDurableControlAndCommitFence(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			store, repository := newRepository(t)
 			task := NewTask("download")
-			task.Targets = []string{"https://example.com/finalize/" + strings.ReplaceAll(test.name, " ", "-")}
+			task.Target = "https://example.com/finalize/" + strings.ReplaceAll(test.name, " ", "-")
 			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 				t.Fatal(err)
 			}
@@ -908,7 +1019,7 @@ func TestSQLiteRepositoryFinalizeUsesDurableControlAndCommitFence(t *testing.T) 
 func TestSQLiteRepositoryRejectsControlAfterCommitFence(t *testing.T) {
 	store, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/committed-control"}
+	task.Target = "https://example.com/committed-control"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -941,7 +1052,7 @@ func TestSQLiteRepositoryNoopAndMissingControlPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/noop"}
+	task.Target = "https://example.com/noop"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +1072,7 @@ func TestSQLiteRepositoryNoopAndMissingControlPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	paused := NewTask("download")
-	paused.Targets = []string{"https://example.com/resume-queue-error"}
+	paused.Target = "https://example.com/resume-queue-error"
 	if _, err := repository.Enqueue(context.Background(), []*Task{paused}); err != nil {
 		t.Fatal(err)
 	}
@@ -1015,7 +1126,7 @@ func TestSQLiteRepositoryPropagatesClosedDatabaseErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/closed"}
+	task.Target = "https://example.com/closed"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err == nil {
 		t.Fatal("enqueue accepted closed database")
 	}
@@ -1059,7 +1170,7 @@ func TestSQLiteRepositoryPropagatesClosedDatabaseErrors(t *testing.T) {
 	if err := repository.SetTarget(context.Background(), ref, "x"); err == nil {
 		t.Fatal("target accepted closed database")
 	}
-	if err := repository.AddNovelID(context.Background(), ref, 1); err == nil {
+	if err := repository.SetWorkID(context.Background(), ref, 1); err == nil {
 		t.Fatal("novel id accepted closed database")
 	}
 	if err := repository.SetSavedEpisodeCount(context.Background(), ref, 1); err == nil {
@@ -1081,7 +1192,7 @@ func TestSQLiteRepositoryRejectsInvalidStoredTimestampsAndSummaryRows(t *testing
 		t.Run(column, func(t *testing.T) {
 			store, repository := newRepository(t)
 			task := NewTask("download")
-			task.Targets = []string{"https://example.com/time/" + column}
+			task.Target = "https://example.com/time/" + column
 			if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 				t.Fatal(err)
 			}
@@ -1095,7 +1206,7 @@ func TestSQLiteRepositoryRejectsInvalidStoredTimestampsAndSummaryRows(t *testing
 	}
 	store, repository := newRepository(t)
 	task := NewTask("download")
-	task.Targets = []string{"https://example.com/summary-corrupt"}
+	task.Target = "https://example.com/summary-corrupt"
 	if _, err := repository.Enqueue(context.Background(), []*Task{task}); err != nil {
 		t.Fatal(err)
 	}

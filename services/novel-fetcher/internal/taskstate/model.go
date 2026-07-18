@@ -45,8 +45,8 @@ const (
 type Task struct {
 	ID                 string
 	Kind               string
-	Targets            []string
-	NovelIDs           []int
+	Target             string
+	WorkID             int
 	Force              bool
 	ForceRedownload    bool
 	SkipUnchanged      bool
@@ -64,7 +64,6 @@ type Task struct {
 	Phase              string
 	CurrentStep        int
 	TotalSteps         int
-	PrimaryWorkID      int
 	DedupeKey          string
 	RequestFingerprint string
 	CreatedAt          time.Time

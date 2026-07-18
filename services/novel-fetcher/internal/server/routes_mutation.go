@@ -39,7 +39,7 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	existingNovelIDs, err := a.existingDownloadNovelIDsByTarget(targets)
+	existingWorkIDs, err := a.existingDownloadWorkIDsByTarget(targets)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -48,8 +48,8 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 	tasks := make([]*taskqueue.Task, 0, len(targets))
 	for _, target := range targets {
 		task := taskqueue.NewTask("download")
-		task.Targets = []string{target}
-		task.NovelIDs = existingNovelIDs[normalizeDownloadTargetKey(target)]
+		task.Target = target
+		task.WorkID = existingWorkIDs[normalizeDownloadTargetKey(target)]
 		task.Force = body.Force
 		tasks = append(tasks, task)
 	}
@@ -104,7 +104,7 @@ func (a *App) handleUpdateNovels(writer http.ResponseWriter, request *http.Reque
 		}
 
 		task := taskqueue.NewTask("update")
-		task.NovelIDs = []int{id}
+		task.WorkID = id
 		task.ForceRedownload = body.ForceRedownload
 		task.SkipUnchanged = skipUnchanged
 		tasks = append(tasks, task)
@@ -148,7 +148,7 @@ func (a *App) handleResumeNovels(writer http.ResponseWriter, request *http.Reque
 		}
 
 		task := taskqueue.NewTask("resume")
-		task.NovelIDs = []int{id}
+		task.WorkID = id
 		tasks = append(tasks, task)
 	}
 	if err := a.queue.Enqueue(tasks...); err != nil {
