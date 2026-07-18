@@ -242,6 +242,7 @@ novels:
 - data backup の復号情報と AI settings の master passphrase は backup 本体と分けて管理し、log に出力しない。
 - unknown crypto version、passphrase 不足、認証失敗を「key なし」に正規化しない。
 - plaintext から encrypted payload への lazy migration は recognized document にだけ適用する。
+- viewer-api は起動時に typed load する。malformed document、未知 schema version、不正な crypto version、復号失敗は service 全体の起動を失敗させ、master passphrase 設定時の lazy migration もこの読込時に実行する。
 
 ### 4.3 character / term / extraction state
 
