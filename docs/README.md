@@ -7,6 +7,10 @@
 - [`architecture.md`](architecture.md): アーキテクチャ、責務分離、データ境界
 - [`quality-goals.md`](quality-goals.md): 利用形態、互換性、データ保護、CI、テスト、デプロイの品質目標
 
+## 設計記録
+
+- [`quality-reduction-plan.md`](quality-reduction-plan.md): state 保護スタックと sensitive-information 検査基盤を削減した際の判断と移行計画
+
 ## テスト
 
 - [`testing/testing-strategy.md`](testing/testing-strategy.md): 高速コードレベルテストと E2E の役割分担
@@ -20,8 +24,6 @@
 ## 運用
 
 - [`deployment.md`](deployment.md): 汎用 self-host とデプロイ方針
-- [`state-doctor.md`](state-doctor.md): 永続 state の read-only 診断、JSON report、派生 state の限定 repair
-- [`state-backup.md`](state-backup.md): writer barrier、暗号化 cold backup、full-generation restore、retention
 - [`novel-fetcher-task-recovery.md`](novel-fetcher-task-recovery.md): task queue の状態遷移、再起動 recovery、一時停止・再開・中止の運用
 
 ## ライセンス・報告・貢献

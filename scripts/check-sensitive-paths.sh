@@ -12,8 +12,13 @@ check_path() {
     data/.gitkeep) return ;;
   esac
 
-  if [[ "$path" == data/* || "$path" == deploy/runtime/* ]]; then
+  if [[ "$path" == data/* || "$path" == deploy/runtime/* || "$path" == backups/* || "$path" == */backups/* ]]; then
     echo "commit禁止のruntime/private data pathです: $path" >&2
+    failed=1
+  fi
+
+  if [[ "$basename" == backup-*.tar* ]]; then
+    echo "commit禁止のbackup archiveです: $path" >&2
     failed=1
   fi
 

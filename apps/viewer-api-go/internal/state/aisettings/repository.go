@@ -25,8 +25,9 @@ var SchemaContract = schemaguard.Contract{
 }
 
 type Repository struct {
-	stateDir string
-	mu       sync.Mutex
+	stateDir             string
+	mu                   sync.Mutex
+	plaintextWarningOnce sync.Once
 }
 
 func NewRepository(stateDir string) *Repository {
@@ -41,7 +42,11 @@ func (r *Repository) Ensure() error {
 	if err := yamlfile.EnsureMode(path, emptyAiGenerationSettingsDocument(), 0o600); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	_, err := r.readAIGenerationSettingsDocument()
+	return err
 }
 
 type AIGenerationSettingsUpdate struct {

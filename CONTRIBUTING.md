@@ -20,6 +20,7 @@ narou-viewer は、個人利用向けの非公式 self-hosted viewer です。is
 - Pull Request は、特段の理由がない限り draft ではなく ready for review で起票してください。
 - Pull Request を作成・更新するときは `.github/pull_request_template.md` の各セクションを残し、ユーザーへの影響、データ・API・設定の互換性、移行・ロールバック、実施した検証と未実施理由を記載してください。
 - Pull Request へ追いコミットした場合は、PR のタイトルや本文が変更内容と乖離していないか確認し、必要なら更新してください。
+- commit range は自動で機微情報検査を行いますが、Pull Request のタイトル、本文、コメントは対象外です。これらにも API key、cookie、private key、個人運用環境の実 IP を記載しないでください。
 
 ## 受け付けない変更
 

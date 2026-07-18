@@ -45,10 +45,13 @@ POST /api/fetcher/tasks/{taskId}/cancel
 2. 対応 build を起動し、migration と startup recovery のログを確認する。
 3. `queued` が queue 順に実行されることを確認する。
 4. `interrupted` が勝手に実行されていないことを確認する。必要なものだけ明示的に再開する。
-5. state doctor を実行し、`NF-LIBRARY` の schema、SQLite integrity、canonical file の error finding がないことを確認する。task request・queue・checkpoint の invariant は novel-fetcher の startup recovery のログで確認する。
+5. novel-fetcher の startup recovery log に task request、queue、checkpoint、canonical file の error がないことを確認する。SQLite 自体の切り分けが必要なら、writer 停止中に `PRAGMA quick_check` を実行する。
+
+標準 compose の named volume で実行する command は、[`deployment.md` の state 診断手順](deployment.md#state-の診断)を使います。
+次の直接実行例は、repository の `data/` を bind mount する開発構成だけを対象にします。
 
 ```bash
-bun run state:doctor --data-dir ./data
+sqlite3 ./data/novel-fetcher/library.sqlite 'PRAGMA quick_check'
 ```
 
 `queued` task に queue row がない、queued 以外に queue row がある、再開可能な task の未知 request version、同一作品の予約 task 重複などは自動推測で修復しません。

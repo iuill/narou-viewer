@@ -11,13 +11,10 @@ import (
 )
 
 const (
-	ViewerAPILockRelativePath    = "state/.viewer-api-writer.lock"
-	NovelFetcherLockRelativePath = "novel-fetcher/.novel-fetcher-writer.lock"
-	RestoreJournalRelativePath   = ".state-restore-transaction.json"
+	ViewerAPILockRelativePath = "state/.viewer-api-writer.lock"
 )
 
 var ErrWriterActive = errors.New("state writer is active")
-var ErrRestoreInProgress = errors.New("state restore recovery is required")
 
 type Lock struct {
 	mu   sync.Mutex
@@ -27,25 +24,6 @@ type Lock struct {
 
 func AcquireViewerAPI(dataDir string) (*Lock, error) {
 	return Acquire(filepath.Join(filepath.Clean(dataDir), filepath.FromSlash(ViewerAPILockRelativePath)))
-}
-
-func AcquireNovelFetcher(dataDir string) (*Lock, error) {
-	return Acquire(filepath.Join(filepath.Clean(dataDir), filepath.FromSlash(NovelFetcherLockRelativePath)))
-}
-
-func EnsureNoRestoreInProgress(dataDir string) error {
-	path := filepath.Join(filepath.Clean(dataDir), RestoreJournalRelativePath)
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect restore transaction journal %s: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: invalid restore transaction journal %s", ErrRestoreInProgress, path)
-	}
-	return fmt.Errorf("%w: run state-backup recover before starting a writer (%s)", ErrRestoreInProgress, path)
 }
 
 func Acquire(path string) (*Lock, error) {
@@ -104,29 +82,4 @@ func (l *Lock) Close() error {
 	closeErr := l.file.Close()
 	l.file = nil
 	return errors.Join(unlockErr, closeErr)
-}
-
-type WriterLocks struct {
-	ViewerAPI    *Lock
-	NovelFetcher *Lock
-}
-
-func AcquireWriters(dataDir string) (*WriterLocks, error) {
-	viewer, err := AcquireViewerAPI(dataDir)
-	if err != nil {
-		return nil, err
-	}
-	fetcher, err := AcquireNovelFetcher(dataDir)
-	if err != nil {
-		_ = viewer.Close()
-		return nil, err
-	}
-	return &WriterLocks{ViewerAPI: viewer, NovelFetcher: fetcher}, nil
-}
-
-func (l *WriterLocks) Close() error {
-	if l == nil {
-		return nil
-	}
-	return errors.Join(l.NovelFetcher.Close(), l.ViewerAPI.Close())
 }

@@ -25,9 +25,6 @@ func main() {
 		log.Fatalf("acquire viewer-api state writer barrier: %v", err)
 	}
 	defer writerLock.Close()
-	if err := statebarrier.EnsureNoRestoreInProgress(cfg.DataDir); err != nil {
-		log.Fatalf("validate restore transaction state: %v", err)
-	}
 	if _, err := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{}); err != nil {
 		log.Fatalf("validate OPENROUTER_REASONING_EFFORT: %v", err)
 	}

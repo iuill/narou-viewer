@@ -57,17 +57,3 @@ func TestAcquireRejectsSymlinkDataDirectory(t *testing.T) {
 		t.Fatalf("external lock should not be created: %v", err)
 	}
 }
-
-func TestEnsureNoRestoreInProgressChecksSharedDataRoot(t *testing.T) {
-	dataRoot := t.TempDir()
-	dataDir := filepath.Join(dataRoot, "novel-fetcher")
-	if err := os.Mkdir(dataDir, 0o700); err != nil {
-		t.Fatalf("mkdir novel-fetcher data: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dataRoot, restoreJournalFileName), []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write restore journal: %v", err)
-	}
-	if err := EnsureNoRestoreInProgress(dataDir); !errors.Is(err, ErrRestoreInProgress) {
-		t.Fatalf("restore journal check error = %v", err)
-	}
-}
