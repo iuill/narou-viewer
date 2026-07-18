@@ -3,12 +3,15 @@ package aisettings
 import (
 	"errors"
 	"log"
-	"narou-viewer/apps/viewer-api-go/internal/ai"
-	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/state/yamlfile"
 )
+
+const legacyPlaintextAPIKeyWarning = "warning: AI generation settings contain a non-empty legacy plaintext api_key; configure the master passphrase to persist encrypted migration"
 
 type aiGenerationSettingsDocument struct {
 	SchemaVersion            int                                `yaml:"schema_version"`
@@ -70,6 +73,11 @@ func (r *Repository) readAIGenerationSettingsDocument() (aiGenerationSettingsDoc
 		}
 		return aiGenerationSettingsDocument{}, err
 	}
+	if hasLegacyPlaintextAIGenerationAPIKey(raw) {
+		r.plaintextWarningOnce.Do(func() {
+			log.Print(legacyPlaintextAPIKeyWarning)
+		})
+	}
 	if err := validateAIGenerationAPIKeyVersions(raw); err != nil {
 		return aiGenerationSettingsDocument{}, err
 	}
@@ -86,6 +94,22 @@ func (r *Repository) readAIGenerationSettingsDocument() (aiGenerationSettingsDoc
 		doc = migrated
 	}
 	return doc, nil
+}
+
+func hasLegacyPlaintextAIGenerationAPIKey(doc aiGenerationSettingsDocument) bool {
+	values := []aiAPIKeyDocument{
+		doc.SharedProviders.OpenRouter,
+		doc.SharedProviders.GoogleBooks,
+	}
+	for _, profile := range doc.Profiles {
+		values = append(values, profile.Credentials.aiAPIKeyDocument)
+	}
+	for _, value := range values {
+		if normalizeStringPtr(value.APIKey) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyAiGenerationSettingsDocument() aiGenerationSettingsDocument {

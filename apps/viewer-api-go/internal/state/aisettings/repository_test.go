@@ -1,7 +1,9 @@
 package aisettings
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -472,6 +474,55 @@ profiles:
 	}
 	if decrypted, err := decryptAIAPIKey(doc.Profiles[1].Credentials.aiAPIKeyDocument); err != nil || decrypted != "dummy-openrouter-legacy-custom" {
 		t.Fatalf("custom plaintext key should migrate encrypted: decrypted=%q err=%v", decrypted, err)
+	}
+}
+
+func TestAIGenerationSettingsWarnsOnceWithoutLoggingPlaintextKey(t *testing.T) {
+	t.Setenv("AI_GENERATION_SETTINGS_MASTER_PASSPHRASE", "")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	plaintextKey := "synthetic-legacy-value"
+	settingsPath := filepath.Join(stateDir, FileName)
+	if err := os.WriteFile(settingsPath, []byte(`
+schema_version: 2
+revision: 0
+preferred_mode: heuristic
+shared_providers:
+  openrouter:
+    api_key: `+plaintextKey+`
+profiles: []
+`), 0o600); err != nil {
+		t.Fatalf("write legacy AI settings: %v", err)
+	}
+
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	})
+
+	store := NewRepository(stateDir)
+	if err := store.Ensure(); err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if _, err := store.GetAIGenerationSettings(); err != nil {
+		t.Fatalf("GetAIGenerationSettings returned error: %v", err)
+	}
+	logged := output.String()
+	if strings.Count(logged, legacyPlaintextAPIKeyWarning) != 1 {
+		t.Fatalf("plaintext warning count = %d, want 1: %q", strings.Count(logged, legacyPlaintextAPIKeyWarning), logged)
+	}
+	if strings.Contains(logged, plaintextKey) {
+		t.Fatalf("plaintext warning exposed the credential value: %q", logged)
 	}
 }
 

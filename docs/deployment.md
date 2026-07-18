@@ -105,6 +105,22 @@ age -d -i /path/to/identity.txt backup.tar.gz.age | tar xz -C /path/to/empty-dat
 5. 新 build へ upgrade する。
 6. 問題があれば、upgrade 前 backup と対応する旧 build の組で rollback する。
 
+## state の診断
+
+YAML、JSON、SQLite の version や形式に対応できない場合、各 service は起動時または対象 state の読み書き時に fail-closed で停止する。
+一次診断には、path、observed version、supported version、復旧案を含む service log を使う。
+
+SQLite 自体の健全性を切り分ける場合は両 writer を停止し、対象 DB に `PRAGMA quick_check` を実行する。
+`reader_search.sqlite` は再生成可能な cache であり、runtime が破損を検出すると quarantine して再構築する。
+
+```bash
+sqlite3 /path/to/data-root/novel-fetcher/library.sqlite 'PRAGMA quick_check'
+sqlite3 /path/to/data-root/state/ai_usage.sqlite 'PRAGMA quick_check'
+```
+
+`ai_generation_settings.yaml` に非空の legacy `api_key` が残る場合、viewer-api は値を含めない warning を出す。
+master passphrase を設定すると、recognized document の次回読込時に encrypted payload へ lazy migration する。
+
 ## 確認
 
 起動後、同一 host から次を確認する。

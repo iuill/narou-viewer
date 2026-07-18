@@ -21,7 +21,6 @@
 ## 運用
 
 - [`deployment.md`](deployment.md): 汎用 self-host とデプロイ方針
-- [`state-doctor.md`](state-doctor.md): 永続 state の read-only 診断、JSON report、派生 state の限定 repair
 - [`novel-fetcher-task-recovery.md`](novel-fetcher-task-recovery.md): task queue の状態遷移、再起動 recovery、一時停止・再開・中止の運用
 
 ## ライセンス・報告・貢献

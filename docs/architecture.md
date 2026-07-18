@@ -332,7 +332,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - 起動時に designated singleton state がなければ `viewer-api` が初期ファイルを生成する。per-novel state の欠落、既存 file の parse error、未知 schema version は別に扱う。
 - core singleton YAML は `FileStateStore` facade と各 repository の mutex 内で更新する。その他は schema ごとに lock または workflow の調停境界が異なり、いずれも共通 atomic file helper で更新する。現行差異は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - `state/ai_usage.sqlite` は現在値の正本ではないが、再生成不能な監査・利用履歴として扱う。`state/reader_search.sqlite` は読書AI検索用の再生成可能 cache とする。
-- `cmd/state-doctor` は `data/` 全体を既定 read-only で走査し、schema / SQLite integrity、orphan、frontier、DB-file mismatch、機微 file mode を human / JSON report にする。明示 `--apply --finding <id>` で許可する repair は derived profile / index / cache の quarantine・rebuild だけで、正本や未知 version は変更しない。
+- 各 runtime repository は parse error と未知 schema version を fail-closed で拒否する。派生 profile、index、cache の破損は対応する runtime 経路で quarantine または再構築する。
 - viewer-api と novel-fetcher は process-lifetime の OS writer lock を保持し、同じ owner の二重起動を拒否する。
 - backup は両 writer を停止し、`novel-fetcher/library.sqlite`、`novel-fetcher/works/**`、viewer-api state を含む data root 全体を一度に copy する。専用 archive と自動 restore は提供しない。詳細は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
 - 取得 backend の更新タスク中に対象作品の本文読込が不整合になった場合は、`409` を返しクライアントがリトライする。

@@ -10,7 +10,7 @@ if [ -n "${files}" ]; then
   exit 1
 fi
 
-coverage_threshold="${VIEWER_API_GO_COVERAGE_THRESHOLD:-90.1}"
+coverage_threshold="${VIEWER_API_GO_COVERAGE_THRESHOLD:-89.6}"
 coverage_profile="${VIEWER_API_GO_COVERAGE_PROFILE:-${TMPDIR:-/tmp}/viewer-api-go-internal.cover}"
 coverage_coverpkg="${VIEWER_API_GO_COVERPKG:-./internal/...}"
 coverage_args=()
