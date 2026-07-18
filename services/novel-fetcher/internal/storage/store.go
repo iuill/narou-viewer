@@ -23,11 +23,13 @@ import (
 	storageassets "narou-viewer/services/novel-fetcher/internal/storage/assets"
 	"narou-viewer/services/novel-fetcher/internal/storage/migration"
 	"narou-viewer/services/novel-fetcher/internal/storage/pathutil"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type Store struct {
 	rootDir           string
 	db                *sql.DB
+	readDB            *sql.DB
 	assetMaterializer *storageassets.Materializer
 }
 
@@ -38,6 +40,8 @@ type ErrUnsupportedEpisodeSchema struct {
 	Observed  *int
 	Supported int
 }
+
+var ErrInvalidTaskEpisodeCheckpoint = errors.New("invalid task episode checkpoint")
 
 func (e ErrUnsupportedEpisodeSchema) Error() string {
 	observed := "missing"
@@ -53,10 +57,12 @@ func (e ErrUnsupportedEpisodeSchema) Error() string {
 }
 
 const (
-	FetchStatusComplete = "complete"
-	FetchStatusPartial  = "partial"
-	FetchStatusFailed   = "failed"
-	FetchStatusCanceled = "canceled"
+	FetchStatusComplete    = "complete"
+	FetchStatusPartial     = "partial"
+	FetchStatusFailed      = "failed"
+	FetchStatusCanceled    = "canceled"
+	FetchStatusPaused      = "paused"
+	FetchStatusInterrupted = "interrupted"
 
 	BodyStatusPending  = "pending"
 	BodyStatusComplete = "complete"
@@ -65,6 +71,14 @@ const (
 
 type AssetFetcher interface {
 	FetchBytes(ctx context.Context, rawURL string, policy fetcher.FetchPolicy) (fetcher.BinaryResponse, error)
+}
+
+type TaskEpisodeCheckpoint struct {
+	Ref           taskstate.TaskRef
+	WorkID        int
+	EpisodeID     string
+	SortOrder     int
+	NextEpisodeID string
 }
 
 func NewStore(rootDir string) (*Store, error) {
@@ -80,11 +94,21 @@ func NewStore(rootDir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The fetcher is a single-writer process. Sharing one connection across
+	// storage and taskstate avoids SQLITE_BUSY races between progress writes
+	// and durable task control transactions.
+	db.SetMaxOpenConns(1)
 	store := &Store{rootDir: rootDir, db: db}
 	if err := store.initialize(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	readDB, err := openReadOnlyDatabase(databasePath, 4)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store.readDB = readDB
 	return store, nil
 }
 
@@ -95,9 +119,19 @@ func preflightLibrarySchema(databasePath string) error {
 		return err
 	}
 
-	absolutePath, err := filepath.Abs(databasePath)
+	readOnlyDB, err := openReadOnlyDatabase(databasePath, 1)
 	if err != nil {
 		return err
+	}
+	checkErr := migration.CheckSupported(readOnlyDB, databasePath)
+	closeErr := readOnlyDB.Close()
+	return errors.Join(checkErr, closeErr)
+}
+
+func openReadOnlyDatabase(databasePath string, maxOpenConnections int) (*sql.DB, error) {
+	absolutePath, err := filepath.Abs(databasePath)
+	if err != nil {
+		return nil, err
 	}
 	readOnlyURL := url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath)}
 	query := readOnlyURL.Query()
@@ -106,19 +140,33 @@ func preflightLibrarySchema(databasePath string) error {
 
 	readOnlyDB, err := sql.Open("sqlite", readOnlyURL.String())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	readOnlyDB.SetMaxOpenConns(1)
-	checkErr := migration.CheckSupported(readOnlyDB, databasePath)
-	closeErr := readOnlyDB.Close()
-	return errors.Join(checkErr, closeErr)
+	readOnlyDB.SetMaxOpenConns(maxOpenConnections)
+	if err := readOnlyDB.Ping(); err != nil {
+		_ = readOnlyDB.Close()
+		return nil, err
+	}
+	return readOnlyDB, nil
 }
 
 func (s *Store) Close() error {
+	var readCloseErr error
+	if s.readDB != nil {
+		readCloseErr = s.readDB.Close()
+	}
 	_, optimizeErr := s.db.Exec(`PRAGMA optimize`)
 	_, checkpointErr := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	closeErr := s.db.Close()
-	return errors.Join(optimizeErr, checkpointErr, closeErr)
+	return errors.Join(readCloseErr, optimizeErr, checkpointErr, closeErr)
+}
+
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
+func (s *Store) ReadDB() *sql.DB {
+	return s.readDB
 }
 
 func (s *Store) SetAssetFetcher(assetFetcher AssetFetcher, policy fetcher.FetchPolicy) {
@@ -586,6 +634,21 @@ func (s *Store) UpsertWorkToc(ctx context.Context, work model.Work, status strin
 }
 
 func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int) (stored model.StoredEpisode, err error) {
+	return s.saveEpisodeBody(ctx, work, storedWork, episode, sortOrder, nil)
+}
+
+func (s *Store) SaveEpisodeBodyForTask(ctx context.Context, ref taskstate.TaskRef, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int, nextEpisodeID string) (model.StoredEpisode, error) {
+	checkpoint := TaskEpisodeCheckpoint{
+		Ref:           ref,
+		WorkID:        storedWork.ID,
+		EpisodeID:     canonicalEpisodeID(episode, sortOrder),
+		SortOrder:     sortOrder,
+		NextEpisodeID: nextEpisodeID,
+	}
+	return s.saveEpisodeBody(ctx, work, storedWork, episode, sortOrder, &checkpoint)
+}
+
+func (s *Store) saveEpisodeBody(ctx context.Context, work model.Work, storedWork model.StoredWork, episode model.Episode, sortOrder int, checkpoint *TaskEpisodeCheckpoint) (stored model.StoredEpisode, err error) {
 	episodeID := canonicalEpisodeID(episode, sortOrder)
 	bodyRelPath := filepath.ToSlash(filepath.Join(storedWork.Directory, "episodes", sanitizePathSegment(episodeID)+".json"))
 	if err := s.guardCanonicalEpisodeBeforeSave(storedWork.ID, episodeID, bodyRelPath); err != nil {
@@ -726,12 +789,144 @@ func (s *Store) SaveEpisodeBody(ctx context.Context, work model.Work, storedWork
 		}
 	}
 	staleFiles = excludeRelativePaths(staleFiles, assetStoragePaths(assets))
+	if checkpoint != nil {
+		completedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, execErr := tx.ExecContext(ctx, `
+			INSERT INTO fetch_task_episode_checkpoints (
+				task_id, work_id, episode_id, sort_order, content_hash, completed_attempt, completed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(task_id, work_id, episode_id) DO UPDATE SET
+				sort_order = excluded.sort_order,
+				content_hash = excluded.content_hash,
+				completed_attempt = excluded.completed_attempt,
+				completed_at = excluded.completed_at
+		`, checkpoint.Ref.TaskID, checkpoint.WorkID, checkpoint.EpisodeID, checkpoint.SortOrder, contentHash, checkpoint.Ref.Attempt, completedAt); execErr != nil {
+			err = execErr
+			return model.StoredEpisode{}, err
+		}
+		result, execErr := tx.ExecContext(ctx, `
+			UPDATE fetch_tasks
+			SET saved_episode_count = MAX(saved_episode_count, ?), current_step = MAX(current_step, ?), resume_episode_id = ?, updated_at = ?
+			WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+		`, checkpoint.SortOrder+1, checkpoint.SortOrder+1, checkpoint.NextEpisodeID, completedAt, checkpoint.Ref.TaskID, checkpoint.Ref.Attempt)
+		if execErr != nil {
+			err = execErr
+			return model.StoredEpisode{}, err
+		}
+		if err = requireTaskAttemptUpdate(result); err != nil {
+			return model.StoredEpisode{}, err
+		}
+	}
 
 	if err = tx.Commit(); err != nil {
 		return model.StoredEpisode{}, err
 	}
 	_ = s.removeRelativeFiles(staleFiles)
 	return s.findEpisodeRequired(storedWork.ID, episodeID)
+}
+
+func (s *Store) RecordTaskEpisodeCheckpoint(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string, sortOrder int, nextEpisodeID string) error {
+	episode, found, err := s.FindEpisode(workID, episodeID)
+	if err != nil {
+		return err
+	}
+	if !found || episode.BodyStatus != BodyStatusComplete {
+		return fmt.Errorf("%w: episode %s is not complete", ErrInvalidTaskEpisodeCheckpoint, episodeID)
+	}
+	valid, err := s.validateStoredEpisodeFile(episode)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return fmt.Errorf("%w: episode %s canonical body is invalid", ErrInvalidTaskEpisodeCheckpoint, episodeID)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO fetch_task_episode_checkpoints (
+			task_id, work_id, episode_id, sort_order, content_hash, completed_attempt, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(task_id, work_id, episode_id) DO UPDATE SET
+			sort_order = excluded.sort_order,
+			content_hash = excluded.content_hash,
+			completed_attempt = excluded.completed_attempt,
+			completed_at = excluded.completed_at
+	`, ref.TaskID, workID, episodeID, sortOrder, episode.ContentHash, ref.Attempt, now); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE fetch_tasks
+		SET saved_episode_count = MAX(saved_episode_count, ?), current_step = MAX(current_step, ?), resume_episode_id = ?, updated_at = ?
+		WHERE task_id = ? AND status = 'running' AND attempt_count = ?
+	`, sortOrder+1, sortOrder+1, nextEpisodeID, now, ref.TaskID, ref.Attempt)
+	if err != nil {
+		return err
+	}
+	if err := requireTaskAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, work model.Work, storedWork model.StoredWork, episodeRef model.Episode, sortOrder int) (bool, bool, error) {
+	episodeID := canonicalEpisodeID(episodeRef, sortOrder)
+	var checkpointHash string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.content_hash
+		FROM fetch_task_episode_checkpoints c
+		JOIN fetch_tasks t ON t.task_id = c.task_id
+		WHERE c.task_id = ? AND c.work_id = ? AND c.episode_id = ? AND c.completed_attempt <= ?
+	`, ref.TaskID, storedWork.ID, episodeID, ref.Attempt).Scan(&checkpointHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	episode, found, err := s.FindEpisode(storedWork.ID, episodeID)
+	if err != nil || !found || episode.BodyStatus != BodyStatusComplete || episode.ContentHash == "" || episode.ContentHash != checkpointHash {
+		return false, true, err
+	}
+	document, valid, err := s.readStoredEpisodeFile(episode)
+	if err != nil || !valid {
+		return false, true, err
+	}
+	return document.EpisodeID == episodeID &&
+		document.SiteEpisodeID == episodeRef.Index &&
+		strings.TrimSpace(document.SourceURL) == episodeSourceURL(work.SourceURL, episodeRef) &&
+		document.PublishedAt == episodeRef.PublishedAt &&
+		document.UpdatedAt == episodeRef.ModifiedAt, true, nil
+}
+
+func (s *Store) validateStoredEpisodeFile(episode model.StoredEpisode) (bool, error) {
+	_, valid, err := s.readStoredEpisodeFile(episode)
+	return valid, err
+}
+
+func (s *Store) readStoredEpisodeFile(episode model.StoredEpisode) (model.CanonicalEpisode, bool, error) {
+	path := filepath.Join(s.rootDir, episode.BodyPath)
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return model.CanonicalEpisode{}, false, nil
+		}
+		return model.CanonicalEpisode{}, false, err
+	}
+	if err := validateCanonicalEpisodeSchema(path, bytes); err != nil {
+		return model.CanonicalEpisode{}, false, err
+	}
+	if sha256Hex(bytes) != episode.ContentHash {
+		return model.CanonicalEpisode{}, false, nil
+	}
+	var document model.CanonicalEpisode
+	if err := json.Unmarshal(bytes, &document); err != nil {
+		return model.CanonicalEpisode{}, false, err
+	}
+	return document, true, nil
 }
 
 func validateUniqueEpisodeIDs(episodes []model.Episode) error {
@@ -926,6 +1121,34 @@ func (s *Store) UpdateWorkFetchStatus(ctx context.Context, workID int, status st
 		WHERE id = ?
 	`, status, message, failedEpisodeID, resumeEpisodeID, time.Now().UTC().Format(time.RFC3339Nano), workID)
 	return err
+}
+
+func (s *Store) CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE works
+		SET fetch_status = ?, last_fetch_error = '', last_failed_episode_id = '', resume_episode_id = '', updated_at = ?
+		WHERE id = ?
+	`, FetchStatusComplete, now, workID); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `
+		UPDATE fetch_tasks
+		SET execution_committed = 1, updated_at = ?
+		WHERE task_id = ? AND status = 'running' AND attempt_count = ? AND requested_action = ''
+	`, now, ref.TaskID, ref.Attempt)
+	if err != nil {
+		return err
+	}
+	if err := requireTaskAttemptUpdate(result); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) RemoveWork(id int, withFiles bool) error {
@@ -1144,6 +1367,17 @@ func sanitizePathSegment(value string) string {
 func sha256Hex(bytes []byte) string {
 	sum := sha256.Sum256(bytes)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func requireTaskAttemptUpdate(result sql.Result) error {
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return taskstate.ErrStaleTaskAttempt
+	}
+	return nil
 }
 
 func formatTime(value time.Time) string {

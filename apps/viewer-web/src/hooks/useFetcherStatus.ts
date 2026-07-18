@@ -22,10 +22,15 @@ type UseFetcherStatusResult = {
 const EMPTY_FETCHER_TASK_SUMMARY: FetcherTaskSummary = {
   current: null,
   queued: [],
+  paused: [],
+  interrupted: [],
   recentCompleted: [],
   recentFailed: [],
   completedCount: 0,
   failedCount: 0,
+  canceledCount: 0,
+  pausedCount: 0,
+  interruptedCount: 0,
   convertCurrent: null,
   convertQueued: []
 };

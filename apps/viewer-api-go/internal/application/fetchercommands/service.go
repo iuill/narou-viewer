@@ -34,6 +34,8 @@ type Client interface {
 	Resume(ctx context.Context, ids []int) (fetcher.ResumeResponse, error)
 	Remove(ctx context.Context, ids []string, withFiles bool) (fetcher.RemoveResponse, error)
 	CancelTask(ctx context.Context, taskID string) (fetcher.CancelTaskResponse, error)
+	PauseTask(ctx context.Context, taskID string) (fetcher.TaskControlResponse, error)
+	ResumeTask(ctx context.Context, taskID string) (fetcher.TaskControlResponse, error)
 }
 
 type WorkIDResolver interface {
@@ -103,11 +105,16 @@ type RemoveResult struct {
 	Message                  string                      `json:"message"`
 }
 
-type CancelTaskResult struct {
-	TaskID    string `json:"taskId"`
-	Cancelled bool   `json:"cancelled"`
-	Message   string `json:"message"`
+type TaskControlResult struct {
+	TaskID          string `json:"taskId"`
+	Status          string `json:"status,omitempty"`
+	RequestedAction string `json:"requestedAction,omitempty"`
+	Changed         bool   `json:"changed"`
+	Cancelled       bool   `json:"cancelled,omitempty"`
+	Message         string `json:"message"`
 }
+
+type CancelTaskResult = TaskControlResult
 
 func NewService(client Client, resolver WorkIDResolver) *Service {
 	return &Service{client: client, resolver: resolver}
@@ -223,6 +230,20 @@ func (s *Service) Remove(ctx context.Context, novelIDs []string, withFiles bool)
 
 func (s *Service) CancelTask(ctx context.Context, taskID string) (CancelTaskResult, error) {
 	result, err := s.client.CancelTask(ctx, taskID)
+	return decorateTaskControl(result, err, taskID, "Task cancelled")
+}
+
+func (s *Service) PauseTask(ctx context.Context, taskID string) (TaskControlResult, error) {
+	result, err := s.client.PauseTask(ctx, taskID)
+	return decorateTaskControl(result, err, taskID, "Task paused")
+}
+
+func (s *Service) ResumeTask(ctx context.Context, taskID string) (TaskControlResult, error) {
+	result, err := s.client.ResumeTask(ctx, taskID)
+	return decorateTaskControl(result, err, taskID, "Task resumed")
+}
+
+func decorateTaskControl(result fetcher.TaskControlResponse, err error, taskID string, fallback string) (TaskControlResult, error) {
 	if err != nil {
 		return CancelTaskResult{}, err
 	}
@@ -230,10 +251,13 @@ func (s *Service) CancelTask(ctx context.Context, taskID string) (CancelTaskResu
 	if responseTaskID == "" {
 		responseTaskID = taskID
 	}
-	return CancelTaskResult{
-		TaskID:    responseTaskID,
-		Cancelled: result.Cancelled,
-		Message:   messageOrFallback(result.Message, "Task cancelled"),
+	return TaskControlResult{
+		TaskID:          responseTaskID,
+		Status:          result.Status,
+		RequestedAction: result.RequestedAction,
+		Changed:         result.Changed,
+		Cancelled:       result.Cancelled,
+		Message:         messageOrFallback(result.Message, fallback),
 	}, nil
 }
 

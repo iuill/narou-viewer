@@ -295,6 +295,22 @@ func TestServicePropagatesClientErrors(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name: "pause",
+			run: func(client *fakeClient) error {
+				client.pauseErr = expected
+				_, err := NewService(client, nil).PauseTask(context.Background(), "task-1")
+				return err
+			},
+		},
+		{
+			name: "task resume",
+			run: func(client *fakeClient) error {
+				client.resumeTaskErr = expected
+				_, err := NewService(client, nil).ResumeTask(context.Background(), "task-1")
+				return err
+			},
+		},
 	}
 	for _, tc := range cases {
 		if err := tc.run(&fakeClient{}); !errors.Is(err, expected) {
@@ -316,6 +332,22 @@ func TestServiceCancelTaskDecoratesResult(t *testing.T) {
 	}
 	if result.Message != "Task cancelled" || result.TaskID != "sidecar-task-1" || result.Cancelled != false {
 		t.Fatalf("CancelTask should decorate response: %+v", result)
+	}
+}
+
+func TestServiceTaskControlsDecorateResult(t *testing.T) {
+	client := &fakeClient{
+		pauseResult:      fetcher.TaskControlResponse{TaskID: "sidecar-task-1", Status: "paused", Changed: true},
+		resumeTaskResult: fetcher.TaskControlResponse{TaskID: "sidecar-task-1", Status: "queued", Changed: true},
+	}
+	service := NewService(client, nil)
+	paused, err := service.PauseTask(context.Background(), "task-1")
+	if err != nil || client.pauseTaskID != "task-1" || paused.Status != "paused" || !paused.Changed || paused.Message != "Task paused" {
+		t.Fatalf("PauseTask result = %+v, err = %v", paused, err)
+	}
+	resumed, err := service.ResumeTask(context.Background(), "task-1")
+	if err != nil || client.resumeTaskID != "task-1" || resumed.Status != "queued" || !resumed.Changed || resumed.Message != "Task resumed" {
+		t.Fatalf("ResumeTask result = %+v, err = %v", resumed, err)
 	}
 }
 
@@ -371,9 +403,15 @@ type fakeClient struct {
 	removeResult    fetcher.RemoveResponse
 	removeErr       error
 
-	cancelTaskID string
-	cancelResult fetcher.CancelTaskResponse
-	cancelErr    error
+	cancelTaskID     string
+	cancelResult     fetcher.CancelTaskResponse
+	cancelErr        error
+	pauseTaskID      string
+	pauseResult      fetcher.TaskControlResponse
+	pauseErr         error
+	resumeTaskID     string
+	resumeTaskResult fetcher.TaskControlResponse
+	resumeTaskErr    error
 }
 
 func (c *fakeClient) Download(_ context.Context, targets []string, force bool, convertAfterDownload bool, mail bool) (fetcher.DownloadResponse, error) {
@@ -422,4 +460,20 @@ func (c *fakeClient) CancelTask(_ context.Context, taskID string) (fetcher.Cance
 	}
 	c.cancelTaskID = taskID
 	return c.cancelResult, nil
+}
+
+func (c *fakeClient) PauseTask(_ context.Context, taskID string) (fetcher.TaskControlResponse, error) {
+	if c.pauseErr != nil {
+		return fetcher.TaskControlResponse{}, c.pauseErr
+	}
+	c.pauseTaskID = taskID
+	return c.pauseResult, nil
+}
+
+func (c *fakeClient) ResumeTask(_ context.Context, taskID string) (fetcher.TaskControlResponse, error) {
+	if c.resumeTaskErr != nil {
+		return fetcher.TaskControlResponse{}, c.resumeTaskErr
+	}
+	c.resumeTaskID = taskID
+	return c.resumeTaskResult, nil
 }

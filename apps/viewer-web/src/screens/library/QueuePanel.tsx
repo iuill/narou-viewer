@@ -22,6 +22,8 @@ export type QueuePanelProps = {
   fetcherStatusCheckedAt: string | null;
   fetcherStatusError: string | null;
   fetcherTasksFailedCount: number;
+  fetcherTasksPausedCount?: number;
+  fetcherTasksInterruptedCount?: number;
   fetcherUpdateNotice: string | null;
   hasActiveFetcherTasks: boolean;
   hasFetcherStatus: boolean;
@@ -29,6 +31,8 @@ export type QueuePanelProps = {
   onScrollToQueueProgress: () => void;
   panelRef: RefObject<HTMLDivElement | null>;
   queuedTaskPreviewEntries: FetcherTaskListEntry[];
+  pausedFetcherTaskPreviewEntries?: FetcherTaskListEntry[];
+  interruptedFetcherTaskPreviewEntries?: FetcherTaskListEntry[];
   queueStatusLabel: string;
   recentFailedFetcherTaskPreviewEntries: FetcherTaskListEntry[];
   setIsOpen: Dispatch<SetStateAction<boolean>>;
@@ -47,12 +51,16 @@ export function QueuePanel({ formatDate, onToggle, queue }: QueuePanelComponentP
     fetcherStatusCheckedAt,
     fetcherStatusError,
     fetcherTasksFailedCount,
+    fetcherTasksPausedCount = 0,
+    fetcherTasksInterruptedCount = 0,
     hasActiveFetcherTasks,
     hasFetcherStatus,
     isOpen,
     onScrollToQueueProgress,
     panelRef,
     queuedTaskPreviewEntries,
+    pausedFetcherTaskPreviewEntries = [],
+    interruptedFetcherTaskPreviewEntries = [],
     queueStatusLabel,
     recentFailedFetcherTaskPreviewEntries
   } = queue;
@@ -86,7 +94,9 @@ export function QueuePanel({ formatDate, onToggle, queue }: QueuePanelComponentP
             <span className={`queue-chip ${fetcherQueue?.running ? "active" : ""}`}>
               実行中: {fetcherQueue?.running ? "yes" : "no"}
             </span>
-            <span className="queue-chip">待機: {fetcherQueue?.total ?? 0}</span>
+            <span className="queue-chip">待機: {fetcherQueue?.queued ?? fetcherQueue?.total ?? 0}</span>
+            <span className="queue-chip">一時停止: {fetcherQueue?.paused ?? 0}</span>
+            <span className="queue-chip">中断: {fetcherQueue?.interrupted ?? 0}</span>
             <span className="queue-chip">worker: {fetcherQueue?.worker ?? 0}</span>
             <span className="queue-chip">web: {fetcherQueue?.webWorker ?? 0}</span>
           </div>
@@ -124,6 +134,24 @@ export function QueuePanel({ formatDate, onToggle, queue }: QueuePanelComponentP
                   </ul>
                 ) : (
                   <p>待機中のタスクはありません。</p>
+                )}
+              </div>
+              <div className="queue-card-block">
+                <strong>一時停止・中断</strong>
+                <p>
+                  一時停止: {fetcherTasksPausedCount} 件 / 中断: {fetcherTasksInterruptedCount} 件
+                </p>
+                {pausedFetcherTaskPreviewEntries.length > 0 || interruptedFetcherTaskPreviewEntries.length > 0 ? (
+                  <ul className="queue-task-list">
+                    {pausedFetcherTaskPreviewEntries.map((entry) => (
+                      <li key={entry.key}>{formatFetcherTask(entry.task)}</li>
+                    ))}
+                    {interruptedFetcherTaskPreviewEntries.map((entry) => (
+                      <li key={entry.key}>{formatFetcherTask(entry.task)}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>再開できるタスクはありません。</p>
                 )}
               </div>
               <div className="queue-card-block compact">

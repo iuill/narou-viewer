@@ -48,12 +48,16 @@ func main() {
 		sites.NewSyosetuFetcher(httpFetcher, cfg.FetchPolicy, cfg.MaxTocPages, logger),
 		sites.NewKakuyomuFetcher(httpFetcher, cfg.FetchPolicy, logger),
 	)
-	app := server.New(server.Options{
+	app, err := server.NewWithError(server.Options{
 		Config:  cfg,
 		Store:   store,
 		Fetcher: siteFetcher,
 		Logger:  logger,
 	})
+	if err != nil {
+		logger.Error("failed to initialize novel-fetcher task state", "error", err)
+		os.Exit(1)
+	}
 	app.Start(context.Background())
 
 	httpServer := &http.Server{

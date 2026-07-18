@@ -14,6 +14,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/sites"
 	"narou-viewer/services/novel-fetcher/internal/storage"
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type fakeStore struct {
@@ -30,6 +31,13 @@ type fakeStore struct {
 	updateResumeID     string
 	updateErrorMessage string
 	saveErr            error
+	checkpointValid    bool
+	checkpointExists   bool
+	checkpointCalls    int
+	recordCalls        int
+	taskSaveCalls      int
+	completeCalls      int
+	recordErr          error
 	preflightErr       error
 	preflightCalls     int
 }
@@ -40,6 +48,29 @@ type fakeFetcher struct {
 	episodeErr    error
 	fetched       []string
 	reportEpisode bool
+}
+
+type cancelAwareFetcher struct {
+	work model.Work
+}
+
+func newServiceTask(kind string) *taskqueue.Task {
+	task := taskqueue.NewTask(kind)
+	task.AttemptCount = 1
+	return task
+}
+
+func (f *cancelAwareFetcher) FetchToc(_ context.Context, target string, _ sites.ProgressReporter) (model.Work, error) {
+	work := f.work
+	work.SourceURL = target
+	return work, nil
+}
+
+func (f *cancelAwareFetcher) FetchEpisode(ctx context.Context, _ model.Work, episode model.Episode, _ sites.ProgressReporter) (model.Episode, error) {
+	if err := ctx.Err(); err != nil {
+		return model.Episode{}, err
+	}
+	return episode, nil
 }
 
 type recordingReporter struct {
@@ -99,12 +130,29 @@ func (s *fakeStore) UpsertWorkToc(_ context.Context, work model.Work, status str
 	return stored, nil
 }
 
-func (s *fakeStore) SaveEpisodeBody(_ context.Context, _ model.Work, _ model.StoredWork, episode model.Episode, _ int) (model.StoredEpisode, error) {
+func (s *fakeStore) IsTaskEpisodeCheckpointValid(_ context.Context, _ taskstate.TaskRef, _ model.Work, _ model.StoredWork, _ model.Episode, _ int) (bool, bool, error) {
+	s.checkpointCalls++
+	return s.checkpointValid, s.checkpointExists || s.checkpointValid, nil
+}
+
+func (s *fakeStore) RecordTaskEpisodeCheckpoint(_ context.Context, _ taskstate.TaskRef, _ int, _ string, _ int, _ string) error {
+	s.recordCalls++
+	return s.recordErr
+}
+
+func (s *fakeStore) SaveEpisodeBodyForTask(_ context.Context, _ taskstate.TaskRef, _ model.Work, _ model.StoredWork, episode model.Episode, _ int, _ string) (model.StoredEpisode, error) {
+	s.taskSaveCalls++
 	if s.saveErr != nil {
 		return model.StoredEpisode{}, s.saveErr
 	}
 	s.savedEpisodes = append(s.savedEpisodes, episode.Index)
 	return model.StoredEpisode{EpisodeID: episode.Index, BodyStatus: storage.BodyStatusComplete}, nil
+}
+
+func (s *fakeStore) CompleteWorkForTask(_ context.Context, _ taskstate.TaskRef, _ int) error {
+	s.completeCalls++
+	s.updatedStatuses = append(s.updatedStatuses, storage.FetchStatusComplete)
+	return nil
 }
 
 func (s *fakeStore) MarkEpisodeFailed(_ context.Context, _ int, episodeID string, _ error) error {
@@ -163,8 +211,9 @@ func (r *recordingReporter) SetTaskTarget(_ string, target string) {
 	r.targets = append(r.targets, target)
 }
 
-func (r *recordingReporter) AddTaskNovelID(_ string, novelID int) {
+func (r *recordingReporter) SetTaskWorkID(_ string, novelID int) error {
 	r.novelIDs = append(r.novelIDs, novelID)
+	return nil
 }
 
 func (r *recordingReporter) SetTaskSavedEpisodeCount(_ string, count int) {
@@ -220,6 +269,15 @@ func TestCanonicalTaskEpisodeIDUsesIndexOrOneBasedFallback(t *testing.T) {
 	}
 }
 
+func TestRunTaskRequiresClaimedTask(t *testing.T) {
+	service := NewService(Options{Store: &fakeStore{}, Fetcher: &fakeFetcher{}, Reporter: &recordingReporter{}})
+	unclaimed := taskqueue.NewTask("download")
+	unclaimed.Target = "https://example.invalid/unclaimed"
+	if err := service.RunTask(context.Background(), unclaimed); err == nil {
+		t.Fatal("unclaimed task was executed")
+	}
+}
+
 func TestRunTaskDownloadsAndSavesEpisodes(t *testing.T) {
 	work := model.Work{
 		Site:       model.SiteSyosetu,
@@ -239,8 +297,8 @@ func TestRunTaskDownloadsAndSavesEpisodes(t *testing.T) {
 	fetcher := &fakeFetcher{work: work, reportEpisode: true}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: reporter})
-	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://ncode.syosetu.com/n1234ab/"}
+	task := newServiceTask("download")
+	task.Target = "https://ncode.syosetu.com/n1234ab/"
 	task.Force = true
 
 	if err := service.RunTask(context.Background(), task); err != nil {
@@ -280,8 +338,8 @@ func TestRunTaskRejectsDuplicateTitleAcrossSites(t *testing.T) {
 	}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work}, Reporter: reporter})
-	task := taskqueue.NewTask("download")
-	task.Targets = []string{"https://kakuyomu.jp/works/0000000000000000000"}
+	task := newServiceTask("download")
+	task.Target = "https://kakuyomu.jp/works/0000000000000000000"
 
 	err := service.RunTask(context.Background(), task)
 	if err == nil || err.Error() != "同名または近いタイトルの作品が別サイトにあるため、ダウンロードを取りやめました" {
@@ -317,8 +375,8 @@ func TestRunTaskUpdateSkipsUnchangedEpisode(t *testing.T) {
 	fetcher := &fakeFetcher{work: work}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: reporter})
-	task := taskqueue.NewTask("update")
-	task.NovelIDs = []int{30}
+	task := newServiceTask("update")
+	task.WorkID = 30
 	task.SkipUnchanged = true
 
 	if err := service.RunTask(context.Background(), task); err != nil {
@@ -412,8 +470,8 @@ func TestRunTaskUpdateRejectsFutureCanonicalSchemaBeforeAnyMutation(t *testing.T
 			fetcher := &fakeFetcher{work: incomingWork}
 			reporter := &recordingReporter{}
 			service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: reporter})
-			task := taskqueue.NewTask("update")
-			task.NovelIDs = []int{stored.ID}
+			task := newServiceTask("update")
+			task.WorkID = stored.ID
 			task.SkipUnchanged = test.skipUnchanged
 
 			err = service.RunTask(context.Background(), task)
@@ -453,12 +511,37 @@ func TestRunTaskResumePropagatesMissingWork(t *testing.T) {
 		Fetcher:  &fakeFetcher{},
 		Reporter: &recordingReporter{},
 	})
-	task := taskqueue.NewTask("resume")
-	task.NovelIDs = []int{99}
+	task := newServiceTask("resume")
+	task.WorkID = 99
 
 	err := service.RunTask(context.Background(), task)
 	if err == nil || err.Error() != "novel id 99 was not found" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunTaskResumeFetchesAndCompletesWork(t *testing.T) {
+	work := model.Work{
+		Site:       model.SiteSyosetu,
+		SiteWorkID: "resume-work",
+		Title:      "再開作品",
+		Episodes:   []model.Episode{{Index: "1", Title: "第一話"}},
+	}
+	store := &fakeStore{
+		work:      model.StoredWork{ID: 63, Site: model.SiteSyosetu, SiteWorkID: "resume-work", SourceURL: "https://example.invalid/resume/"},
+		foundByID: true,
+	}
+	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work}, Reporter: &recordingReporter{}})
+	task := newServiceTask("resume")
+	task.WorkID = 63
+	if err := service.RunTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.savedEpisodes) != 1 || store.savedEpisodes[0] != "1" {
+		t.Fatalf("saved episodes = %#v", store.savedEpisodes)
+	}
+	if len(store.updatedStatuses) != 1 || store.updatedStatuses[0] != storage.FetchStatusComplete {
+		t.Fatalf("completion statuses = %#v", store.updatedStatuses)
 	}
 }
 
@@ -477,8 +560,8 @@ func TestRunTaskMarksEpisodeFailed(t *testing.T) {
 	}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work}, Reporter: reporter})
-	task := taskqueue.NewTask("resume")
-	task.NovelIDs = []int{40}
+	task := newServiceTask("resume")
+	task.WorkID = 40
 
 	err := service.RunTask(context.Background(), task)
 	if !errors.Is(err, saveErr) {
@@ -511,8 +594,8 @@ func TestRunTaskDoesNotMarkUnsupportedCanonicalSchemaAsFetchFailure(t *testing.T
 	}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work}, Reporter: reporter})
-	task := taskqueue.NewTask("resume")
-	task.NovelIDs = []int{41}
+	task := newServiceTask("resume")
+	task.WorkID = 41
 
 	err := service.RunTask(context.Background(), task)
 	var got storage.ErrUnsupportedEpisodeSchema
@@ -524,6 +607,162 @@ func TestRunTaskDoesNotMarkUnsupportedCanonicalSchemaAsFetchFailure(t *testing.T
 	}
 	if reporter.failedEpisodeID != "" || reporter.resumeEpisodeID != "" {
 		t.Fatalf("unsupported schema was reported as resumable fetch failure: %#v", reporter)
+	}
+}
+
+func TestRunTaskUsesTaskCheckpointBeforeLocalSkipAndSave(t *testing.T) {
+	work := model.Work{
+		Site:       model.SiteSyosetu,
+		SiteWorkID: "checkpoint-work",
+		Title:      "チェックポイント作品",
+		Episodes:   []model.Episode{{Index: "1", Title: "第一話"}},
+	}
+
+	t.Run("valid checkpoint skips fetch", func(t *testing.T) {
+		store := &fakeStore{
+			work:            model.StoredWork{ID: 60, Site: model.SiteSyosetu, SiteWorkID: "checkpoint-work", SourceURL: "https://example.invalid/checkpoint/"},
+			foundByID:       true,
+			checkpointValid: true,
+		}
+		fetcher := &fakeFetcher{work: work}
+		service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: &recordingReporter{}})
+		task := newServiceTask("update")
+		task.WorkID = 60
+		task.SkipUnchanged = true
+		task.AttemptCount = 1
+		if err := service.RunTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+		if store.checkpointCalls != 1 || store.taskSaveCalls != 0 || len(fetcher.fetched) != 0 {
+			t.Fatalf("checkpoint path = calls:%d saves:%d fetched:%#v", store.checkpointCalls, store.taskSaveCalls, fetcher.fetched)
+		}
+	})
+
+	t.Run("missing checkpoint saves atomically", func(t *testing.T) {
+		store := &fakeStore{
+			work:      model.StoredWork{ID: 61, Site: model.SiteSyosetu, SiteWorkID: "checkpoint-work", SourceURL: "https://example.invalid/checkpoint/"},
+			foundByID: true,
+		}
+		fetcher := &fakeFetcher{work: work}
+		service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: &recordingReporter{}})
+		task := newServiceTask("update")
+		task.WorkID = 61
+		task.SkipUnchanged = true
+		task.AttemptCount = 1
+		if err := service.RunTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+		if store.checkpointCalls != 1 || store.taskSaveCalls != 1 || len(fetcher.fetched) != 1 {
+			t.Fatalf("save path = calls:%d saves:%d fetched:%#v", store.checkpointCalls, store.taskSaveCalls, fetcher.fetched)
+		}
+	})
+
+	t.Run("stale checkpoint cannot fall back to local timestamp skip", func(t *testing.T) {
+		store := &fakeStore{
+			work:             model.StoredWork{ID: 65, Site: model.SiteSyosetu, SiteWorkID: "checkpoint-work", SourceURL: "https://example.invalid/checkpoint/"},
+			foundByID:        true,
+			checkpointExists: true,
+			episodes: []model.StoredEpisode{{
+				EpisodeID:  "1",
+				BodyStatus: storage.BodyStatusComplete,
+				UpdatedAt:  "2026/05/09 12:00",
+			}},
+		}
+		workWithRevision := work
+		workWithRevision.Episodes = []model.Episode{{Index: "1", Title: "第一話", ModifiedAt: "2026/05/09 12:00"}}
+		fetcher := &fakeFetcher{work: workWithRevision}
+		service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: &recordingReporter{}})
+		task := newServiceTask("update")
+		task.WorkID = 65
+		task.SkipUnchanged = true
+		task.AttemptCount = 2
+		if err := service.RunTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+		if store.checkpointCalls != 1 || store.recordCalls != 0 || store.taskSaveCalls != 1 || len(fetcher.fetched) != 1 {
+			t.Fatalf("stale checkpoint path = checks:%d records:%d saves:%d fetched:%#v", store.checkpointCalls, store.recordCalls, store.taskSaveCalls, fetcher.fetched)
+		}
+	})
+}
+
+func TestRunTaskRefetchesWhenLocalEpisodeCannotCreateCheckpoint(t *testing.T) {
+	work := model.Work{
+		Site:       model.SiteSyosetu,
+		SiteWorkID: "invalid-checkpoint-work",
+		Title:      "壊れたチェックポイント作品",
+		Episodes:   []model.Episode{{Index: "1", Title: "第一話", PublishedAt: "2026/05/09 12:00"}},
+	}
+	store := &fakeStore{
+		work:      model.StoredWork{ID: 64, Site: model.SiteSyosetu, SiteWorkID: "invalid-checkpoint-work", SourceURL: "https://example.invalid/invalid-checkpoint/"},
+		foundByID: true,
+		episodes:  []model.StoredEpisode{{EpisodeID: "1", BodyStatus: storage.BodyStatusComplete, UpdatedAt: "2026/05/09 12:00"}},
+		recordErr: storage.ErrInvalidTaskEpisodeCheckpoint,
+	}
+	fetcher := &fakeFetcher{work: work}
+	service := NewService(Options{Store: store, Fetcher: fetcher, Reporter: &recordingReporter{}})
+	task := newServiceTask("update")
+	task.WorkID = 64
+	task.SkipUnchanged = true
+	task.AttemptCount = 1
+	if err := service.RunTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if store.recordCalls != 1 || store.taskSaveCalls != 1 || len(fetcher.fetched) != 1 {
+		t.Fatalf("invalid checkpoint recovery = records:%d saves:%d fetched:%#v", store.recordCalls, store.taskSaveCalls, fetcher.fetched)
+	}
+	checkpointErr := errors.New("checkpoint write failed")
+	store.recordErr = checkpointErr
+	if err := service.RunTask(context.Background(), task); !errors.Is(err, checkpointErr) {
+		t.Fatalf("checkpoint write error = %v", err)
+	}
+}
+
+func TestRunTaskControlCauseDoesNotMarkEpisodeAsFetchFailure(t *testing.T) {
+	work := model.Work{
+		Site:       model.SiteSyosetu,
+		SiteWorkID: "paused-work",
+		Title:      "一時停止作品",
+		Episodes:   []model.Episode{{Index: "1", Title: "第一話"}},
+	}
+	store := &fakeStore{
+		work:      model.StoredWork{ID: 62, Site: model.SiteSyosetu, SiteWorkID: "paused-work", SourceURL: "https://example.invalid/paused/"},
+		foundByID: true,
+	}
+	reporter := &recordingReporter{}
+	service := NewService(Options{Store: store, Fetcher: &cancelAwareFetcher{work: work}, Reporter: reporter})
+	task := newServiceTask("resume")
+	task.WorkID = 62
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(taskstate.ErrTaskPauseRequested)
+
+	err := service.RunTask(ctx, task)
+	if !errors.Is(err, taskstate.ErrTaskPauseRequested) {
+		t.Fatalf("RunTask error = %v", err)
+	}
+	if len(store.markedFailed) != 0 || len(reporter.failedEpisodeID) != 0 {
+		t.Fatalf("control cause was recorded as episode failure: marked=%#v reporter=%#v", store.markedFailed, reporter)
+	}
+	if len(store.updatedStatuses) != 1 || store.updatedStatuses[0] != storage.FetchStatusPaused {
+		t.Fatalf("paused status = %#v", store.updatedStatuses)
+	}
+}
+
+func TestMarkTaskControlMapsAllRunnerCauses(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{}, Reporter: &recordingReporter{}})
+	causes := []struct {
+		cause  error
+		status string
+	}{
+		{taskstate.ErrTaskCancelRequested, storage.FetchStatusCanceled},
+		{taskstate.ErrTaskPauseRequested, storage.FetchStatusPaused},
+		{taskstate.ErrRunnerShutdown, storage.FetchStatusInterrupted},
+	}
+	for _, test := range causes {
+		service.markTaskControl(70, "1", test.cause)
+		if got := store.updatedStatuses[len(store.updatedStatuses)-1]; got != test.status {
+			t.Fatalf("cause %v status = %q, want %q", test.cause, got, test.status)
+		}
 	}
 }
 
@@ -540,8 +779,8 @@ func TestRunTaskMarksCanceledEpisodeFailure(t *testing.T) {
 	}
 	reporter := &recordingReporter{}
 	service := NewService(Options{Store: store, Fetcher: &fakeFetcher{work: work, episodeErr: context.Canceled}, Reporter: reporter})
-	task := taskqueue.NewTask("update")
-	task.NovelIDs = []int{50}
+	task := newServiceTask("update")
+	task.WorkID = 50
 
 	err := service.RunTask(context.Background(), task)
 	if !errors.Is(err, context.Canceled) {

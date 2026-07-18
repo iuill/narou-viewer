@@ -3,6 +3,7 @@ package migration
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -138,6 +139,14 @@ func TestRunRejectsFutureSchemaBeforeKnownMigrations(t *testing.T) {
 	}
 	if worksTableCount != 0 {
 		t.Fatal("known migrations ran before the future schema guard")
+	}
+}
+
+func TestErrFutureSchemaIncludesRecoveryContext(t *testing.T) {
+	err := ErrFutureSchema{Path: "library.sqlite", Observed: 9, Supported: SupportedLatestVersion}
+	message := err.Error()
+	if !strings.Contains(message, "library.sqlite") || !strings.Contains(message, "migration 9") || !strings.Contains(message, "supported through") {
+		t.Fatalf("error message = %q", message)
 	}
 }
 

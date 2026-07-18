@@ -45,10 +45,13 @@ type VersionResponse struct {
 }
 
 type QueueResponse struct {
-	Total     int  `json:"total"`
-	WebWorker int  `json:"webWorker"`
-	Worker    int  `json:"worker"`
-	Running   bool `json:"running"`
+	Total       int  `json:"total"`
+	Queued      int  `json:"queued"`
+	WebWorker   int  `json:"webWorker"`
+	Worker      int  `json:"worker"`
+	Running     bool `json:"running"`
+	Paused      int  `json:"paused"`
+	Interrupted int  `json:"interrupted"`
 }
 
 type TaskPayload map[string]json.RawMessage
@@ -68,14 +71,19 @@ func (payload *TaskPayload) UnmarshalJSON(raw []byte) error {
 }
 
 type TaskSummaryResponse struct {
-	Current         *TaskPayload  `json:"current"`
-	Queued          []TaskPayload `json:"queued"`
-	RecentCompleted []TaskPayload `json:"recentCompleted"`
-	RecentFailed    []TaskPayload `json:"recentFailed"`
-	CompletedCount  int           `json:"completedCount"`
-	FailedCount     int           `json:"failedCount"`
-	ConvertCurrent  *TaskPayload  `json:"convertCurrent"`
-	ConvertQueued   []TaskPayload `json:"convertQueued"`
+	Current          *TaskPayload  `json:"current"`
+	Queued           []TaskPayload `json:"queued"`
+	Paused           []TaskPayload `json:"paused"`
+	Interrupted      []TaskPayload `json:"interrupted"`
+	RecentCompleted  []TaskPayload `json:"recentCompleted"`
+	RecentFailed     []TaskPayload `json:"recentFailed"`
+	CompletedCount   int           `json:"completedCount"`
+	FailedCount      int           `json:"failedCount"`
+	CanceledCount    int           `json:"canceledCount"`
+	PausedCount      int           `json:"pausedCount"`
+	InterruptedCount int           `json:"interruptedCount"`
+	ConvertCurrent   *TaskPayload  `json:"convertCurrent"`
+	ConvertQueued    []TaskPayload `json:"convertQueued"`
 }
 
 var taskPayloadCanonicalKeys = map[string]string{
@@ -98,6 +106,14 @@ var taskPayloadCanonicalKeys = map[string]string{
 	"resume_episode_id":   "resumeEpisodeId",
 	"force_redownload":    "forceRedownload",
 	"skip_unchanged":      "skipUnchanged",
+	"requested_action":    "requestedAction",
+	"attempt_count":       "attemptCount",
+	"queue_position":      "queuePosition",
+	"can_pause":           "canPause",
+	"can_resume":          "canResume",
+	"can_cancel":          "canCancel",
+	"paused_at":           "pausedAt",
+	"interrupted_at":      "interruptedAt",
 }
 
 type DownloadResponse struct {
@@ -130,11 +146,16 @@ type RemoveResponse struct {
 	Message string   `json:"message"`
 }
 
-type CancelTaskResponse struct {
-	TaskID    string `json:"taskId"`
-	Cancelled bool   `json:"cancelled"`
-	Message   string `json:"message"`
+type TaskControlResponse struct {
+	TaskID          string `json:"taskId"`
+	Status          string `json:"status"`
+	RequestedAction string `json:"requestedAction"`
+	Changed         bool   `json:"changed"`
+	Cancelled       bool   `json:"cancelled"`
+	Message         string `json:"message"`
 }
+
+type CancelTaskResponse = TaskControlResponse
 
 type LibraryWork struct {
 	ID                  int    `json:"id"`
@@ -204,21 +225,29 @@ type versionData struct {
 }
 
 type queueData struct {
-	Total     IntValue `json:"total"`
-	WebWorker IntValue `json:"web_worker"`
-	Worker    IntValue `json:"worker"`
-	Running   *bool    `json:"running"`
+	Total       IntValue `json:"total"`
+	Queued      IntValue `json:"queued"`
+	WebWorker   IntValue `json:"web_worker"`
+	Worker      IntValue `json:"worker"`
+	Running     *bool    `json:"running"`
+	Paused      IntValue `json:"paused"`
+	Interrupted IntValue `json:"interrupted"`
 }
 
 type taskSummaryData struct {
-	Current         *TaskPayload  `json:"current"`
-	Queued          []TaskPayload `json:"queued"`
-	RecentCompleted []TaskPayload `json:"recent_completed"`
-	RecentFailed    []TaskPayload `json:"recent_failed"`
-	CompletedCount  IntValue      `json:"completed_count"`
-	FailedCount     IntValue      `json:"failed_count"`
-	ConvertCurrent  *TaskPayload  `json:"convert_current"`
-	ConvertQueued   []TaskPayload `json:"convert_queued"`
+	Current          *TaskPayload  `json:"current"`
+	Queued           []TaskPayload `json:"queued"`
+	Paused           []TaskPayload `json:"paused"`
+	Interrupted      []TaskPayload `json:"interrupted"`
+	RecentCompleted  []TaskPayload `json:"recent_completed"`
+	RecentFailed     []TaskPayload `json:"recent_failed"`
+	CompletedCount   IntValue      `json:"completed_count"`
+	FailedCount      IntValue      `json:"failed_count"`
+	CanceledCount    IntValue      `json:"canceled_count"`
+	PausedCount      IntValue      `json:"paused_count"`
+	InterruptedCount IntValue      `json:"interrupted_count"`
+	ConvertCurrent   *TaskPayload  `json:"convert_current"`
+	ConvertQueued    []TaskPayload `json:"convert_queued"`
 }
 
 type downloadData struct {
@@ -248,8 +277,13 @@ type removeData struct {
 }
 
 type cancelTaskData struct {
-	TaskID    string `json:"task_id"`
-	Cancelled bool   `json:"cancelled"`
+	TaskID          string `json:"task_id"`
+	CanonicalTaskID string `json:"taskId"`
+	Status          string `json:"status"`
+	RequestedAction string `json:"requested_action"`
+	CanonicalAction string `json:"requestedAction"`
+	Changed         bool   `json:"changed"`
+	Cancelled       bool   `json:"cancelled"`
 }
 
 type downloadRequest struct {
@@ -371,10 +405,13 @@ func (c *Client) Queue(ctx context.Context) (QueueResponse, error) {
 		running = total > 0
 	}
 	return QueueResponse{
-		Total:     total,
-		WebWorker: int(payload.WebWorker),
-		Worker:    int(payload.Worker),
-		Running:   running,
+		Total:       total,
+		Queued:      int(payload.Queued),
+		WebWorker:   int(payload.WebWorker),
+		Worker:      int(payload.Worker),
+		Running:     running,
+		Paused:      int(payload.Paused),
+		Interrupted: int(payload.Interrupted),
 	}, nil
 }
 
@@ -384,14 +421,19 @@ func (c *Client) TasksSummary(ctx context.Context) (TaskSummaryResponse, error) 
 		return TaskSummaryResponse{}, err
 	}
 	return TaskSummaryResponse{
-		Current:         taskPointer(payload.Current),
-		Queued:          taskList(payload.Queued),
-		RecentCompleted: taskList(payload.RecentCompleted),
-		RecentFailed:    taskList(payload.RecentFailed),
-		CompletedCount:  int(payload.CompletedCount),
-		FailedCount:     int(payload.FailedCount),
-		ConvertCurrent:  taskPointer(payload.ConvertCurrent),
-		ConvertQueued:   taskList(payload.ConvertQueued),
+		Current:          taskPointer(payload.Current),
+		Queued:           taskList(payload.Queued),
+		Paused:           taskList(payload.Paused),
+		Interrupted:      taskList(payload.Interrupted),
+		RecentCompleted:  taskList(payload.RecentCompleted),
+		RecentFailed:     taskList(payload.RecentFailed),
+		CompletedCount:   int(payload.CompletedCount),
+		FailedCount:      int(payload.FailedCount),
+		CanceledCount:    int(payload.CanceledCount),
+		PausedCount:      int(payload.PausedCount),
+		InterruptedCount: int(payload.InterruptedCount),
+		ConvertCurrent:   taskPointer(payload.ConvertCurrent),
+		ConvertQueued:    taskList(payload.ConvertQueued),
 	}, nil
 }
 
@@ -472,15 +514,35 @@ func (c *Client) Remove(ctx context.Context, ids []string, withFiles bool) (Remo
 }
 
 func (c *Client) CancelTask(ctx context.Context, taskID string) (CancelTaskResponse, error) {
-	data, message, err := postData[cancelTaskData](c, ctx, "/api/v2/tasks/"+url.PathEscape(taskID)+"/cancel", nil)
+	return c.taskControl(ctx, taskID, "cancel")
+}
+
+func (c *Client) PauseTask(ctx context.Context, taskID string) (TaskControlResponse, error) {
+	return c.taskControl(ctx, taskID, "pause")
+}
+
+func (c *Client) ResumeTask(ctx context.Context, taskID string) (TaskControlResponse, error) {
+	return c.taskControl(ctx, taskID, "resume")
+}
+
+func (c *Client) taskControl(ctx context.Context, taskID string, action string) (TaskControlResponse, error) {
+	data, message, err := postData[cancelTaskData](c, ctx, "/api/v2/tasks/"+url.PathEscape(taskID)+"/"+action, nil)
 	if err != nil {
-		return CancelTaskResponse{}, err
+		return TaskControlResponse{}, err
 	}
 	responseTaskID := strings.TrimSpace(data.TaskID)
 	if responseTaskID == "" {
+		responseTaskID = strings.TrimSpace(data.CanonicalTaskID)
+	}
+	if responseTaskID == "" {
 		responseTaskID = taskID
 	}
-	return CancelTaskResponse{TaskID: responseTaskID, Cancelled: data.Cancelled, Message: message}, nil
+	requestedAction := strings.TrimSpace(data.RequestedAction)
+	if requestedAction == "" {
+		requestedAction = strings.TrimSpace(data.CanonicalAction)
+	}
+	cancelled := data.Cancelled || (action == "cancel" && data.Status == "canceled")
+	return TaskControlResponse{TaskID: responseTaskID, Status: data.Status, RequestedAction: requestedAction, Changed: data.Changed, Cancelled: cancelled, Message: message}, nil
 }
 
 func (c *Client) ListLibraryWorks(ctx context.Context) ([]LibraryWork, error) {

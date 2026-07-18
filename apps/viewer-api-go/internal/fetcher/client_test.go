@@ -17,7 +17,7 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 		case "/api/v2/system/version":
 			writeEnvelope(t, w, map[string]any{"current": "novel-fetcher/v1.0.0", "latest": ""})
 		case "/api/v2/system/queue":
-			writeEnvelope(t, w, map[string]any{"total": "2", "web_worker": 1, "worker": 1})
+			writeEnvelope(t, w, map[string]any{"total": "2", "queued": 1, "web_worker": 1, "worker": 1, "running": true, "paused": 2, "interrupted": 3})
 		case "/api/v2/tasks/summary":
 			writeEnvelope(t, w, map[string]any{
 				"current": map[string]any{
@@ -52,6 +52,10 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 			writeEnvelope(t, w, map[string]any{"ids": []any{"1"}}, "Novel removed")
 		case "/api/v2/tasks/task-1/cancel":
 			writeEnvelope(t, w, map[string]any{"task_id": "task-1", "cancelled": true}, "Task cancelled")
+		case "/api/v2/tasks/task-1/pause":
+			writeEnvelope(t, w, map[string]any{"task_id": "task-1", "status": "paused", "changed": true}, "Task paused")
+		case "/api/v2/tasks/task-1/resume":
+			writeEnvelope(t, w, map[string]any{"task_id": "task-1", "status": "queued", "changed": true}, "Task resumed")
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			writeEnvelope(t, w, map[string]any{})
@@ -64,7 +68,7 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status returned error: %v", err)
 	}
-	if status.Version.Current == nil || *status.Version.Current != "novel-fetcher/v1.0.0" || !status.Queue.Running {
+	if status.Version.Current == nil || *status.Version.Current != "novel-fetcher/v1.0.0" || !status.Queue.Running || status.Queue.Queued != 1 || status.Queue.Paused != 2 || status.Queue.Interrupted != 3 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
 	summary, err := client.TasksSummary(context.Background())
@@ -122,6 +126,14 @@ func TestClientReadsStatusQueueSummaryAndMutations(t *testing.T) {
 	}
 	if cancel.Message != "Task cancelled" || !cancel.Cancelled || cancel.TaskID != "task-1" {
 		t.Fatalf("unexpected cancel response: %+v", cancel)
+	}
+	pause, err := client.PauseTask(context.Background(), "task-1")
+	if err != nil || pause.Status != "paused" || !pause.Changed || pause.Message != "Task paused" {
+		t.Fatalf("unexpected pause response: %+v, err=%v", pause, err)
+	}
+	resumeTask, err := client.ResumeTask(context.Background(), "task-1")
+	if err != nil || resumeTask.Status != "queued" || !resumeTask.Changed || resumeTask.Message != "Task resumed" {
+		t.Fatalf("unexpected task resume response: %+v, err=%v", resumeTask, err)
 	}
 }
 
@@ -254,6 +266,12 @@ func TestClientReportsFetcherErrors(t *testing.T) {
 	}
 	if _, err := emptyClient.CancelTask(context.Background(), "task"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("empty base URL cancel should be unavailable, err=%v", err)
+	}
+	if _, err := emptyClient.PauseTask(context.Background(), "task"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("empty base URL pause should be unavailable, err=%v", err)
+	}
+	if _, err := emptyClient.ResumeTask(context.Background(), "task"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("empty base URL task resume should be unavailable, err=%v", err)
 	}
 	if _, err := NewClient("http://[::1").Queue(context.Background()); err == nil {
 		t.Fatal("invalid base URL should fail before sending request")

@@ -18,16 +18,24 @@ type FetcherStatusResponse = {
   };
   queue: {
     total: number;
+    queued: number;
     webWorker: number;
     worker: number;
+    paused: number;
+    interrupted: number;
     running: boolean;
   };
   tasks: {
     queued: unknown[];
+    paused: unknown[];
+    interrupted: unknown[];
     recentCompleted: unknown[];
     recentFailed: unknown[];
     completedCount: number;
     failedCount: number;
+    canceledCount: number;
+    pausedCount: number;
+    interruptedCount: number;
     convertQueued: unknown[];
   };
 };
@@ -35,10 +43,15 @@ type FetcherStatusResponse = {
 type FetcherTasksSummaryResponse = {
   current: unknown | null;
   queued: unknown[];
+  paused: unknown[];
+  interrupted: unknown[];
   recentCompleted: unknown[];
   recentFailed: unknown[];
   completedCount: number;
   failedCount: number;
+  canceledCount: number;
+  pausedCount: number;
+  interruptedCount: number;
   convertCurrent: unknown | null;
   convertQueued: unknown[];
 };
@@ -185,13 +198,21 @@ test.describe("pc-xga 代表の runtime APIs", () => {
     expect(status.checkedAt.length).toBeGreaterThan(0);
     expect(status.version.current).toMatch(/\d+\.\d+\.\d+/);
     expect(status.queue.total).toBeGreaterThanOrEqual(0);
+    expect(status.queue.queued).toBeGreaterThanOrEqual(0);
+    expect(status.queue.paused).toBeGreaterThanOrEqual(0);
+    expect(status.queue.interrupted).toBeGreaterThanOrEqual(0);
     expect(typeof status.queue.running).toBe("boolean");
     expect(Array.isArray(status.tasks.queued)).toBeTruthy();
+    expect(Array.isArray(status.tasks.paused)).toBeTruthy();
+    expect(Array.isArray(status.tasks.interrupted)).toBeTruthy();
     expect(Array.isArray(status.tasks.recentCompleted)).toBeTruthy();
     expect(Array.isArray(status.tasks.recentFailed)).toBeTruthy();
     expect(Array.isArray(status.tasks.convertQueued)).toBeTruthy();
     expect(status.tasks.completedCount).toBeGreaterThanOrEqual(0);
     expect(status.tasks.failedCount).toBeGreaterThanOrEqual(0);
+    expect(status.tasks.canceledCount).toBeGreaterThanOrEqual(0);
+    expect(status.tasks.pausedCount).toBeGreaterThanOrEqual(0);
+    expect(status.tasks.interruptedCount).toBeGreaterThanOrEqual(0);
   });
 
   test("fetcher task summary API exposes canonical camelCase fields", async ({ request }) => {
@@ -200,11 +221,16 @@ test.describe("pc-xga 代表の runtime APIs", () => {
 
     const summary = (await response.json()) as FetcherTasksSummaryResponse;
     expect(Array.isArray(summary.queued)).toBeTruthy();
+    expect(Array.isArray(summary.paused)).toBeTruthy();
+    expect(Array.isArray(summary.interrupted)).toBeTruthy();
     expect(Array.isArray(summary.recentCompleted)).toBeTruthy();
     expect(Array.isArray(summary.recentFailed)).toBeTruthy();
     expect(Array.isArray(summary.convertQueued)).toBeTruthy();
     expect(summary.completedCount).toBeGreaterThanOrEqual(0);
     expect(summary.failedCount).toBeGreaterThanOrEqual(0);
+    expect(summary.canceledCount).toBeGreaterThanOrEqual(0);
+    expect(summary.pausedCount).toBeGreaterThanOrEqual(0);
+    expect(summary.interruptedCount).toBeGreaterThanOrEqual(0);
     expect(summary).not.toHaveProperty("recent_completed");
     expect(summary).not.toHaveProperty("completed_count");
   });

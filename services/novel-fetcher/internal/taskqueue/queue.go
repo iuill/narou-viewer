@@ -3,32 +3,25 @@ package taskqueue
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"narou-viewer/services/novel-fetcher/internal/sites"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
+// Queue adds wake-up notification and task reporting to the durable task
+// repository. Task state itself always lives in the repository.
 type Queue struct {
-	mu             sync.Mutex
-	queue          []*Task
-	current        *Task
-	recentComplete []*Task
-	recentFailed   []*Task
-	completedCount int
-	failedCount    int
-	wake           chan struct{}
+	repository taskstate.Repository
+	wake       chan struct{}
 }
 
-func NewQueue() *Queue {
-	return &Queue{wake: make(chan struct{}, 1)}
+func NewQueue(repository taskstate.Repository) *Queue {
+	return &Queue{repository: repository, wake: make(chan struct{}, 1)}
 }
 
-func (q *Queue) Wake() <-chan struct{} {
-	return q.wake
-}
+func (q *Queue) Wake() <-chan struct{} { return q.wake }
 
 func (q *Queue) Notify() {
 	select {
@@ -37,90 +30,68 @@ func (q *Queue) Notify() {
 	}
 }
 
-func (q *Queue) Enqueue(tasks ...*Task) {
-	q.mu.Lock()
-	q.queue = append(q.queue, tasks...)
-	q.mu.Unlock()
+func (q *Queue) Enqueue(tasks ...*Task) error {
+	if _, err := q.repository.Enqueue(context.Background(), tasks); err != nil {
+		return err
+	}
 	q.Notify()
+	return nil
 }
 
-func (q *Queue) StatusCounts() StatusCounts {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	total := len(q.queue)
-	running := q.current != nil
-	if running {
-		total++
+func (q *Queue) StatusCounts() (StatusCounts, error) {
+	counts, err := q.repository.QueueCounts(context.Background())
+	if err != nil {
+		return StatusCounts{}, err
 	}
-	return StatusCounts{Total: total, Running: running}
+	return StatusCounts{
+		Total:       counts.Total,
+		Queued:      counts.Queued,
+		Running:     counts.Running,
+		Paused:      counts.Paused,
+		Interrupted: counts.Interrupted,
+	}, nil
 }
 
-func (q *Queue) Summary() Summary {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
+func (q *Queue) Summary() (Summary, error) {
+	state, err := q.repository.Summary(context.Background(), 20)
+	if err != nil {
+		return Summary{}, err
+	}
 	return Summary{
-		Current:         Payload(q.current),
-		Queued:          Payloads(q.queue),
-		RecentCompleted: Payloads(q.recentComplete),
-		RecentFailed:    Payloads(q.recentFailed),
-		CompletedCount:  q.completedCount,
-		FailedCount:     q.failedCount,
-	}
+		Current:          Payload(state.Current),
+		Queued:           Payloads(state.Queued),
+		Paused:           Payloads(state.Paused),
+		Interrupted:      Payloads(state.Interrupted),
+		RecentCompleted:  Payloads(state.RecentCompleted),
+		RecentFailed:     Payloads(state.RecentFailed),
+		CompletedCount:   state.CompletedCount,
+		FailedCount:      state.FailedCount,
+		CanceledCount:    state.CanceledCount,
+		PausedCount:      state.PausedCount,
+		InterruptedCount: state.InterruptedCount,
+	}, nil
 }
 
-func (q *Queue) PopNext() *Task {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if len(q.queue) == 0 {
-		return nil
-	}
-
-	next := q.queue[0]
-	q.queue = q.queue[1:]
-	now := time.Now()
-	next.StartedAt = &now
-	next.Status = StatusRunning
-	q.current = next
-	return next
+func (q *Queue) ClaimNext() (*Task, error) {
+	return q.repository.ClaimNext(context.Background(), time.Now().UTC())
 }
 
-func (q *Queue) HasQueuedTasks() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.queue) > 0
-}
-
-func (q *Queue) IsIdle() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.current == nil && len(q.queue) == 0
+func (q *Queue) HasQueuedTasks() (bool, error) {
+	return q.repository.HasQueuedTasks(context.Background())
 }
 
 func (q *Queue) SetTaskProgress(taskID string, progress sites.Progress) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current == nil || q.current.ID != taskID {
-		return
-	}
-
-	q.current.Phase = progress.Phase
-	q.current.CurrentStep = progress.CurrentStep
-	q.current.TotalSteps = progress.TotalSteps
-	if progress.Message != "" {
-		q.current.Message = progress.Message
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.UpdateProgress(context.Background(), ref, taskstate.Progress{
+			Phase: progress.Phase, CurrentStep: progress.CurrentStep,
+			TotalSteps: progress.TotalSteps, Message: progress.Message,
+		})
 	}
 }
 
 func (q *Queue) SetTaskMessage(taskID string, message string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current != nil && q.current.ID == taskID {
-		q.current.Message = message
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.UpdateMessage(context.Background(), ref, message)
 	}
 }
 
@@ -128,129 +99,100 @@ func (q *Queue) AddTaskWarning(taskID string, warning string) {
 	if strings.TrimSpace(warning) == "" {
 		return
 	}
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current == nil || q.current.ID != taskID {
-		return
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.AddWarning(context.Background(), ref, warning)
 	}
-	for _, existing := range q.current.Warnings {
-		if existing == warning {
-			return
-		}
-	}
-	q.current.Warnings = append(q.current.Warnings, warning)
 }
 
 func (q *Queue) SetTaskTarget(taskID string, target string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current != nil && q.current.ID == taskID {
-		q.current.TargetLabel = target
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.SetTarget(context.Background(), ref, target)
 	}
 }
 
-func (q *Queue) AddTaskNovelID(taskID string, novelID int) {
-	if novelID == 0 {
-		return
+func (q *Queue) SetTaskWorkID(taskID string, workID int) error {
+	ref, err := q.runningRef(taskID)
+	if err != nil {
+		return err
 	}
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current == nil || q.current.ID != taskID {
-		return
-	}
-	for _, existingID := range q.current.NovelIDs {
-		if existingID == novelID {
-			return
-		}
-	}
-	q.current.NovelIDs = append(q.current.NovelIDs, novelID)
+	return q.repository.SetWorkID(context.Background(), ref, workID)
 }
 
 func (q *Queue) SetTaskSavedEpisodeCount(taskID string, count int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current != nil && q.current.ID == taskID {
-		q.current.SavedEpisodeCount = count
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.SetSavedEpisodeCount(context.Background(), ref, count)
 	}
 }
 
 func (q *Queue) SetTaskFailureEpisode(taskID string, failedEpisodeID string, resumeEpisodeID string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.current != nil && q.current.ID == taskID {
-		q.current.FailedEpisodeID = failedEpisodeID
-		q.current.ResumeEpisodeID = resumeEpisodeID
+	if ref, err := q.runningRef(taskID); err == nil {
+		_ = q.repository.SetFailureEpisode(context.Background(), ref, failedEpisodeID, resumeEpisodeID)
 	}
 }
 
-func (q *Queue) FinishTask(done *Task, err error, logger *slog.Logger) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	now := time.Now()
-	done.FinishedAt = &now
-	if errors.Is(err, context.Canceled) {
-		done.Status = StatusCanceled
-		done.Message = "Task cancelled"
-		q.failedCount++
-		q.recentFailed = appendRecent(q.recentFailed, done)
-	} else if err != nil {
-		done.Status = StatusFailed
-		done.ErrorMessage = err.Error()
-		q.failedCount++
-		q.recentFailed = appendRecent(q.recentFailed, done)
-		if logger != nil {
-			logger.Warn("task failed", "taskID", done.ID, "error", err)
-		}
-	} else {
-		done.Status = StatusCompleted
-		if done.Message == "" {
-			done.Message = "Task completed"
-		}
-		q.completedCount++
-		q.recentComplete = appendRecent(q.recentComplete, done)
-	}
-	q.current = nil
+func (q *Queue) FinishTask(done *Task, err error) error {
+	outcome := taskstate.Outcome{Status: StatusSucceeded, Error: err, ExecutionCommitted: done.ExecutionCommitted}
+	setOutcomeFromError(&outcome, err)
+	return q.repository.Finalize(context.Background(), taskstate.TaskRef{TaskID: done.ID, Attempt: done.AttemptCount}, outcome)
 }
 
-func (q *Queue) IsCurrent(taskID string) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	return q.current != nil && q.current.ID == taskID
+func setOutcomeFromError(outcome *taskstate.Outcome, err error) {
+	outcome.Status = StatusSucceeded
+	outcome.Message = "Task completed"
+	switch {
+	case errors.Is(err, taskstate.ErrTaskPauseRequested):
+		outcome.Status, outcome.Message = StatusPaused, "Task paused"
+	case errors.Is(err, taskstate.ErrTaskCancelRequested), errors.Is(err, context.Canceled):
+		outcome.Status, outcome.Message = StatusCanceled, "Task cancelled"
+	case errors.Is(err, taskstate.ErrRunnerShutdown):
+		outcome.Status, outcome.Message = StatusInterrupted, "Task interrupted during process shutdown"
+	case err != nil:
+		outcome.Status, outcome.Message = StatusFailed, err.Error()
+	}
 }
 
-func (q *Queue) CancelQueued(taskID string) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	for index, queued := range q.queue {
-		if queued.ID == taskID {
-			now := time.Now()
-			queued.Status = StatusCanceled
-			queued.FinishedAt = &now
-			queued.Message = "Task cancelled"
-			q.queue = append(q.queue[:index], q.queue[index+1:]...)
-			q.failedCount++
-			q.recentFailed = appendRecent(q.recentFailed, queued)
-			return true
-		}
+func (q *Queue) RequestPause(taskID string) (taskstate.ControlResult, error) {
+	result, err := q.repository.RequestPause(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
 	}
-
-	return false
+	return result, err
 }
 
-func appendRecent(tasks []*Task, entry *Task) []*Task {
-	tasks = append([]*Task{entry}, tasks...)
-	if len(tasks) > 20 {
-		return tasks[:20]
+func (q *Queue) RequestResume(taskID string) (taskstate.ControlResult, error) {
+	result, err := q.repository.RequestResume(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
 	}
-	return tasks
+	return result, err
+}
+
+func (q *Queue) RequestCancel(taskID string) (taskstate.ControlResult, error) {
+	result, err := q.repository.RequestCancel(context.Background(), taskID)
+	if err == nil && result.Changed {
+		q.Notify()
+	}
+	return result, err
+}
+
+func (q *Queue) GetTask(taskID string) (*Task, bool, error) {
+	return q.repository.Get(context.Background(), taskID)
+}
+
+func (q *Queue) RequestedAction(ref taskstate.TaskRef) (taskstate.RequestedAction, error) {
+	return q.repository.ReadRequestedAction(context.Background(), ref)
+}
+
+func (q *Queue) runningRef(taskID string) (taskstate.TaskRef, error) {
+	task, found, err := q.repository.Get(context.Background(), taskID)
+	if err != nil {
+		return taskstate.TaskRef{}, err
+	}
+	if !found {
+		return taskstate.TaskRef{}, taskstate.ErrTaskNotFound
+	}
+	if task.Status != StatusRunning {
+		return taskstate.TaskRef{}, taskstate.ErrStaleTaskAttempt
+	}
+	return taskstate.TaskRef{TaskID: taskID, Attempt: task.AttemptCount}, nil
 }

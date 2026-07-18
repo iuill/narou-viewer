@@ -20,7 +20,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const nfLibrarySupportedMigration = 3
+const nfLibrarySupportedMigration = 4
 const nfCanonicalEpisodeVersion = 1
 
 func (s *scanner) scanSQLite(ctx context.Context) {

@@ -8,6 +8,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/config"
 	"narou-viewer/services/novel-fetcher/internal/model"
 	"narou-viewer/services/novel-fetcher/internal/storage"
+	"narou-viewer/services/novel-fetcher/internal/taskqueue"
 )
 
 func (a *App) handleHealth(writer http.ResponseWriter, _ *http.Request) {
@@ -26,29 +27,69 @@ func (a *App) handleVersion(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) handleQueue(writer http.ResponseWriter, _ *http.Request) {
-	counts := a.queue.StatusCounts()
+	counts, err := a.queue.StatusCounts()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("failed to read task queue state", "error", err)
+		}
+		writeError(writer, http.StatusInternalServerError, "failed to read task queue state")
+		return
+	}
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
-		"total":      counts.Total,
-		"web_worker": 0,
-		"worker":     counts.Total,
-		"running":    counts.Running,
+		"total":       counts.Total,
+		"queued":      counts.Queued,
+		"paused":      counts.Paused,
+		"interrupted": counts.Interrupted,
+		"web_worker":  0,
+		"worker":      counts.Total,
+		"running":     counts.Running,
 	}, nil)
 }
 
 func (a *App) handleTasksSummary(writer http.ResponseWriter, _ *http.Request) {
-	summary := a.queue.Summary()
+	summary, err := a.queue.Summary()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("failed to read task summary state", "error", err)
+		}
+		writeError(writer, http.StatusInternalServerError, "failed to read task summary state")
+		return
+	}
 
 	writeEnvelope(writer, http.StatusOK, map[string]any{
-		"current":          summary.Current,
-		"queued":           summary.Queued,
-		"recent_completed": summary.RecentCompleted,
-		"recent_failed":    summary.RecentFailed,
-		"completed_count":  summary.CompletedCount,
-		"failed_count":     summary.FailedCount,
-		"convert_current":  nil,
-		"convert_queued":   []any{},
+		"current":           summary.Current,
+		"queued":            summary.Queued,
+		"recent_completed":  summary.RecentCompleted,
+		"recent_failed":     summary.RecentFailed,
+		"paused":            summary.Paused,
+		"interrupted":       summary.Interrupted,
+		"completed_count":   summary.CompletedCount,
+		"failed_count":      summary.FailedCount,
+		"canceled_count":    summary.CanceledCount,
+		"paused_count":      summary.PausedCount,
+		"interrupted_count": summary.InterruptedCount,
+		"convert_current":   nil,
+		"convert_queued":    []any{},
 	}, nil)
+}
+
+func (a *App) handleTask(writer http.ResponseWriter, request *http.Request) {
+	taskID := strings.TrimSpace(request.PathValue("taskID"))
+	if taskID == "" {
+		writeError(writer, http.StatusBadRequest, "task id is required")
+		return
+	}
+	task, found, err := a.queue.GetTask(taskID)
+	if err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, "task was not found")
+		return
+	}
+	writeEnvelope(writer, http.StatusOK, taskqueue.Payload(task), nil)
 }
 
 func (a *App) handleListNovels(writer http.ResponseWriter, _ *http.Request) {

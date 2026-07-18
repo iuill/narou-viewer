@@ -2,9 +2,12 @@ export type JsonRecord = Record<string, unknown>;
 
 export type FetcherQueueResponse = {
   total: number;
+  queued?: number;
   webWorker: number;
   worker: number;
   running: boolean;
+  paused?: number;
+  interrupted?: number;
   available?: boolean;
   degraded?: boolean;
 };
@@ -12,10 +15,15 @@ export type FetcherQueueResponse = {
 export type FetcherTaskSummaryResponse = {
   current?: JsonRecord | null;
   queued?: JsonRecord[];
+  paused?: JsonRecord[];
+  interrupted?: JsonRecord[];
   recentCompleted?: JsonRecord[];
   recentFailed?: JsonRecord[];
   completedCount?: number;
   failedCount?: number;
+  canceledCount?: number;
+  pausedCount?: number;
+  interruptedCount?: number;
   convertCurrent?: JsonRecord | null;
   convertQueued?: JsonRecord[];
   available?: boolean;
@@ -73,6 +81,13 @@ export type FetcherRemoveResponse = {
   message: string;
 };
 
-export type FetcherCancelTaskResponse = {
+export type FetcherTaskControlResponse = {
+  taskId?: string;
+  status?: string;
+  requestedAction?: string;
+  changed?: boolean;
+  cancelled?: boolean;
   message?: string;
 };
+
+export type FetcherCancelTaskResponse = FetcherTaskControlResponse;

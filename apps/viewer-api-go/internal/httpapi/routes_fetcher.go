@@ -142,18 +142,34 @@ func (s *Server) handleFetcherTaskAction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/fetcher/tasks/")
-	if !strings.HasSuffix(rest, "/cancel") {
+	action := ""
+	for _, candidate := range []string{"pause", "resume", "cancel"} {
+		if strings.HasSuffix(rest, "/"+candidate) {
+			action = candidate
+			break
+		}
+	}
+	if action == "" {
 		writeError(w, http.StatusNotFound, "Not found.")
 		return
 	}
-	taskID := trimPathValue(strings.TrimSuffix(rest, "/cancel"))
+	taskID := trimPathValue(strings.TrimSuffix(rest, "/"+action))
 	if taskID == "" {
 		writeError(w, http.StatusBadRequest, "taskId is required.")
 		return
 	}
-	result, err := s.fetcherCommands.CancelTask(r.Context(), taskID)
+	var result any
+	var err error
+	switch action {
+	case "pause":
+		result, err = s.fetcherCommands.PauseTask(r.Context(), taskID)
+	case "resume":
+		result, err = s.fetcherCommands.ResumeTask(r.Context(), taskID)
+	case "cancel":
+		result, err = s.fetcherCommands.CancelTask(r.Context(), taskID)
+	}
 	if err != nil {
-		writeFetcherError(w, err, "Failed to cancel novel-fetcher task.")
+		writeFetcherError(w, err, "Failed to control novel-fetcher task.")
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -161,12 +177,15 @@ func (s *Server) handleFetcherTaskAction(w http.ResponseWriter, r *http.Request)
 
 func queueShape() map[string]any {
 	return map[string]any{
-		"total":     0,
-		"webWorker": 0,
-		"worker":    0,
-		"running":   false,
-		"available": false,
-		"degraded":  true,
+		"total":       0,
+		"queued":      0,
+		"webWorker":   0,
+		"worker":      0,
+		"running":     false,
+		"paused":      0,
+		"interrupted": 0,
+		"available":   false,
+		"degraded":    true,
 	}
 }
 
@@ -207,16 +226,21 @@ func fallbackFetcherStatus() map[string]any {
 
 func statusTaskSummaryShape() map[string]any {
 	return map[string]any{
-		"current":         nil,
-		"queued":          []any{},
-		"recentCompleted": []any{},
-		"recentFailed":    []any{},
-		"completedCount":  0,
-		"failedCount":     0,
-		"convertCurrent":  nil,
-		"convertQueued":   []any{},
-		"available":       false,
-		"degraded":        true,
+		"current":          nil,
+		"queued":           []any{},
+		"paused":           []any{},
+		"interrupted":      []any{},
+		"recentCompleted":  []any{},
+		"recentFailed":     []any{},
+		"completedCount":   0,
+		"failedCount":      0,
+		"canceledCount":    0,
+		"pausedCount":      0,
+		"interruptedCount": 0,
+		"convertCurrent":   nil,
+		"convertQueued":    []any{},
+		"available":        false,
+		"degraded":         true,
 	}
 }
 

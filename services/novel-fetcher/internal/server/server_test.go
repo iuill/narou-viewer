@@ -21,6 +21,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/sites"
 	"narou-viewer/services/novel-fetcher/internal/storage"
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type progressFetcher struct {
@@ -34,6 +35,13 @@ type blockingTocFetcher struct {
 	release   chan struct{}
 	enterOnce sync.Once
 	work      model.Work
+}
+
+type heldControlTocFetcher struct {
+	entered  chan struct{}
+	observed chan struct{}
+	release  chan struct{}
+	once     sync.Once
 }
 
 type staticFetcher struct {
@@ -53,6 +61,11 @@ type countingFetcher struct {
 }
 
 type cancelingAssetFetcher struct{}
+
+type blockingAssetFetcher struct {
+	entered chan struct{}
+	once    sync.Once
+}
 
 func (f *blockingTocFetcher) FetchToc(ctx context.Context, target string, report sites.ProgressReporter) (model.Work, error) {
 	f.enterOnce.Do(func() {
@@ -77,6 +90,18 @@ func (f *blockingTocFetcher) FetchEpisode(_ context.Context, _ model.Work, episo
 	}
 	episode.RawHTML = "<p>本文</p>"
 	episode.FetchedAt = time.Now()
+	return episode, nil
+}
+
+func (f *heldControlTocFetcher) FetchToc(ctx context.Context, _ string, _ sites.ProgressReporter) (model.Work, error) {
+	close(f.entered)
+	<-ctx.Done()
+	f.once.Do(func() { close(f.observed) })
+	<-f.release
+	return model.Work{}, ctx.Err()
+}
+
+func (f *heldControlTocFetcher) FetchEpisode(_ context.Context, _ model.Work, episode model.Episode, _ sites.ProgressReporter) (model.Episode, error) {
 	return episode, nil
 }
 
@@ -187,6 +212,12 @@ func firstNonEmpty(values ...string) string {
 
 func (f cancelingAssetFetcher) FetchBytes(_ context.Context, _ string, _ fetcher.FetchPolicy) (fetcher.BinaryResponse, error) {
 	return fetcher.BinaryResponse{}, context.Canceled
+}
+
+func (f *blockingAssetFetcher) FetchBytes(ctx context.Context, _ string, _ fetcher.FetchPolicy) (fetcher.BinaryResponse, error) {
+	f.once.Do(func() { close(f.entered) })
+	<-ctx.Done()
+	return fetcher.BinaryResponse{}, ctx.Err()
 }
 
 func TestReadEndpointsReturnStoredWorkAndEpisodes(t *testing.T) {
@@ -545,7 +576,7 @@ func TestMutationEndpointsValidateBodiesAndQueueTasks(t *testing.T) {
 	}
 }
 
-func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
+func TestDownloadEquivalentTargetsAreDeduplicatedBeforeFetch(t *testing.T) {
 	store, stored := newTestStoreWithWork(t)
 	fetcher := &blockingTocFetcher{
 		entered: make(chan struct{}),
@@ -581,6 +612,13 @@ func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
 	if download.Code != http.StatusAccepted {
 		t.Fatalf("download status = %d: %s", download.Code, download.Body.String())
 	}
+	downloadData := decodeObject(t, download)["data"].(map[string]any)
+	if targets := downloadData["targets"].([]any); len(targets) != 1 {
+		t.Fatalf("download targets = %#v, want one canonical work request", targets)
+	}
+	if taskIDs := downloadData["task_ids"].([]any); len(taskIDs) != 1 {
+		t.Fatalf("download task_ids = %#v, want one task", taskIDs)
+	}
 
 	select {
 	case <-fetcher.entered:
@@ -599,12 +637,8 @@ func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
 		t.Fatalf("download task novel_ids = %#v, want %s", novelIDs, storedID(stored.ID))
 	}
 	queued := summaryData["queued"].([]any)
-	if len(queued) != 1 {
-		t.Fatalf("queued tasks = %#v, want one queued task", queued)
-	}
-	queuedNovelIDs := queued[0].(map[string]any)["novel_ids"].([]any)
-	if !containsStringValue(queuedNovelIDs, storedID(stored.ID)) {
-		t.Fatalf("queued download task novel_ids = %#v, want %s", queuedNovelIDs, storedID(stored.ID))
+	if len(queued) != 0 {
+		t.Fatalf("queued tasks = %#v, want equivalent target deduplication", queued)
 	}
 
 	releaseOnce.Do(func() {
@@ -613,11 +647,11 @@ func TestDownloadExistingWorkIncludesNovelIDBeforeFetchCompletes(t *testing.T) {
 	waitForIdleApp(t, app)
 }
 
-func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
+func TestExistingDownloadWorkIDsByTargetNormalizesTargets(t *testing.T) {
 	emptyApp := &App{}
-	emptyMatches, err := emptyApp.existingDownloadNovelIDsByTarget([]string{"  "})
+	emptyMatches, err := emptyApp.existingDownloadWorkIDsByTarget([]string{"  "})
 	if err != nil {
-		t.Fatalf("empty existingDownloadNovelIDsByTarget returned error: %v", err)
+		t.Fatalf("empty existingDownloadWorkIDsByTarget returned error: %v", err)
 	}
 	if len(emptyMatches) != 0 {
 		t.Fatalf("empty matches = %#v", emptyMatches)
@@ -627,7 +661,7 @@ func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
 	defer store.Close()
 	app := &App{store: store}
 
-	matches, err := app.existingDownloadNovelIDsByTarget([]string{
+	matches, err := app.existingDownloadWorkIDsByTarget([]string{
 		"HTTPS://NCODE.SYOSETU.COM/N1234AB",
 		"n1234ab",
 		"https://ncode.syosetu.com/n1234ab/1/",
@@ -635,11 +669,11 @@ func TestExistingDownloadNovelIDsByTargetNormalizesTargets(t *testing.T) {
 		"https://ncode.syosetu.com/missing/",
 	})
 	if err != nil {
-		t.Fatalf("existingDownloadNovelIDsByTarget returned error: %v", err)
+		t.Fatalf("existingDownloadWorkIDsByTarget returned error: %v", err)
 	}
-	ids := matches["site:syosetu:n1234ab"]
-	if len(ids) != 1 || ids[0] != stored.ID {
-		t.Fatalf("matched ids = %#v, want [%d]", ids, stored.ID)
+	workID := matches["site:syosetu:n1234ab"]
+	if workID != stored.ID {
+		t.Fatalf("matched work id = %d, want %d", workID, stored.ID)
 	}
 	if _, ok := matches["url:https://ncode.syosetu.com/missing"]; ok {
 		t.Fatalf("missing target unexpectedly matched: %#v", matches)
@@ -700,7 +734,7 @@ func TestCancelQueuedTask(t *testing.T) {
 
 	task := taskqueue.NewTask("download")
 	task.ID = "queued-1"
-	task.Targets = []string{"https://example.com/work"}
+	task.Target = "https://example.com/work"
 	app.queue.Enqueue(task)
 
 	recorder := performRequest(app, http.MethodPost, "/api/v2/tasks/queued-1/cancel", "")
@@ -711,11 +745,420 @@ func TestCancelQueuedTask(t *testing.T) {
 	if payload["success"] != true {
 		t.Fatalf("cancel payload = %#v", payload)
 	}
+	data := payload["data"].(map[string]any)
+	if data["changed"] != true || data["cancelled"] != true || data["status"] != string(taskqueue.StatusCanceled) {
+		t.Fatalf("cancel data = %#v", data)
+	}
 
 	missing := performRequest(app, http.MethodPost, "/api/v2/tasks/missing/cancel", "")
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing cancel status = %d", missing.Code)
 	}
+}
+
+func TestPersistentTaskControlEndpointsExposeDurableState(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/control"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	createdData := decodeObject(t, created)["data"].(map[string]any)
+	taskID := createdData["task_ids"].([]any)[0].(string)
+	conflicting := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/control"],"force":true}`)
+	if conflicting.Code != http.StatusConflict {
+		t.Fatalf("conflicting create status = %d: %s", conflicting.Code, conflicting.Body.String())
+	}
+	detail := performRequest(app, http.MethodGet, "/api/v2/tasks/"+taskID, "")
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail status = %d: %s", detail.Code, detail.Body.String())
+	}
+	paused := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if paused.Code != http.StatusOK {
+		t.Fatalf("pause status = %d: %s", paused.Code, paused.Body.String())
+	}
+	pausedData := decodeObject(t, paused)["data"].(map[string]any)
+	if pausedData["status"] != string(taskqueue.StatusPaused) || pausedData["can_resume"] != true || pausedData["changed"] != true {
+		t.Fatalf("pause data = %#v", pausedData)
+	}
+	pausedAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if pausedAgain.Code != http.StatusOK {
+		t.Fatalf("idempotent pause status = %d: %s", pausedAgain.Code, pausedAgain.Body.String())
+	}
+	resumed := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/resume", "")
+	if resumed.Code != http.StatusAccepted {
+		t.Fatalf("resume status = %d: %s", resumed.Code, resumed.Body.String())
+	}
+	resumedData := decodeObject(t, resumed)["data"].(map[string]any)
+	if resumedData["status"] != string(taskqueue.StatusQueued) || resumedData["changed"] != true {
+		t.Fatalf("resume data = %#v", resumedData)
+	}
+	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceled.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	canceledData := decodeObject(t, canceled)["data"].(map[string]any)
+	if canceledData["status"] != string(taskqueue.StatusCanceled) || canceledData["changed"] != true || canceledData["cancelled"] != true {
+		t.Fatalf("cancel data = %#v", canceledData)
+	}
+	canceledAgain := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceledAgain.Code != http.StatusConflict {
+		t.Fatalf("repeated cancel status = %d: %s", canceledAgain.Code, canceledAgain.Body.String())
+	}
+	missing := performRequest(app, http.MethodGet, "/api/v2/tasks/missing", "")
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing detail status = %d", missing.Code)
+	}
+	for _, action := range []string{"pause", "resume", "cancel"} {
+		missingAction := performRequest(app, http.MethodPost, "/api/v2/tasks/missing/"+action, "")
+		if missingAction.Code != http.StatusNotFound {
+			t.Fatalf("missing %s status = %d", action, missingAction.Code)
+		}
+	}
+}
+
+func TestNewWithErrorRequiresStorage(t *testing.T) {
+	app := New(Options{Logger: slog.Default()})
+	app.Start(context.Background())
+	app.Shutdown(context.Background())
+	if app == nil || app.initErr == nil {
+		t.Fatal("missing storage did not produce initialization error")
+	}
+	response := performRequest(app, http.MethodGet, "/api/v2/tasks/summary", "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("partially initialized app status = %d", response.Code)
+	}
+}
+
+func TestNewRecordsTaskStateInitializationError(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	defer store.Close()
+	repositoryTask := taskqueue.NewTask("download")
+	repositoryTask.Target = "https://example.com/corrupt-startup"
+	if _, err := taskstate.NewSQLiteRepository(store.DB()).Enqueue(context.Background(), []*taskqueue.Task{repositoryTask}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`DELETE FROM fetch_task_queue`); err != nil {
+		t.Fatal(err)
+	}
+	app := New(Options{Store: store, Logger: slog.Default()})
+	if app == nil || app.initErr == nil {
+		t.Fatal("corrupt task state did not produce initialization error")
+	}
+}
+
+func TestTaskStateReadEndpointsSurfaceStorageErrors(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	app := New(Options{Store: store, Logger: slog.Default()})
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v2/system/queue", "/api/v2/tasks/summary"} {
+		response := performRequest(app, http.MethodGet, path, "")
+		if response.Code != http.StatusInternalServerError {
+			t.Fatalf("%s status = %d: %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestRunningTaskControlAcknowledgesCancellationRequest(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	fetcher := &blockingTocFetcher{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n9999ab", Title: "制御作品", Author: "作者",
+			Episodes: []model.Episode{{Index: "1", Title: "第一話"}},
+		},
+	}
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+	startApp(t, app)
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+	defer func() { close(fetcher.release) }()
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/running-control"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	select {
+	case <-fetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	summary := decodeObject(t, performRequest(app, http.MethodGet, "/api/v2/tasks/summary", ""))["data"].(map[string]any)
+	current := summary["current"].(map[string]any)
+	taskID := current["id"].(string)
+	paused := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/pause", "")
+	if paused.Code != http.StatusAccepted {
+		t.Fatalf("running pause status = %d: %s", paused.Code, paused.Body.String())
+	}
+	pausedData := decodeObject(t, paused)["data"].(map[string]any)
+	if pausedData["changed"] != true {
+		t.Fatalf("running pause data = %#v", pausedData)
+	}
+	waitForIdleApp(t, app)
+}
+
+func TestResumeTaskReturnsConflictWhenDownloadTargetIsAlreadyActive(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	defer store.Close()
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: staticFetcher{}, Logger: slog.Default()})
+
+	failed := taskqueue.NewTask("download")
+	failed.Target = "https://example.com/resume-target-conflict"
+	if err := app.queue.Enqueue(failed); err != nil {
+		t.Fatal(err)
+	}
+	repository := taskstate.NewSQLiteRepository(store.DB())
+	claimed, err := repository.ClaimNext(context.Background(), time.Now())
+	if err != nil || claimed == nil {
+		t.Fatalf("ClaimNext() = %#v, err = %v", claimed, err)
+	}
+	if err := repository.Finalize(context.Background(), taskstate.TaskRef{TaskID: claimed.ID, Attempt: claimed.AttemptCount}, taskstate.Outcome{Status: taskstate.StatusFailed, Error: errors.New("temporary")}); err != nil {
+		t.Fatal(err)
+	}
+	active := taskqueue.NewTask("download")
+	active.Target = failed.Target
+	if err := app.queue.Enqueue(active); err != nil {
+		t.Fatal(err)
+	}
+
+	response := performRequest(app, http.MethodPost, "/api/v2/tasks/"+failed.ID+"/resume", "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("resume conflict status = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunningTaskCancelEndpointAcknowledgesCancellationRequest(t *testing.T) {
+	store, _ := newTestStoreWithWork(t)
+	fetcher := &blockingTocFetcher{entered: make(chan struct{}), release: make(chan struct{}), work: model.Work{
+		Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n9999ac", Title: "中止作品", Author: "作者",
+		Episodes: []model.Episode{{Index: "1", Title: "第一話"}},
+	}}
+	app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+	startApp(t, app)
+	defer store.Close()
+	defer app.Shutdown(context.Background())
+	defer func() { close(fetcher.release) }()
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/running-cancel"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	select {
+	case <-fetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	summary := decodeObject(t, performRequest(app, http.MethodGet, "/api/v2/tasks/summary", ""))["data"].(map[string]any)
+	taskID := summary["current"].(map[string]any)["id"].(string)
+	canceled := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	if canceled.Code != http.StatusAccepted {
+		t.Fatalf("running cancel status = %d: %s", canceled.Code, canceled.Body.String())
+	}
+	waitForIdleApp(t, app)
+}
+
+func TestRunningTaskRejectsConflictingControlActions(t *testing.T) {
+	tests := []struct {
+		name            string
+		firstAction     string
+		secondAction    string
+		requestedAction string
+		terminalStatus  string
+	}{
+		{name: "pause then cancel", firstAction: "pause", secondAction: "cancel", requestedAction: "pause", terminalStatus: string(taskqueue.StatusPaused)},
+		{name: "cancel then pause", firstAction: "cancel", secondAction: "pause", requestedAction: "cancel", terminalStatus: string(taskqueue.StatusCanceled)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store, _ := newTestStoreWithWork(t)
+			fetcher := &heldControlTocFetcher{entered: make(chan struct{}), observed: make(chan struct{}), release: make(chan struct{})}
+			releaseControl := func() {
+				select {
+				case <-fetcher.release:
+				default:
+					close(fetcher.release)
+				}
+			}
+			app := New(Options{Config: config.Config{}, Store: store, Fetcher: fetcher, Logger: slog.Default()})
+			startApp(t, app)
+			defer store.Close()
+			defer app.Shutdown(context.Background())
+			defer releaseControl()
+
+			created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://example.com/conflicting-control/`+test.requestedAction+`"]}`)
+			if created.Code != http.StatusAccepted {
+				t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+			}
+			select {
+			case <-fetcher.entered:
+			case <-time.After(time.Second):
+				t.Fatal("task did not start")
+			}
+			taskID := decodeObject(t, created)["data"].(map[string]any)["task_ids"].([]any)[0].(string)
+			first := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.firstAction, "")
+			if first.Code != http.StatusAccepted {
+				t.Fatalf("first control status = %d: %s", first.Code, first.Body.String())
+			}
+			firstData := decodeObject(t, first)["data"].(map[string]any)
+			if firstData["changed"] != true || firstData["requested_action"] != test.requestedAction {
+				t.Fatalf("first control data = %#v", firstData)
+			}
+			select {
+			case <-fetcher.observed:
+			case <-time.After(time.Second):
+				t.Fatal("executor did not observe control signal")
+			}
+			repeated := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.firstAction, "")
+			if repeated.Code != http.StatusOK {
+				t.Fatalf("repeated control status = %d: %s", repeated.Code, repeated.Body.String())
+			}
+			repeatedData := decodeObject(t, repeated)["data"].(map[string]any)
+			if repeatedData["changed"] != false || repeatedData["requested_action"] != test.requestedAction {
+				t.Fatalf("repeated control data = %#v", repeatedData)
+			}
+
+			second := performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/"+test.secondAction, "")
+			if second.Code != http.StatusConflict {
+				t.Fatalf("second control status = %d: %s", second.Code, second.Body.String())
+			}
+			releaseControl()
+			waitForIdleApp(t, app)
+			stored, found, err := app.queue.GetTask(taskID)
+			if err != nil || !found || string(stored.Status) != test.terminalStatus || stored.RequestedAction != taskstate.RequestedActionNone {
+				t.Fatalf("terminal task = %#v, found = %v, err = %v", stored, found, err)
+			}
+		})
+	}
+}
+
+func TestRunningTaskCancelInterruptsAssetHTTPBeforeDurableControlWrite(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetFetcher := &blockingAssetFetcher{entered: make(chan struct{})}
+	store.SetAssetFetcher(assetFetcher, fetcher.FetchPolicy{})
+	app := New(Options{
+		Config: config.Config{},
+		Store:  store,
+		Fetcher: staticFetcher{work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n7777ab", Title: "asset制御作品", Author: "作者",
+			Episodes: []model.Episode{{
+				Index: "1", Href: "/n7777ab/1/", Title: "第一話", FetchedAt: time.Now(),
+				Element: model.EpisodeElement{DataType: "html", Body: `<p><img src="https://example.com/image.png"></p>`},
+			}},
+		}},
+		Logger: slog.Default(),
+	})
+	startApp(t, app)
+	t.Cleanup(func() {
+		app.Shutdown(context.Background())
+		_ = store.Close()
+	})
+
+	created := performRequest(app, http.MethodPost, "/api/v2/novels/download", `{"targets":["https://ncode.syosetu.com/n7777ab/"]}`)
+	if created.Code != http.StatusAccepted {
+		t.Fatalf("create status = %d: %s", created.Code, created.Body.String())
+	}
+	taskID := decodeObject(t, created)["data"].(map[string]any)["task_ids"].([]any)[0].(string)
+	select {
+	case <-assetFetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("asset fetch did not start")
+	}
+
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+taskID+"/cancel", "")
+	}()
+	select {
+	case canceled := <-response:
+		if canceled.Code != http.StatusOK && canceled.Code != http.StatusAccepted {
+			t.Fatalf("cancel status = %d: %s", canceled.Code, canceled.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel waited for the blocked asset HTTP request")
+	}
+	waitForIdleApp(t, app)
+}
+
+func TestQueuedTaskControlWaitingOnSQLiteDoesNotBlockCurrentTaskCancel(t *testing.T) {
+	store, err := storage.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetFetcher := &blockingAssetFetcher{entered: make(chan struct{})}
+	store.SetAssetFetcher(assetFetcher, fetcher.FetchPolicy{})
+	app := New(Options{
+		Config: config.Config{},
+		Store:  store,
+		Fetcher: staticFetcher{work: model.Work{
+			Site: model.SiteSyosetu, SiteName: "小説家になろう", SiteWorkID: "n8888ab", Title: "task別制御作品", Author: "作者",
+			Episodes: []model.Episode{{
+				Index: "1", Href: "/n8888ab/1/", Title: "第一話", FetchedAt: time.Now(),
+				Element: model.EpisodeElement{DataType: "html", Body: `<p><img src="https://example.com/image.png"></p>`},
+			}},
+		}},
+		Logger: slog.Default(),
+	})
+	t.Cleanup(func() {
+		app.Shutdown(context.Background())
+		_ = store.Close()
+	})
+
+	current := taskqueue.NewTask("download")
+	current.Target = "https://example.com/current-with-asset"
+	queued := taskqueue.NewTask("download")
+	queued.Target = "https://example.com/queued-control"
+	if err := app.queue.Enqueue(current, queued); err != nil {
+		t.Fatal(err)
+	}
+	startApp(t, app)
+	select {
+	case <-assetFetcher.entered:
+	case <-time.After(time.Second):
+		t.Fatal("asset fetch did not start")
+	}
+
+	waitCount := store.DB().Stats().WaitCount
+	queuedResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		queuedResponse <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+queued.ID+"/pause", "")
+	}()
+	deadline := time.After(time.Second)
+	for store.DB().Stats().WaitCount == waitCount {
+		select {
+		case response := <-queuedResponse:
+			t.Fatalf("queued pause returned before entering SQLite wait: %d: %s", response.Code, response.Body.String())
+		case <-deadline:
+			t.Fatal("queued pause did not wait for the SQLite connection")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	currentResponse := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		currentResponse <- performRequest(app, http.MethodPost, "/api/v2/tasks/"+current.ID+"/cancel", "")
+	}()
+	for name, responses := range map[string]<-chan *httptest.ResponseRecorder{
+		"queued pause":   queuedResponse,
+		"current cancel": currentResponse,
+	} {
+		select {
+		case response := <-responses:
+			if response.Code != http.StatusOK && response.Code != http.StatusAccepted {
+				t.Fatalf("%s status = %d: %s", name, response.Code, response.Body.String())
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s remained blocked", name)
+		}
+	}
+	waitForIdleApp(t, app)
 }
 
 func (f *progressFetcher) FetchToc(_ context.Context, target string, _ sites.ProgressReporter) (model.Work, error) {
@@ -1192,7 +1635,11 @@ func waitForIdleApp(t *testing.T, app *App) {
 		case <-deadline:
 			t.Fatal("app did not become idle")
 		case <-ticker.C:
-			if app.queue.IsIdle() {
+			counts, err := app.queue.StatusCounts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if counts.Total == 0 {
 				return
 			}
 		}

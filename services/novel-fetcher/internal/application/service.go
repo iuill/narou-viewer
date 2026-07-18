@@ -10,6 +10,7 @@ import (
 	"narou-viewer/services/novel-fetcher/internal/sites"
 	"narou-viewer/services/novel-fetcher/internal/storage"
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 type LibraryStore interface {
@@ -19,9 +20,12 @@ type LibraryStore interface {
 	ListEpisodes(workID int) ([]model.StoredEpisode, error)
 	PreflightWorkMutation(storedWork model.StoredWork, incomingWork model.Work) error
 	UpsertWorkToc(ctx context.Context, work model.Work, status string) (model.StoredWork, error)
-	SaveEpisodeBody(ctx context.Context, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int) (model.StoredEpisode, error)
 	MarkEpisodeFailed(ctx context.Context, workID int, episodeID string, fetchError error) error
 	UpdateWorkFetchStatus(ctx context.Context, workID int, status string, failedEpisodeID string, resumeEpisodeID string, fetchError error) error
+	IsTaskEpisodeCheckpointValid(ctx context.Context, ref taskstate.TaskRef, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int) (valid bool, found bool, err error)
+	RecordTaskEpisodeCheckpoint(ctx context.Context, ref taskstate.TaskRef, workID int, episodeID string, sortOrder int, nextEpisodeID string) error
+	SaveEpisodeBodyForTask(ctx context.Context, ref taskstate.TaskRef, work model.Work, stored model.StoredWork, episode model.Episode, sortOrder int, nextEpisodeID string) (model.StoredEpisode, error)
+	CompleteWorkForTask(ctx context.Context, ref taskstate.TaskRef, workID int) error
 }
 
 type TaskReporter interface {
@@ -29,7 +33,7 @@ type TaskReporter interface {
 	SetTaskMessage(taskID string, message string)
 	AddTaskWarning(taskID string, warning string)
 	SetTaskTarget(taskID string, target string)
-	AddTaskNovelID(taskID string, novelID int)
+	SetTaskWorkID(taskID string, workID int) error
 	SetTaskSavedEpisodeCount(taskID string, count int)
 	SetTaskFailureEpisode(taskID string, failedEpisodeID string, resumeEpisodeID string)
 }
@@ -55,6 +59,12 @@ func NewService(options Options) *Service {
 }
 
 func (s *Service) RunTask(ctx context.Context, next *taskqueue.Task) error {
+	if next.AttemptCount <= 0 {
+		return fmt.Errorf("task %q has invalid attempt %d", next.ID, next.AttemptCount)
+	}
+	if _, _, _, err := taskstate.RequestForTask(next); err != nil {
+		return err
+	}
 	switch next.Kind {
 	case "download":
 		return s.runDownload(ctx, next)
@@ -68,35 +78,35 @@ func (s *Service) RunTask(ctx context.Context, next *taskqueue.Task) error {
 }
 
 func (s *Service) runDownload(ctx context.Context, next *taskqueue.Task) error {
-	for _, target := range next.Targets {
-		work, err := s.fetcher.FetchToc(ctx, target, s.progressReporter(next.ID))
-		if err != nil {
-			return err
-		}
-		s.reporter.SetTaskTarget(next.ID, work.Title)
-		if err := s.rejectDuplicateTitleAcrossSites(next.ID, work); err != nil {
-			return err
-		}
-		existingWork, previousEpisodes, err := s.existingStateForWork(work)
-		if err != nil {
-			return err
-		}
-		if err := s.store.PreflightWorkMutation(existingWork, work); err != nil {
-			return err
-		}
-		stored, err := s.store.UpsertWorkToc(ctx, work, storage.FetchStatusPartial)
-		if err != nil {
-			return err
-		}
-		s.reporter.AddTaskNovelID(next.ID, stored.ID)
-		if err := s.fetchAndSaveEpisodes(ctx, next, work, stored, 0, !next.Force, previousEpisodes); err != nil {
-			return err
-		}
-		if err := s.store.UpdateWorkFetchStatus(ctx, stored.ID, storage.FetchStatusComplete, "", "", nil); err != nil {
-			return err
-		}
-		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("saved %s", stored.Title))
+	work, err := s.fetcher.FetchToc(ctx, next.Target, s.progressReporter(next.ID))
+	if err != nil {
+		return err
 	}
+	s.reporter.SetTaskTarget(next.ID, work.Title)
+	if err := s.rejectDuplicateTitleAcrossSites(next.ID, work); err != nil {
+		return err
+	}
+	existingWork, previousEpisodes, err := s.existingStateForWork(work)
+	if err != nil {
+		return err
+	}
+	if err := s.store.PreflightWorkMutation(existingWork, work); err != nil {
+		return err
+	}
+	stored, err := s.store.UpsertWorkToc(ctx, work, storage.FetchStatusPartial)
+	if err != nil {
+		return err
+	}
+	if err := s.reporter.SetTaskWorkID(next.ID, stored.ID); err != nil {
+		return err
+	}
+	if err := s.fetchAndSaveEpisodes(ctx, next, work, stored, 0, !next.Force, previousEpisodes); err != nil {
+		return err
+	}
+	if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		return err
+	}
+	s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("saved %s", stored.Title))
 	return nil
 }
 
@@ -130,70 +140,72 @@ func (s *Service) rejectDuplicateTitleAcrossSites(taskID string, work model.Work
 }
 
 func (s *Service) runUpdate(ctx context.Context, next *taskqueue.Task) error {
-	for _, id := range next.NovelIDs {
-		work, ok, err := s.store.FindWorkByID(id)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("novel id %d was not found", id)
-		}
-		fetched, err := s.fetcher.FetchToc(ctx, work.SourceURL, s.progressReporter(next.ID))
-		if err != nil {
-			return err
-		}
-		s.reporter.SetTaskTarget(next.ID, fetched.Title)
-		previousEpisodes, err := s.store.ListEpisodes(work.ID)
-		if err != nil {
-			return err
-		}
-		if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
-			return err
-		}
-		stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
-		if err != nil {
-			return err
-		}
-		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, next.SkipUnchanged && !next.ForceRedownload, previousEpisodes); err != nil {
-			return err
-		}
-		if err := s.store.UpdateWorkFetchStatus(ctx, stored.ID, storage.FetchStatusComplete, "", "", nil); err != nil {
-			return err
-		}
-		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("updated %s", stored.Title))
+	id := next.WorkID
+	work, ok, err := s.store.FindWorkByID(id)
+	if err != nil {
+		return err
 	}
+	if !ok {
+		return fmt.Errorf("novel id %d was not found", id)
+	}
+	fetched, err := s.fetcher.FetchToc(ctx, work.SourceURL, s.progressReporter(next.ID))
+	if err != nil {
+		return err
+	}
+	s.reporter.SetTaskTarget(next.ID, fetched.Title)
+	previousEpisodes, err := s.store.ListEpisodes(work.ID)
+	if err != nil {
+		return err
+	}
+	if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
+		return err
+	}
+	stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
+	if err != nil {
+		return err
+	}
+	if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, next.SkipUnchanged && !next.ForceRedownload, previousEpisodes); err != nil {
+		return err
+	}
+	if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		return err
+	}
+	s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("updated %s", stored.Title))
 	return nil
 }
 
 func (s *Service) runResume(ctx context.Context, next *taskqueue.Task) error {
-	for _, id := range next.NovelIDs {
-		work, ok, err := s.store.FindWorkByID(id)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("novel id %d was not found", id)
-		}
-		fetched, err := s.fetcher.FetchToc(ctx, work.SourceURL, s.progressReporter(next.ID))
-		if err != nil {
-			return err
-		}
-		s.reporter.SetTaskTarget(next.ID, fetched.Title)
-		if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
-			return err
-		}
-		stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
-		if err != nil {
-			return err
-		}
-		if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, true, nil); err != nil {
-			return err
-		}
-		if err := s.store.UpdateWorkFetchStatus(ctx, stored.ID, storage.FetchStatusComplete, "", "", nil); err != nil {
-			return err
-		}
-		s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("resumed %s", stored.Title))
+	id := next.WorkID
+	work, ok, err := s.store.FindWorkByID(id)
+	if err != nil {
+		return err
 	}
+	if !ok {
+		return fmt.Errorf("novel id %d was not found", id)
+	}
+	fetched, err := s.fetcher.FetchToc(ctx, work.SourceURL, s.progressReporter(next.ID))
+	if err != nil {
+		return err
+	}
+	s.reporter.SetTaskTarget(next.ID, fetched.Title)
+	if err := s.store.PreflightWorkMutation(work, fetched); err != nil {
+		return err
+	}
+	previousEpisodes, err := s.store.ListEpisodes(work.ID)
+	if err != nil {
+		return err
+	}
+	stored, err := s.store.UpsertWorkToc(ctx, fetched, storage.FetchStatusPartial)
+	if err != nil {
+		return err
+	}
+	if err := s.fetchAndSaveEpisodes(ctx, next, fetched, stored, 0, true, previousEpisodes); err != nil {
+		return err
+	}
+	if err := s.completeWork(ctx, next, stored.ID); err != nil {
+		return err
+	}
+	s.reporter.SetTaskMessage(next.ID, fmt.Sprintf("resumed %s", stored.Title))
 	return nil
 }
 
@@ -208,6 +220,7 @@ func (s *Service) existingStateForWork(work model.Work) (model.StoredWork, []mod
 
 func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task, work model.Work, stored model.StoredWork, startIndex int, skipComplete bool, skipReferenceEpisodes []model.StoredEpisode) error {
 	completeEpisodes := map[string]bool{}
+	ref := taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}
 	if skipComplete {
 		if skipReferenceEpisodes == nil {
 			existingEpisodes, err := s.store.ListEpisodes(stored.ID)
@@ -224,12 +237,40 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 	}
 
 	totalEpisodes := len(work.Episodes)
+	savedEpisodeCount := 0
 	for index := startIndex; index < totalEpisodes; index++ {
 		episodeRef := work.Episodes[index]
 		episodeID := CanonicalTaskEpisodeID(episodeRef, index)
-		if completeEpisodes[episodeID] {
-			s.reporter.SetTaskSavedEpisodeCount(next.ID, len(completeEpisodes))
+		nextEpisodeID := ""
+		if index+1 < totalEpisodes {
+			nextEpisodeID = CanonicalTaskEpisodeID(work.Episodes[index+1], index+1)
+		}
+		valid, found, err := s.store.IsTaskEpisodeCheckpointValid(ctx, ref, work, stored, episodeRef, index)
+		if err != nil {
+			return err
+		}
+		if valid {
+			savedEpisodeCount++
+			s.reporter.SetTaskSavedEpisodeCount(next.ID, savedEpisodeCount)
 			continue
+		}
+		// A checkpoint for an older source revision must force a refetch. Do
+		// not fall back to the timestamp-based local skip path after the
+		// stronger durable revision check has rejected it.
+		if found {
+			delete(completeEpisodes, episodeID)
+		}
+		if completeEpisodes[episodeID] {
+			if err := s.store.RecordTaskEpisodeCheckpoint(ctx, ref, stored.ID, episodeID, index, nextEpisodeID); err != nil {
+				if !errors.Is(err, storage.ErrInvalidTaskEpisodeCheckpoint) {
+					return err
+				}
+				delete(completeEpisodes, episodeID)
+			} else {
+				savedEpisodeCount++
+				s.reporter.SetTaskSavedEpisodeCount(next.ID, savedEpisodeCount)
+				continue
+			}
 		}
 
 		fetched, err := s.fetcher.FetchEpisode(ctx, work, episodeRef, func(progress sites.Progress) {
@@ -241,11 +282,20 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 			s.reporter.SetTaskProgress(next.ID, progress)
 		})
 		if err != nil {
+			if controlErr := taskControlCause(ctx, err); controlErr != nil {
+				s.markTaskControl(stored.ID, episodeID, controlErr)
+				return controlErr
+			}
 			s.markEpisodeFailed(stored.ID, episodeID, err)
 			s.reporter.SetTaskFailureEpisode(next.ID, episodeID, episodeID)
 			return err
 		}
-		if _, err := s.store.SaveEpisodeBody(ctx, work, stored, fetched, index); err != nil {
+		_, saveErr := s.store.SaveEpisodeBodyForTask(ctx, ref, work, stored, fetched, index, nextEpisodeID)
+		if err := saveErr; err != nil {
+			if controlErr := taskControlCause(ctx, err); controlErr != nil {
+				s.markTaskControl(stored.ID, episodeID, controlErr)
+				return controlErr
+			}
 			var unsupportedSchema storage.ErrUnsupportedEpisodeSchema
 			if errors.As(err, &unsupportedSchema) {
 				return err
@@ -254,7 +304,8 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 			s.reporter.SetTaskFailureEpisode(next.ID, episodeID, episodeID)
 			return err
 		}
-		s.reporter.SetTaskSavedEpisodeCount(next.ID, index+1)
+		savedEpisodeCount++
+		s.reporter.SetTaskSavedEpisodeCount(next.ID, savedEpisodeCount)
 	}
 	return nil
 }
@@ -262,10 +313,45 @@ func (s *Service) fetchAndSaveEpisodes(ctx context.Context, next *taskqueue.Task
 func (s *Service) markEpisodeFailed(workID int, episodeID string, err error) {
 	_ = s.store.MarkEpisodeFailed(context.Background(), workID, episodeID, err)
 	status := storage.FetchStatusFailed
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, taskstate.ErrTaskCancelRequested) || errors.Is(err, context.Canceled) {
 		status = storage.FetchStatusCanceled
+	} else if errors.Is(err, taskstate.ErrTaskPauseRequested) {
+		status = storage.FetchStatusPaused
+	} else if errors.Is(err, taskstate.ErrRunnerShutdown) {
+		status = storage.FetchStatusInterrupted
 	}
 	_ = s.store.UpdateWorkFetchStatus(context.Background(), workID, status, episodeID, episodeID, err)
+}
+
+func (s *Service) markTaskControl(workID int, episodeID string, err error) {
+	status := storage.FetchStatusCanceled
+	if errors.Is(err, taskstate.ErrTaskPauseRequested) {
+		status = storage.FetchStatusPaused
+	} else if errors.Is(err, taskstate.ErrRunnerShutdown) {
+		status = storage.FetchStatusInterrupted
+	}
+	_ = s.store.UpdateWorkFetchStatus(context.Background(), workID, status, episodeID, episodeID, err)
+}
+
+func taskControlCause(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (s *Service) completeWork(ctx context.Context, next *taskqueue.Task, workID int) error {
+	if cause := taskControlCause(ctx, nil); cause != nil {
+		s.markTaskControl(workID, "", cause)
+		return cause
+	}
+	return s.store.CompleteWorkForTask(ctx, taskstate.TaskRef{TaskID: next.ID, Attempt: next.AttemptCount}, workID)
 }
 
 func EpisodeCanBeSkipped(stored model.StoredEpisode, work model.Work) bool {

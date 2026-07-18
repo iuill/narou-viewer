@@ -1785,6 +1785,50 @@ func TestServerFetcherPreservesFetcherHTTPStatuses(t *testing.T) {
 	}
 }
 
+func TestServerFetcherTaskControlsPauseResumeAndCancel(t *testing.T) {
+	fetcherServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		status := map[string]any{"task_id": "task-1", "status": "queued", "changed": true}
+		message := "Task controlled"
+		switch r.URL.Path {
+		case "/api/v2/tasks/task-1/pause":
+			status["status"] = "paused"
+			message = "Task paused"
+		case "/api/v2/tasks/task-1/resume":
+			message = "Task resumed"
+		case "/api/v2/tasks/task-1/cancel":
+			status["status"] = "canceled"
+			status["cancelled"] = true
+			message = "Task cancelled"
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": status, "message": message})
+	}))
+	t.Cleanup(fetcherServer.Close)
+	t.Setenv("NOVEL_FETCHER_API_BASE_URL", fetcherServer.URL)
+
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("initialize store: %v", err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	paused := requestJSON(t, handler, http.MethodPost, "/api/fetcher/tasks/task-1/pause", nil, http.StatusOK)
+	if paused["status"] != "paused" || paused["changed"] != true || paused["message"] != "Task paused" {
+		t.Fatalf("unexpected pause response: %+v", paused)
+	}
+	resumed := requestJSON(t, handler, http.MethodPost, "/api/fetcher/tasks/task-1/resume", nil, http.StatusOK)
+	if resumed["status"] != "queued" || resumed["changed"] != true || resumed["message"] != "Task resumed" {
+		t.Fatalf("unexpected resume response: %+v", resumed)
+	}
+	canceled := requestJSON(t, handler, http.MethodPost, "/api/fetcher/tasks/task-1/cancel", nil, http.StatusOK)
+	if canceled["status"] != "canceled" || canceled["cancelled"] != true || canceled["message"] != "Task cancelled" {
+		t.Fatalf("unexpected cancel response: %+v", canceled)
+	}
+}
+
 func TestMethodAllowHeadersForMultiMethodRoutes(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
@@ -5049,7 +5093,7 @@ func assertFetcherUnavailableFallback(t *testing.T, handler http.Handler) {
 		}
 	}
 	queue := requestJSON(t, handler, http.MethodGet, "/api/fetcher/queue", nil, http.StatusOK)
-	if queue["running"] != false || queue["total"] != float64(0) || queue["webWorker"] != float64(0) || queue["worker"] != float64(0) {
+	if queue["running"] != false || queue["total"] != float64(0) || queue["queued"] != float64(0) || queue["paused"] != float64(0) || queue["interrupted"] != float64(0) || queue["webWorker"] != float64(0) || queue["worker"] != float64(0) {
 		t.Fatalf("fallback queue should be idle: %+v", queue)
 	}
 	if queue["available"] != false || queue["degraded"] != true {

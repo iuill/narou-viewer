@@ -1,6 +1,5 @@
 import { mutateJson, requestJson } from "../../api/http";
 import type {
-  FetcherCancelTaskResponse,
   FetcherDownloadRequest,
   FetcherDownloadResponse,
   FetcherQueueResponse,
@@ -9,6 +8,7 @@ import type {
   FetcherResumeRequest,
   FetcherResumeResponse,
   FetcherStatusSnapshot,
+  FetcherTaskControlResponse,
   FetcherUpdateRequest,
   FetcherUpdateResponse
 } from "./types";
@@ -74,12 +74,30 @@ export async function removeFetcherWorks(payload: FetcherRemoveRequest): Promise
   );
 }
 
-export async function cancelFetcherTask(taskId: string): Promise<FetcherCancelTaskResponse> {
-  return requestJson<FetcherCancelTaskResponse>(
-    `/api/fetcher/tasks/${encodeURIComponent(taskId)}/cancel`,
+async function controlFetcherTask(taskId: string, action: "pause" | "resume" | "cancel"): Promise<FetcherTaskControlResponse> {
+  const actionLabels = {
+    cancel: "中止",
+    pause: "一時停止",
+    resume: "再開"
+  } as const;
+
+  return requestJson<FetcherTaskControlResponse>(
+    `/api/fetcher/tasks/${encodeURIComponent(taskId)}/${action}`,
     {
       method: "POST"
     },
-    "タスクの中止に失敗しました。"
+    `タスクの${actionLabels[action]}に失敗しました。`
   );
+}
+
+export function pauseFetcherTask(taskId: string): Promise<FetcherTaskControlResponse> {
+  return controlFetcherTask(taskId, "pause");
+}
+
+export function resumeFetcherTask(taskId: string): Promise<FetcherTaskControlResponse> {
+  return controlFetcherTask(taskId, "resume");
+}
+
+export function cancelFetcherTask(taskId: string): Promise<FetcherTaskControlResponse> {
+  return controlFetcherTask(taskId, "cancel");
 }

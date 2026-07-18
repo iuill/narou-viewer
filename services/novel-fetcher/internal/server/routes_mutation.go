@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"narou-viewer/services/novel-fetcher/internal/taskqueue"
+	"narou-viewer/services/novel-fetcher/internal/taskstate"
 )
 
 func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Request) {
@@ -24,7 +25,7 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	targets := normalizeStrings(body.Targets)
+	targets := normalizeDownloadTargets(body.Targets)
 	if len(targets) == 0 {
 		writeError(writer, http.StatusBadRequest, "targets must be a non-empty string array")
 		return
@@ -38,7 +39,7 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	existingNovelIDs, err := a.existingDownloadNovelIDsByTarget(targets)
+	existingWorkIDs, err := a.existingDownloadWorkIDsByTarget(targets)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err.Error())
 		return
@@ -47,12 +48,15 @@ func (a *App) handleDownloadNovels(writer http.ResponseWriter, request *http.Req
 	tasks := make([]*taskqueue.Task, 0, len(targets))
 	for _, target := range targets {
 		task := taskqueue.NewTask("download")
-		task.Targets = []string{target}
-		task.NovelIDs = existingNovelIDs[normalizeDownloadTargetKey(target)]
+		task.Target = target
+		task.WorkID = existingWorkIDs[normalizeDownloadTargetKey(target)]
 		task.Force = body.Force
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"targets":                targets,
@@ -100,12 +104,15 @@ func (a *App) handleUpdateNovels(writer http.ResponseWriter, request *http.Reque
 		}
 
 		task := taskqueue.NewTask("update")
-		task.NovelIDs = []int{id}
+		task.WorkID = id
 		task.ForceRedownload = body.ForceRedownload
 		task.SkipUnchanged = skipUnchanged
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"ids":                  taskqueue.IntIDsToStrings(body.IDs),
@@ -141,10 +148,13 @@ func (a *App) handleResumeNovels(writer http.ResponseWriter, request *http.Reque
 		}
 
 		task := taskqueue.NewTask("resume")
-		task.NovelIDs = []int{id}
+		task.WorkID = id
 		tasks = append(tasks, task)
 	}
-	a.queue.Enqueue(tasks...)
+	if err := a.queue.Enqueue(tasks...); err != nil {
+		writeTaskStateError(writer, err)
+		return
+	}
 
 	writeEnvelope(writer, http.StatusAccepted, map[string]any{
 		"ids":      taskqueue.IntIDsToStrings(body.IDs),
@@ -186,15 +196,71 @@ func (a *App) handleRemoveNovels(writer http.ResponseWriter, request *http.Reque
 }
 
 func (a *App) handleCancelTask(writer http.ResponseWriter, request *http.Request) {
+	a.handleTaskControl(writer, request, "cancel")
+}
+
+func (a *App) handlePauseTask(writer http.ResponseWriter, request *http.Request) {
+	a.handleTaskControl(writer, request, "pause")
+}
+
+func (a *App) handleResumeTask(writer http.ResponseWriter, request *http.Request) {
+	a.handleTaskControl(writer, request, "resume")
+}
+
+func (a *App) handleTaskControl(writer http.ResponseWriter, request *http.Request, action string) {
 	taskID := strings.TrimSpace(request.PathValue("taskID"))
 	if taskID == "" {
 		writeError(writer, http.StatusBadRequest, "task id is required")
 		return
 	}
-
-	if !a.runner.Cancel(taskID) {
-		writeError(writer, http.StatusNotFound, "task was not found")
+	var result taskstate.ControlResult
+	var err error
+	switch action {
+	case "pause":
+		result, err = a.runner.RequestPause(taskID)
+	case "cancel":
+		result, err = a.runner.RequestCancel(taskID)
+	case "resume":
+		result, err = a.runner.RequestResume(taskID)
+	default:
+		err = errors.New("unknown task action")
+	}
+	if err != nil {
+		writeTaskStateError(writer, err)
 		return
 	}
-	writeEnvelope(writer, http.StatusOK, map[string]any{"task_id": taskID, "cancelled": true}, "Task cancelled")
+	status := http.StatusOK
+	if result.Changed && result.Task != nil && (result.Task.Status == taskqueue.StatusRunning || result.Task.Status == taskqueue.StatusQueued) {
+		status = http.StatusAccepted
+	}
+	message := map[string]string{
+		"pause":  "Task paused",
+		"resume": "Task resumed",
+		"cancel": "Task cancelled",
+	}[action]
+	writeEnvelope(writer, status, taskControlPayload(result, action), message)
+}
+
+func taskControlPayload(result taskstate.ControlResult, action string) map[string]any {
+	payload := taskqueue.Payload(result.Task)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["changed"] = result.Changed
+	if action == "cancel" {
+		payload["cancelled"] = result.Task != nil && result.Task.Status == taskqueue.StatusCanceled
+	}
+	return payload
+}
+
+func writeTaskStateError(writer http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	message := err.Error()
+	if errors.Is(err, taskstate.ErrTaskNotFound) {
+		status = http.StatusNotFound
+	}
+	if errors.Is(err, taskstate.ErrTaskAlreadyActive) || errors.Is(err, taskstate.ErrTaskStateConflict) {
+		status = http.StatusConflict
+	}
+	writeError(writer, status, message)
 }
