@@ -26,6 +26,8 @@ PR の機微情報検査は権限なしの `.github/workflows/sensitive-informat
 
 PR metadataには別context `sensitive-information/metadata-advisory`を使用します。Actionsだけではmetadata編集直後の競合窓を完全に閉じられないため、こちらをRulesetのrequired checkにしてはいけません。通常の`pull_request` CIにある同名jobはdefense in depthであり、trustedなsecurity boundaryはSecret Guard Appだけが発行する`commits` statusです。
 
+Secret Guard 廃止の移行期間中は、権限を `contents: read` に限定した独立 `pull_request` workflow も併存させます。新しい check run `Sensitive Information / Scan commits` が PR head で成功することを確認してから、repository ruleset の required check を `sensitive-information/commits` からこの check run へ差し替えます。差し替えが完了するまでは、従来どおり Secret Guard App の status を required gate として扱います。
+
 ### Secret Guard GitHub App の初期設定
 
 Enterprise限定のRequired Workflowは使用しません。個人accountのDeveloper settingsで、このrepository専用Appを次のように設定します。
