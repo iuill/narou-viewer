@@ -50,7 +50,7 @@
 - ユーザーへの応答、commit message、PR title / body / comment は、特段の指定がない限り日本語で書く。
 - PR は、特段の理由や明示的な指定がない限り draft ではなく ready for review で起票する。
 - PR を作成・更新する前に `.github/pull_request_template.md` を読み、各セクションを省略せず、該当しない項目にも理由を記載する。追いコミット後は変更内容、ユーザー影響、互換性・移行、検証結果が PR 本文と一致しているか再確認する。
-- merge 前の最終確認では、変更に関係する `docs/quality-goals.md` の項目に適合しているかを確認する。PR 本文と関連 issue の完了条件、判断、残課題も実装、仕様、検証結果と照合し、PR 本文の差異は更新する。issue 側の変更点は原則としてコメントに記録し、完了条件自体を正式に変更する場合だけ本文を更新する。
+- merge 前の最終確認では、設計、永続化、CI、セキュリティ、テスト方針など品質目標に関係する変更について、該当する `docs/quality-goals.md` の項目に適合しているかを確認する。PR 本文は実装、仕様、検証結果と一致させる。関連 issue は読み取りで完了条件と照合し、差異があれば merge せず報告する。issue 本文やコメントは、ユーザーから明示的に依頼された場合だけ更新する。
 - PR の merge はユーザーが明示的に依頼した場合だけ行い、squash merge を使用する。GitHub repository settings は squash merge だけを許可する運用とし、merge commit と rebase merge は無効であることを前提とする。merge 後は `.agents/skills/pr-merge/SKILL.md` に従い、base branch の local HEAD を remote HEAD へ同期し、安全に削除できる remote / local の作業 branch を片付けてから完了とする。
 - 仕様、セットアップ、データ契約に影響する変更をした場合は、関連ドキュメントも更新する。
 - 破壊的な git 操作は避ける。
