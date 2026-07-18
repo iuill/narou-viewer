@@ -5,7 +5,7 @@
 ## 方針
 
 - この repository は app source、Dockerfile、汎用 self-host compose sample を管理する。
-- `docker-compose.prod.yml` は HTTP の reverse proxy sample であり、既定では host の `127.0.0.1` に bind する。TLS と認証は前段の reverse proxy、VPN、tunnel、hosting platform などで扱う。
+- `docker-compose.prod.yml` は HTTP の self-host sample であり、`viewer-web` の Nginx を既定で host の `127.0.0.1` に bind する。TLS と認証は前段の reverse proxy、VPN、tunnel、hosting platform などで扱う。
 - `data/` や named volume に入る本文、raw HTML、画像、state、AI model output は runtime data として扱い、repository へ保存しない。
 - API key や LLM provider の認証情報は `.env.local`、shell environment、hosting platform secrets などで渡し、Git 管理しない。
 
@@ -37,8 +37,7 @@ checkout directory 名から暗黙に project 名を決めない。
 
 構成:
 
-- `reverse-proxy`: Nginx。HTTP で `viewer-web` と `/api/*` を同一 origin にまとめる。
-- `viewer-web`: `deploy/viewer-web/Dockerfile` で build した静的ファイル配信。
+- `viewer-web`: Nginx。`deploy/viewer-web/Dockerfile` で build した静的ファイルを配信し、`/api/*` を `viewer-api` へ転送して同一 origin にまとめる。
 - `viewer-api`: `deploy/viewer-api-go/Dockerfile` で build した API service。
 - `novel-fetcher`: 取得 sidecar。`viewer-api` から内部 network 経由で使う。
 - `shared-data-init`: 初回起動時に共有 data の directory と owner を初期化する one-shot service。

@@ -96,12 +96,11 @@ NAROU_VIEWER_HTTP_PORT=18080 \
 `narou-viewer` は Compose project 名であり、同じ data volume を使う停止、起動、backup、診断でも同じ値を指定します。
 別の project 名を使う場合は `.env` の `COMPOSE_PROJECT_NAME` などへ記録し、checkout directory 名から暗黙に決めないでください。
 
-既定では `reverse-proxy` を host の `127.0.0.1:8080` に bind します。公開 host では前段の reverse proxy、VPN、tunnel などから転送してください。外部 interface へ直接 bind する場合は、TLS と認証を別途設定したうえで `NAROU_VIEWER_HTTP_BIND=0.0.0.0` を明示してください。
+既定では `viewer-web` を host の `127.0.0.1:8080` に bind します。公開 host では前段の reverse proxy、VPN、tunnel などから転送してください。外部 interface へ直接 bind する場合は、TLS と認証を別途設定したうえで `NAROU_VIEWER_HTTP_BIND=0.0.0.0` を明示してください。
 
 compose の主な service:
 
-- `reverse-proxy`: Nginx。HTTP で `viewer-web` と `/api/*` を同一 origin にまとめます。
-- `viewer-web`: `deploy/viewer-web/Dockerfile` で build した静的ファイル配信
+- `viewer-web`: Nginx。`deploy/viewer-web/Dockerfile` で build した静的ファイルを配信し、`/api/*` を `viewer-api` へ転送して同一 origin にまとめます。
 - `viewer-api`: `deploy/viewer-api-go/Dockerfile` で build した API service
 - `novel-fetcher`: 取得 sidecar。既定の取得 backend として viewer-api から使います。
 - `shared-data-init`: 初回起動時に `shared-data` の必要ディレクトリと所有者を整える one-shot service。

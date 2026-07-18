@@ -35,16 +35,14 @@ flowchart LR
 ```mermaid
 flowchart LR
   U[Browser<br/>PC / Smartphone / Tablet]
-  RP[reverse-proxy<br/>Caddy or Nginx]
-  WEB[viewer-web<br/>static assets]
+  WEB[viewer-web<br/>static assets / HTTP ingress]
   API[viewer-api<br/>BFF/API]
   NF[novel-fetcher<br/>sidecar]
   DATA[(shared-data volume)]
   BL[(Browser local state<br/>localStorage / SW / Cache Storage)]
 
-  U --> RP
-  RP --> WEB
-  RP --> API
+  U --> WEB
+  WEB --> API
   API --> NF
   API <--> DATA
   NF <--> DATA
@@ -69,8 +67,7 @@ flowchart LR
 
 ### 3.2 self-host サービス
 
-- `reverse-proxy`: 入口、静的配信、API ルーティングを担当する。sample では `127.0.0.1:8080` に bind し、TLS / 認証は利用者の前段で扱う。
-- `viewer-web`: レスポンシブ UI、縦書きビューア、Service Worker を配信する。
+- `viewer-web`: Nginx を HTTP 入口として `127.0.0.1:8080` に bind し、レスポンシブ UI、縦書きビューア、Service Worker を配信する。`/api/*` は同一 origin のまま `viewer-api` へ転送する。TLS / 認証は利用者の前段で扱う。
 - `viewer-api`: BFF/API、state 管理、AI 生成を担当する。`shared-data` volume を読み書きする。
 - `novel-fetcher`: 取得 sidecar として内部 network で動作する。保存データは `shared-data` volume の `/data/novel-fetcher` に置く。
 
@@ -341,7 +338,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 ## 10. 拡張ポイント
 
 - self-host 時の TLS / 認証は利用者の前段 reverse proxy、VPN、tunnel、hosting platform などで扱う。
-- `reverse-proxy` 前段に認証プロキシ（`oauth2-proxy` 等）を追加する余地も残す。
+- `viewer-web` 前段に認証プロキシ（`oauth2-proxy` 等）を追加する余地も残す。
 - `viewer-api` の read-only API に CDN キャッシュを適用する。
 - `viewer-api` を多重化する場合は、YAML ベース state を外部ストアに移行する。
 
