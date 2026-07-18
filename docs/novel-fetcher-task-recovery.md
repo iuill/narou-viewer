@@ -47,6 +47,9 @@ POST /api/fetcher/tasks/{taskId}/cancel
 4. `interrupted` が勝手に実行されていないことを確認する。必要なものだけ明示的に再開する。
 5. novel-fetcher の startup recovery log に task request、queue、checkpoint、canonical file の error がないことを確認する。SQLite 自体の切り分けが必要なら、writer 停止中に `PRAGMA quick_check` を実行する。
 
+標準 compose の named volume で実行する command は、[`deployment.md` の state 診断手順](deployment.md#state-の診断)を使います。
+次の直接実行例は、repository の `data/` を bind mount する開発構成だけを対象にします。
+
 ```bash
 sqlite3 ./data/novel-fetcher/library.sqlite 'PRAGMA quick_check'
 ```

@@ -11,6 +11,8 @@ npm-debug.log*
 **/.vite/
 data/
 !data/.gitkeep
+/backups/
+/backup-*.tar*
 playwright-report/
 test-results/
 ui-review-results/

@@ -66,6 +66,8 @@ path_scan_fails() {
 }
 
 path_scan_fails data/private.yaml
+path_scan_fails backups/private.tar.gz
+path_scan_fails backup-synthetic.tar.gz.age
 path_scan_fails config/.env
 path_scan_fails keys/id_ed25519
 printf '%s\0' data/.gitkeep config/.env.example src/example.ts |

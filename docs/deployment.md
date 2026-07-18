@@ -35,6 +35,7 @@ NAROU_VIEWER_HTTP_BIND=0.0.0.0 docker compose -f docker-compose.prod.yml up -d -
 - `viewer-web`: `deploy/viewer-web/Dockerfile` で build した静的ファイル配信。
 - `viewer-api`: `deploy/viewer-api-go/Dockerfile` で build した API service。
 - `novel-fetcher`: 取得 sidecar。`viewer-api` から内部 network 経由で使う。
+- `shared-data-init`: 初回起動時に共有 data の directory と owner を初期化する one-shot service。
 - `shared-data`: `novel-fetcher` の保存データと `state/` を置く named volume。
 
 ## env
@@ -62,48 +63,184 @@ GOOGLE_BOOKS_API_KEY=...
 
 ## backup と restore
 
-backup は `viewer-api` と `novel-fetcher` を停止し、共有 data root 全体を一度に copy する。
+標準 compose は共有 data root を `shared-data` named volume として管理する。
+backup は `viewer-api` と `novel-fetcher` を停止し、この volume 全体を一度に保存する。
 稼働中の file や SQLite、作品単位の部分 copy は正式な復旧手段として扱わない。
 
+### named volume の backup
+
+backup directory には checkout 外の絶対 path を指定し、Git 管理下へ archive を作成しない。
+次の例は、停止中の `shared-data` から gzip archive を host へ stream し、展開可能性を確認してから最終名へ移動する。
+
 ```bash
+set -euo pipefail
+
+backup_dir=/absolute/path/outside/checkout/narou-viewer-backups
+backup_name="backup-narou-viewer-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+backup_archive="${backup_dir}/${backup_name}"
+backup_partial="${backup_archive}.partial"
+
+umask 077
+install -d -m 700 "$backup_dir"
+test ! -e "$backup_archive"
+test ! -e "$backup_partial"
+
 docker compose -f docker-compose.prod.yml stop viewer-api novel-fetcher
-tar czf backup-$(date +%Y%m%d).tar.gz -C /path/to/data-root .
+
+docker compose -f docker-compose.prod.yml run --rm --no-deps -T \
+  --entrypoint sh \
+  shared-data-init \
+  -c 'tar czf - -C /data .' >"$backup_partial"
+
+test -s "$backup_partial"
+tar tzf "$backup_partial" >/dev/null
+mv "$backup_partial" "$backup_archive"
+(
+  cd "$backup_dir"
+  sha256sum "$backup_name" >"${backup_name}.sha256"
+)
+
 docker compose -f docker-compose.prod.yml start novel-fetcher viewer-api
 ```
 
-保存先が暗号化されていない場合は、`age` などで archive を暗号化する。
-暗号化、保存先、世代管理、retention は運用者または外部 backup 基盤が管理する。
+backup command または検証が失敗した場合は service を停止したままにし、成功済み archive として扱わない。
+`.partial` を削除して再試行する場合は、対象 path が `$backup_partial` と一致することを確認する。
+
+archive には取得済み本文、画像、読書履歴、AI 利用履歴、暗号化済み credential、legacy の平文 credential が含まれ得る。
+archive と checksum を repository へ追加せず、暗号化、保存先、世代管理、retention は運用者または外部 backup 基盤が管理する。
+
+平文 archive を残さない場合は、service 停止中の `tar` stream を直接 `age` へ渡す。
+実行環境には `age` CLI を用意し、recipient と復号 identity を backup 本体とは別に保管する。
+復号後の `tar` stream を検証してから成功扱いにする。
 
 ```bash
-age -r 'age1...' -o backup.tar.gz.age backup.tar.gz
+set -euo pipefail
+
+backup_dir=/absolute/path/outside/checkout/narou-viewer-backups
+encrypted_name="backup-narou-viewer-$(date -u +%Y%m%dT%H%M%SZ).tar.gz.age"
+encrypted_archive="${backup_dir}/${encrypted_name}"
+encrypted_partial="${encrypted_archive}.partial"
+
+umask 077
+install -d -m 700 "$backup_dir"
+test ! -e "$encrypted_archive"
+test ! -e "$encrypted_partial"
+
+docker compose -f docker-compose.prod.yml stop viewer-api novel-fetcher
+
+docker compose -f docker-compose.prod.yml run --rm --no-deps -T \
+  --entrypoint sh \
+  shared-data-init \
+  -c 'tar czf - -C /data .' | \
+  age -r "$AGE_BACKUP_RECIPIENT" -o "$encrypted_partial"
+
+test -s "$encrypted_partial"
+age -d -i "$AGE_BACKUP_IDENTITY_FILE" "$encrypted_partial" | tar tzf - >/dev/null
+mv "$encrypted_partial" "$encrypted_archive"
+(
+  cd "$backup_dir"
+  sha256sum "$encrypted_name" >"${encrypted_name}.sha256"
+)
+
+docker compose -f docker-compose.prod.yml start novel-fetcher viewer-api
 ```
 
-restore は両 service を停止したまま、空の data root または新しい volume へ backup 全体を展開する。
-既存 data への上書き restore と application binary だけを戻す downgrade はサポートしない。
-rollback では upgrade 前の data root 全体と、それに対応する旧 build を組み合わせる。
+### 新しい named volume への restore
+
+restore は既存 project を停止したまま、別 project 名に対応する新しい named volume へ backup 全体を展開する。
+既存 volume への上書き restore と、application binary だけを戻す downgrade はサポートしない。
+
+最初に archive の checksum と展開可能性を確認する。
+次に restore 先の volume を作成し、空であることを展開直前にも検査する。
 
 ```bash
-tar xzf backup.tar.gz -C /path/to/empty-data-root
+set -euo pipefail
+
+backup_archive=/absolute/path/outside/checkout/narou-viewer-backups/backup-narou-viewer-YYYYMMDDTHHMMSSZ.tar.gz
+restore_project="narou-viewer-restore-$(date -u +%Y%m%dT%H%M%SZ)"
+restore_volume="${restore_project}_shared-data"
+
+(
+  cd "$(dirname "$backup_archive")"
+  sha256sum -c "$(basename "$backup_archive").sha256"
+)
+tar tzf "$backup_archive" >/dev/null
+
+docker compose -f docker-compose.prod.yml stop
+
+docker volume create \
+  --label "com.docker.compose.project=${restore_project}" \
+  --label "com.docker.compose.volume=shared-data" \
+  "$restore_volume"
+
+docker run --rm -i \
+  -v "${restore_volume}:/data" \
+  alpine:3.22 \
+  sh -ceu '
+    test -z "$(find /data -mindepth 1 -print -quit)"
+    tar xzf - -C /data
+    chown -R 1000:1000 /data
+  ' <"$backup_archive"
+
+docker run --rm \
+  -v "${restore_volume}:/data:ro" \
+  alpine:3.22 \
+  sh -ceu '
+    test -d /data/state
+    test -d /data/novel-fetcher
+    test -z "$(find /data -xdev \( ! -user 1000 -o ! -group 1000 \) -print -quit)"
+    test -z "$(find /data -xdev -type l -print -quit)"
+    test -z "$(find /data -xdev -perm /022 -print -quit)"
+  '
+
+COMPOSE_PROJECT_NAME="$restore_project" \
+  docker compose -f docker-compose.prod.yml up -d
 ```
 
-旧 `state-backup` が作成した `.tar.gz.age` は標準の age、gzip、tar 形式なので、専用 CLI がなくても復元できる。
-archive 内の `manifest.json` は新 build では使用しない。
+暗号化 archive を restore する場合も checksum を先に検証する。
+上の手順で新 volume を作成した後、平文 archive の展開 command だけを次の pipeline へ置き換え、後続の owner、mode、directory 検査を同様に実行する。
+`age -d` の出力は展開用 container の標準入力へ渡す。
+復号済み archive を checkout や一時 directory へ保存しない。
 
 ```bash
-age -d -i /path/to/identity.txt backup.tar.gz.age | tar xz -C /path/to/empty-data-root
+set -euo pipefail
+
+encrypted_archive=/absolute/path/outside/checkout/narou-viewer-backups/backup-narou-viewer-YYYYMMDDTHHMMSSZ.tar.gz.age
+
+(
+  cd "$(dirname "$encrypted_archive")"
+  sha256sum -c "$(basename "$encrypted_archive").sha256"
+)
+
+age -d -i "$AGE_BACKUP_IDENTITY_FILE" "$encrypted_archive" | \
+  docker run --rm -i \
+    -v "${restore_volume}:/data" \
+    alpine:3.22 \
+    sh -ceu '
+      test -z "$(find /data -mindepth 1 -print -quit)"
+      tar xzf - -C /data
+      chown -R 1000:1000 /data
+    '
 ```
 
-### 専用 backup tooling を削除する build への upgrade
+起動後は health、library、既読位置、栞、取得 task の状態を確認する。
+確認に失敗した場合は restore project を停止し、元の volume を変更せずに保持する。
+失敗した新 volume を削除する場合は、`$restore_volume` が意図した新 volume と一致し、元の volume ではないことを `docker volume inspect` で確認する。
 
-旧 restore journal が残った状態で新 build を起動すると、未完了 restore の recovery を実行できない。
-専用 backup tooling を含む build から初めて upgrade するときは、次の順序を守る。
+```bash
+COMPOSE_PROJECT_NAME="$restore_project" \
+  docker compose -f docker-compose.prod.yml down
 
-1. 現行 build のまま `viewer-api` と `novel-fetcher` を停止する。
-2. 現行 build の `state-backup recover` を実行し、中断 restore の rollback または cleanup を完了する。
-3. data root 直下に `.state-restore-transaction.json`、`.restore-staging-*`、`.restore-rollback-*` が残っていないことを確認する。残っている場合は手動削除せず、現行 build の recovery で解消する。
-4. 現行 build で最後の cold backup を取得する。
-5. 新 build へ upgrade する。
-6. 問題があれば、upgrade 前 backup と対応する旧 build の組で rollback する。
+docker volume inspect "$restore_volume"
+```
+
+inspect 結果が意図した新 volume と一致することを確認した後、その volume だけを削除する。
+
+```bash
+docker volume rm "$restore_volume"
+```
+
+rollback では upgrade 前の data root 全体 backup と、それに対応する旧 build を組み合わせる。
 
 ## state の診断
 
@@ -113,10 +250,32 @@ YAML、JSON、SQLite の version や形式に対応できない場合、各 serv
 SQLite 自体の健全性を切り分ける場合は両 writer を停止し、対象 DB に `PRAGMA quick_check` を実行する。
 `reader_search.sqlite` は再生成可能な cache であり、runtime が破損を検出すると quarantine して再構築する。
 
+標準 compose の named volume を診断する場合は、`shared-data-init` の一時 container へ SQLite CLI を導入して実行できる。
+この一時 container での package 導入には、Alpine Linux の package repository へ接続できる環境が必要である。
+
 ```bash
-sqlite3 /path/to/data-root/novel-fetcher/library.sqlite 'PRAGMA quick_check'
-sqlite3 /path/to/data-root/state/ai_usage.sqlite 'PRAGMA quick_check'
+docker compose -f docker-compose.prod.yml stop viewer-api novel-fetcher
+
+docker compose -f docker-compose.prod.yml run --rm --no-deps -T \
+  --entrypoint sh \
+  shared-data-init \
+  -ceu '
+    apk add --no-cache sqlite >/dev/null
+    test -f /data/novel-fetcher/library.sqlite
+    library_result="$(sqlite3 /data/novel-fetcher/library.sqlite "PRAGMA quick_check")"
+    printf "library.sqlite: %s\n" "$library_result"
+    test "$library_result" = ok
+    if [ -f /data/state/ai_usage.sqlite ]; then
+      usage_result="$(sqlite3 /data/state/ai_usage.sqlite "PRAGMA quick_check")"
+      printf "ai_usage.sqlite: %s\n" "$usage_result"
+      test "$usage_result" = ok
+    fi
+  '
+
+docker compose -f docker-compose.prod.yml start novel-fetcher viewer-api
 ```
+
+各 SQLite command が `ok` を返した場合だけ command は成功する。
 
 `ai_generation_settings.yaml` に非空の legacy `api_key` が残る場合、viewer-api は値を含めない warning を出す。
 master passphrase を設定すると、recognized document の次回読込時に encrypted payload へ lazy migration する。
