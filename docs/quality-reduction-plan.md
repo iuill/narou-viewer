@@ -130,10 +130,16 @@ legacy 平文 `api_key` への対策は次で置き換える:
 
 ### 3.7 移行手順
 
-1. 移行前に現行 build で最後の backup を取得する（tooling でも手動 copy でもよい）。
-2. viewer-api / novel-fetcher の startup から `EnsureNoRestoreInProgress` を外し、tooling・doctor・statesecurity を削除する。
-3. docs を再編し、既存 `.tar.gz.age` の手動復元 1 行を移行ノートに残す。
-4. 削除はすべて git 履歴に残るため、実運用で不足が判明した場合は個別に復活を検討できる。
+restore journal の起動拒否を外す変更は、一度だけ必要になる upgrade 互換手順を伴う。実装 PR の本文に「ユーザーへの影響 / upgrade 手順」として次を明記し、同じ内容を `deployment.md` の移行ノートにも残す。
+
+1. 現行 build のまま `viewer-api` と `novel-fetcher` を停止する。
+2. 現行の `state-backup recover` を実行し、中断 restore があれば rollback または cleanup を完了する。
+3. `data/.state-restore-transaction.json`、`data/.restore-staging-*`、`data/.restore-rollback-*` が残っていないことを確認する。残っている場合は手動削除せず、現行 build の recovery で解消する。
+4. 現行 build で最後の cold backup を取得する（tooling でも停止中の data root 全体 copy でもよい）。
+5. 新 build へ upgrade する。旧 restore journal が残る状態では、新 build を起動しない。
+6. upgrade 後に問題があれば、upgrade 前 backup と対応する旧 build の組で rollback する。
+
+既存 `.tar.gz.age` の手動復元方法も移行ノートに残す。削除した実装は git 履歴に残るため、実運用で不足が判明した場合は個別に復活を検討できる。
 
 なお `quality-goals.md` 差分表には AI usage の最小 request ledger 化も残っているが、本設計の対象外とし別課題として扱う。
 
@@ -143,14 +149,19 @@ legacy 平文 `api_key` への対策は次で置き換える:
 
 現行の 2 workflow + App 構成は、fork PR が checkout や status 発行を悪用して required check を偽装・レースさせる攻撃への対策である。具体的には `pull_request_target` から artifact 経由で PR 番号だけを渡し、App token で status を発行し、freshness 照合と head SHA を共有する全 PR の metadata scan まで行う。
 
-個人開発 repo ではこの脅威に投資する妥当性がない。fork PR の commit 検査は、secrets を一切持たない通常の `pull_request` event で同じ scan を実行すれば足りる（`GITHUB_TOKEN` は read-only、App token 不要、status API 不要）。
+通常の `pull_request` workflow は PR 側の workflow / scanner 変更を含む checkout を実行するため、同じ PR で検査を弱める技術的余地は残る。本 repository では、すべての PR を maintainer が merge 前に必ずレビューし、workflow / scanner を変更する PR では権限拡大がないことと `bun run test:security` の結果も確認する。自動 merge や bot による review bypass は使わない。この maintainer review を信頼境界とし、Sensitive Information check は敵対的な maintainer や review 回避への完全防御ではなく、開発者自身と通常の contributor による機微情報の誤混入を検知する required check と位置づける。
 
-新構成（独立 workflow 1 本、または既存 CI への 1 job 追加）:
+この運用前提では、fork PR の commit 検査は secrets を一切持たない通常の `pull_request` event で実行すれば足りる。`GITHUB_TOKEN` の権限は workflow 内で `contents: read` に固定し、App token と status API は使わない。security と application CI の権限境界を分けるため、既存 CI の job には統合せず、独立 workflow 1 本とする。
+
+新構成:
 
 ```yaml
 name: Sensitive Information
 on:
   pull_request:
+    branches: [main]
+permissions:
+  contents: read
 jobs:
   scan:
     runs-on: ubuntu-latest
@@ -165,19 +176,21 @@ jobs:
 
 - required check は commit status `sensitive-information/commits` からこの job の check run へ branch protection 設定で差し替える。
 - PR metadata（本文・comment・review）の advisory scan は廃止する。個人 repo で第三者 metadata 経由の混入リスクは低く、commit 履歴と異なり検出後に編集で除去できる。必要になれば `workflow_dispatch` の手動 scan として最小構成で復活できる。
+- `.github/workflows/`、`.githooks/`、`scripts/scan-sensitive-*`、`scripts/check-sensitive-*`、`scripts/install-betterleaks.sh` の変更は、通常の code review に加えて security scanner の信頼境界変更として確認する。
 
 削除対象:
 
 - `.github/workflows/sensitive-information.yml`、`.github/workflows/sensitive-information-events.yml`
 - `scripts/update-sensitive-status.sh`、`assert-latest-sensitive-status.sh`、`resolve-pull-request-number.sh`、`resolve-pull-request-event.sh`、`list-pull-requests-for-head.sh`、`scan-pull-request-metadata-for-head.sh`、`scan-pull-request-content.sh`
 
-後片付け:
+切替と後片付け:
 
-1. 新 workflow を追加して green を確認する。
-2. branch protection の required check を差し替える。
-3. 旧 workflow / script を削除する。
-4. Secret Guard GitHub App を uninstall し、`SECRET_GUARD_APP_CLIENT_ID` var と `SECRET_GUARD_APP_PRIVATE_KEY` secret を削除する。
-5. `AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md` の Secret Guard / advisory 記述を更新する。
+1. 同じ実装 PR の第 1 phase commit で新 workflow を追加し、旧 workflow / App は維持する。
+2. 新 check run が PR head で green になることを確認する。
+3. branch protection の required check を旧 commit status から新 check run へ差し替える。問題があれば旧 required check へ戻せる状態を維持する。
+4. 同じ PR の次 phase commit で旧 workflow / script を削除し、scanner / test を縮小する。
+5. PR を merge した後、旧 `pull_request_target` workflow が main から消えたことを確認して Secret Guard GitHub App を uninstall し、`SECRET_GUARD_APP_CLIENT_ID` var と `SECRET_GUARD_APP_PRIVATE_KEY` secret を削除する。
+6. `AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md` の Secret Guard / advisory 記述を同じ PR で更新する。
 
 ### 4.2 scan-sensitive-changes.sh の縮小
 
@@ -215,14 +228,29 @@ jobs:
 
 - 復旧の粒度は backup 取得頻度に依存する。upgrade 前 backup の必須運用は維持する。
 - backup の暗号化・retention は運用者責任になる。docs に age の 1 行手順を示して補う。
+- restore journal guard 撤去前に現行 build の recovery を実行する必要がある。この一度限りの upgrade 手順は、実装 PR 本文の「ユーザーへの影響」と `deployment.md` に明記する。
+- 通常の `pull_request` workflow は同じ PR で scanner を変更できる。全 PR の maintainer review を信頼境界として許容し、review bypass や自動 merge を導入する場合は再評価する。
 - fork PR の metadata 経由の混入は自動検知しなくなる。編集で除去可能なため許容する。
 - 横断診断がなくなるため、複数 file にまたがる不整合の一括レポートは得られない。実行時 error と手動 `quick_check` で代替する。
 
-## 7. 実施ステップ（PR 分割案）
+## 7. 実施ステップ（1 branch / 1 PR の phase 別 commit）
 
-1. sensitive-information: 新 `pull_request` workflow 追加 → required check 差し替え → 旧 workflow / script / App 撤去、scan と test の縮小、関連 docs 更新
-2. statebackup + restore journal の撤去、手動 backup / restore 手順の `deployment.md` 追記、`state-backup.md` 削除
-3. statedoctor + statesecurity の撤去、`aisettings` 起動時 warning 追加、`state-doctor.md` 削除
-4. `state-schema-policy.md` 縮約と `quality-goals.md` 差分表の更新（3 と同一 PR でもよい）
+本設計は 1 つの作業 branch と 1 つの PR で実施し、途中状態を main へ個別 merge しない。PR 内では変更領域ごとに phase commit を分け、各 phase で関連する実装、仕様、運用手順、test、互換性説明を同時に更新する。これにより全体の変更判断は 1 PR に集約しつつ、review と必要時の commit 単位 revert を行いやすくする。
 
-各 PR は独立して merge / revert できる。1 は GitHub 設定変更（branch protection、App uninstall）を伴うため、設定手順を PR 本文に明記する。
+1. **Sensitive Information 移行 phase**
+   - 第 1 commit: 新しい独立 `pull_request` workflow と対応 test / docs を追加し、旧 workflow / App を併存させる。
+   - PR 上で新 check を green にし、branch protection の required check を差し替える。
+   - 第 2 commit: 旧 workflow / status script / metadata scan を削除し、scanner と test harness を縮小する。
+   - merge 後の外部設定作業として App uninstall と var / secret 削除を行う。失敗時の rollback は旧 required check への差し戻しと App 維持で行う。
+2. **statebackup / restore journal 撤去 phase**
+   - statebackup と journal 連動を削除する。
+   - 同じ phase で `deployment.md` の手動 backup / restore と一度限りの upgrade 手順、旧 archive の移行説明、関連 test、`state-schema-policy.md`、`quality-goals.md` の現行差分を更新する。
+   - PR 本文の「ユーザーへの影響」に 3.7 の手順を記載する。
+3. **statedoctor / statesecurity 撤去 phase**
+   - statedoctor / statesecurity と関連 CLI / docs を削除し、`aisettings` warning を追加する。
+   - 同じ phase で代替診断手順、関連 test、`state-schema-policy.md` の doctor 前提箇所、docs index を更新する。
+4. **最終整合性 phase**
+   - repository 内の削除済み command / document / Secret Guard 名への参照を検索して除去する。
+   - 設計どおりの検証 command を実行し、PR 本文に GitHub 設定変更、merge 後 cleanup、rollback 手順をまとめる。
+
+GitHub の branch protection、App、repository var / secret は git commit では戻らない。各設定変更の実施時点と rollback 手順を PR 本文に明記し、App と旧 credential は PR merge 後の確認が終わるまで削除しない。
