@@ -32,6 +32,22 @@
   - 新機能や仕様拡張では、原則として `docs/architecture.md` と機能別ドキュメントを優先する。
   - API 契約や YAML スキーマを、説明なく変更しない。
 
+## 品質目標
+
+- 品質目標の正本は `docs/quality-goals.md` とする。未実装の目標を現行保証として扱わず、実装時は関連する機能仕様と運用ドキュメントも同じ変更で更新する。
+- 個人利用者向けの個人開発 OSS であることを踏まえ、品質対策は障害の影響、発生可能性、検出可能性と、実装、運用、保守コストの釣り合いで判断する。データ消失、機微情報漏えい、外部課金、互換性破壊を優先し、具体的な必要性のない大規模運用向けの冗長化や自動化は追加しない。
+- 利用形態は `single-user / single-deployment` とし、複数ブラウザ、複数端末をサポートする。state owner ごとの active writer は 1 instance とし、multi-user isolation、active-active、HA は対象外とする。
+- 永続 schema は直前の対応 release からの upgrade だけを保証する。in-place downgrade と複数 release を飛ばす upgrade は対象外とし、未知の将来 schema は元データを変更せず拒否する。
+- 単一 file は atomic write、SQLite は transaction を使う。複数 file や DB を跨ぐ global transaction は前提にしない。
+- backup の基準は、運用者が writer を停止して共有 data root 全体を取得する方式とする。稼働中 copy、部分 backup、既存 data への上書き restore は対応しない。
+- 読書位置は作品単位 version による条件付き更新とし、古い version からの保存は競合として扱う。別端末の位置と表示中の位置が異なる場合だけ利用者に選択を求める。
+- AI の生成履歴は生成正本、再構築可能な profile、index、search は派生データ、job、checkpoint は重複実行と課金を防ぐ運用 state として扱う。
+- AI usage は prompt、回答、本文、tool I/O の内容を保存しない最小 request ledger とし、request 数、token、cost は ledger から集計する。
+- application CI は 1 workflow 内の独立 job で構成し、security と dependency の workflow は権限境界に応じて分離する。
+- PR では PC Chromium と smartphone WebKit の smoke を実行する。application E2E の定期実行は行わず、browser 依存変更時と release 前に full E2E を実行する。
+- repository 全体の coverage KPI は設けず、`viewer-web`、`viewer-api`、`novel-fetcher` 単位の coverage gate を維持する。coverage だけで品質を判定しない。
+- 2 application containers 化は将来候補であり、現行構成として扱わない。実施時は static asset、Service Worker、browser 互換性を検証する。
+
 ## 作業方針
 
 - Dev Container では post-create 時に `.githooks/` の `pre-commit` / `commit-msg` / `pre-push` が自動で有効になる。Dev Container 外では Betterleaks を導入後、`bash scripts/install-git-hooks.sh` を一度実行する。
@@ -44,6 +60,7 @@
 - ユーザーへの応答、commit message、PR title / body / comment は、特段の指定がない限り日本語で書く。
 - PR は、特段の理由や明示的な指定がない限り draft ではなく ready for review で起票する。
 - PR を作成・更新する前に `.github/pull_request_template.md` を読み、各セクションを省略せず、該当しない項目にも理由を記載する。追いコミット後は変更内容、ユーザー影響、互換性・移行、検証結果が PR 本文と一致しているか再確認する。
+- merge 前の最終確認では、変更が `docs/quality-goals.md` に適合しているかを確認する。PR 本文と関連 issue 本文も実装、仕様、検証結果と照合し、完了条件、判断、残課題が変わった場合は必要に応じて更新する。
 - PR の merge はユーザーが明示的に依頼した場合だけ行い、squash merge を使用する。GitHub repository settings は squash merge だけを許可する運用とし、merge commit と rebase merge は無効であることを前提とする。merge 後は `.agents/skills/pr-merge/SKILL.md` に従い、base branch の local HEAD を remote HEAD へ同期し、安全に削除できる remote / local の作業 branch を片付けてから完了とする。
 - 仕様、セットアップ、データ契約に影響する変更をした場合は、関連ドキュメントも更新する。
 - 破壊的な git 操作は避ける。

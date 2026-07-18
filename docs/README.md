@@ -5,6 +5,7 @@
 ## 正本
 
 - [`architecture.md`](architecture.md): アーキテクチャ、責務分離、データ境界
+- [`quality-goals.md`](quality-goals.md): 利用形態、互換性、データ保護、CI、テスト、デプロイの品質目標
 
 ## テスト
 
