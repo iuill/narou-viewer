@@ -646,12 +646,13 @@ func TestLookupOpenRouterModelInfoDoesNotShareFailuresAcrossCredentials(t *testi
 }
 
 func TestLookupOpenRouterModelInfoDoesNotNegativeCacheContextCancellation(t *testing.T) {
-	calls := 0
+	var calls atomic.Int32
+	firstRequestStarted := make(chan struct{})
 	modelID := "openai/cancel-cache-model"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls == 1 {
-			time.Sleep(50 * time.Millisecond)
+		if calls.Add(1) == 1 {
+			close(firstRequestStarted)
+			<-r.Context().Done()
 			return
 		}
 		_, _ = w.Write([]byte(`{
@@ -668,17 +669,33 @@ func TestLookupOpenRouterModelInfoDoesNotNegativeCacheContextCancellation(t *tes
 	defer server.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
-	defer cancel()
-	if _, ok := LookupOpenRouterModelInfo(ctx, "dummy-openrouter-key-cancel-cache", modelID); ok {
-		t.Fatal("timed out metadata lookup should fail")
+	ctx, cancel := context.WithCancel(context.Background())
+	lookupDone := make(chan bool, 1)
+	go func() {
+		_, ok := LookupOpenRouterModelInfo(ctx, "dummy-openrouter-key-cancel-cache", modelID)
+		lookupDone <- ok
+	}()
+	select {
+	case <-firstRequestStarted:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("metadata lookup did not reach the server")
+	}
+	cancel()
+	select {
+	case ok := <-lookupDone:
+		if ok {
+			t.Fatal("cancelled metadata lookup should fail")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled metadata lookup did not return")
 	}
 	info, ok := LookupOpenRouterModelInfo(context.Background(), "dummy-openrouter-key-cancel-cache", modelID)
 	if !ok || info.ContextLength != 64000 {
-		t.Fatalf("context timeout should not be negative-cached: ok=%v info=%+v", ok, info)
+		t.Fatalf("context cancellation should not be negative-cached: ok=%v info=%+v", ok, info)
 	}
-	if calls != 2 {
-		t.Fatalf("timed out lookup and successful retry should both reach the server, calls=%d", calls)
+	if calls.Load() != 2 {
+		t.Fatalf("cancelled lookup and successful retry should both reach the server, calls=%d", calls.Load())
 	}
 }
 
