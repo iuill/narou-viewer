@@ -14,27 +14,26 @@
 repository root で次を実行する。
 
 ```bash
-docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build --remove-orphans
+docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build
 ```
 
 既定では `NAROU_VIEWER_HTTP_PORT` が未指定なら同一 host の `127.0.0.1:8080` で開ける。
 
 ```bash
 NAROU_VIEWER_HTTP_PORT=18080 \
-  docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build --remove-orphans
+  docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build
 ```
 
 外部 interface へ直接 bind する場合は、TLS と認証を別途設定したうえで bind address を明示する。
 
 ```bash
 NAROU_VIEWER_HTTP_BIND=0.0.0.0 \
-  docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build --remove-orphans
+  docker compose -p narou-viewer -f docker-compose.prod.yml up -d --build
 ```
 
 `narou-viewer` は Compose project 名である。
 初回起動後に別の名前へ変えると別の named volume が作られるため、`.env` の `COMPOSE_PROJECT_NAME` または運用記録へ保存し、停止、起動、backup、restore、診断で同じ値を使う。
 checkout directory 名から暗黙に project 名を決めない。
-旧 4 containers 構成から更新する場合も同じ project 名で起動する。`--remove-orphans` で旧 `reverse-proxy` を削除し、`viewer-web` に同じ公開 port を引き継ぐ。named volume の runtime data は維持する。
 
 構成:
 
