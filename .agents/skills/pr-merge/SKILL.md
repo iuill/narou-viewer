@@ -14,7 +14,7 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 - GitHub repository settings で squash merge が許可されていなければ停止する。merge commit または rebase merge が許可されている場合は、repository rule と settings の不一致として報告する。
 - merge 前に PR URL、base / head repository、base / head branch、head SHA を記録する。
 - draft、merge conflict、未完了または失敗中の required check、未対応の requested changes があれば merge しない。
-- merge 前に [`docs/quality-goals.md`](../../../docs/quality-goals.md) を読み、変更内容と採用した品質対策が品質目標に適合していることを確認する。
+- merge 前に [`docs/quality-goals.md`](../../../docs/quality-goals.md) の変更に関係する項目を確認し、変更内容と採用した品質対策が適合していることを確認する。
 - merge 直前に PR 状態と check / review を再取得する。古い取得結果だけで判断しない。
 - `git remote get-url --all` で各 remote の fetch URL を列挙し、PR の base repository と一意に対応する `base_remote` と `validated_base_fetch_url` を決める。決められなければ base 同期を行わず報告する。
 - 同一 repository の head branch を削除するときだけ、`git remote get-url --push --all` の結果が単一で head repository と一致する `head_remote` と `validated_head_push_url` を要求する。fork では head remote 未設定を正常として cleanup を省略する。
@@ -26,9 +26,9 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 1. GitHub App または `gh` で PR metadata、check、review、review thread を確認する。
 2. `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed` で merge method の repository settings を確認する。
 3. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
-4. 変更が `docs/quality-goals.md` に適合していることを確認する。目標と異なる判断が必要な場合は、その理由と影響が関連仕様と PR 本文に明記されるまで merge しない。
+4. 変更に関係する `docs/quality-goals.md` の項目に適合していることを確認する。目標と異なる判断が必要な場合は、その理由と影響が関連仕様と PR 本文に明記されるまで merge しない。
 5. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認し、差異があれば更新する。
-6. PR から参照または close される関連 issue を確認する。issue 本文の完了条件、採用した判断、残課題を実装と照合し、変わった箇所があれば本文を更新する。
+6. PR から参照または close される関連 issue を確認する。完了条件、採用した判断、残課題を実装と照合し、変更点は原則として issue コメントに記録する。完了条件自体を正式に変更する場合だけ issue 本文を更新する。
 7. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
 8. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
 9. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
@@ -95,7 +95,7 @@ git branch -D "$head_branch"
 
 - merged PR 番号と URL
 - merge method と squash commit SHA
-- 品質目標への適合確認と、更新した PR / issue 本文
+- 品質目標への適合確認と、更新した PR 本文、関連 issue へ記録した変更点
 - base branch の local / remote HEAD 一致
 - remote / remote-tracking / local head branch の削除結果
 - 安全上残した branch や worktree と、その理由
