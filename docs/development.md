@@ -18,30 +18,11 @@
 bun run dev
 ```
 
-Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査し、同じ検査を GitHub Actions でも実行します。手動確認では commit 前に `bun run security:scan:staged`、PR / push 前に `bun run security:scan:branch` を使います。fork や通常と異なるbaseへPRを出す場合は `bun run security:scan:branch -- upstream/main` のように実際のbase refを明示してください。baseを省略して走査対象commitが0件になった場合、コマンドは未検査の正常終了を避けるため失敗します。全 commit と過去の binary blob を走査する `bun run security:scan:history` は定期 CI、scanner 変更時、または明示的な全履歴 audit に限定します。Betterleaks の外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
+Dev Container image には固定版の Betterleaks が含まれ、`postCreateCommand` は他の開発ツールと同じく版を確認して、不足または不一致なら checksum 検証付きで再導入します。同時に、この clone の `core.hooksPath` を `.githooks` に設定します。既存の `core.hooksPath` が別の値なら上書きせず、hook 有効化を見送って警告します。`pre-commit` は staged diff、`commit-msg` は commit message、`pre-push` は push 対象 commit の diff と message を検査します。手動確認では commit 前に `bun run security:scan:staged`、PR / push 前に `bun run security:scan:branch` を使います。fork や通常と異なるbaseへPRを出す場合は `bun run security:scan:branch -- upstream/main` のように実際のbase refを明示してください。baseを省略して走査対象commitが0件になった場合、コマンドは未検査の正常終了を避けるため失敗します。全 commit を走査する `bun run security:scan:history` は定期 CI、scanner 変更時、または明示的な全履歴 audit に限定します。Betterleaks の allow marker と外部 validation は有効にせず、検査中に候補 credential を外部 API へ送信しません。
 
-PR の機微情報検査は権限なしの `.github/workflows/sensitive-information-events.yml` で event と PR 番号を受け、`workflow_run` で起動する default branch 版 scanner へ渡します。後段は PR head を checkoutせずcommit objectとして検査します。PR本文・タイトル・通常コメント・review・diff上のreview commentを追加・編集・削除した場合も、同じhead SHAを持つopenなmain向けPRすべてをBetterleaksのGitHub sourceで再検査します。Betterleaksのallow markerと外部validationは有効にしません。
+Pull Request では、権限を `contents: read` に限定した独立 workflow が base から head までの commit path、追加行、message、author / committer identity を検査します。repository ruleset では `Sensitive Information / Scan commits` を required check に設定します。scanner または workflow を変更する Pull Request では `bun run test:security` の結果と権限差分を maintainer が確認し、自動 merge や review bypass は使いません。この review を信頼境界とし、自動検査は通常の開発での誤混入を検知する仕組みとして扱います。
 
-後段workflowはApp tokenを扱う`invalidate`、App credentialを一切持たず未信頼PRデータを解析する`scan`、新しいrunnerでApp tokenを再生成する`publish`に分離します。専用GitHub Appは`opened`・`synchronize`・`reopened`時にcommit status `sensitive-information/commits`を発行し、これをrequired gateとして使用します。commitのpatch・path・message・author／committer identityに加え、Git属性でbinary指定されたblobまたはNULを含むblobからprintable stringsを抽出して検査します。
-
-PR metadataには別context `sensitive-information/metadata-advisory`を使用します。Actionsだけではmetadata編集直後の競合窓を完全に閉じられないため、こちらをRulesetのrequired checkにしてはいけません。通常の`pull_request` CIにある同名jobはdefense in depthであり、trustedなsecurity boundaryはSecret Guard Appだけが発行する`commits` statusです。
-
-Secret Guard 廃止の移行期間中は、権限を `contents: read` に限定した独立 `pull_request` workflow も併存させます。新しい check run `Sensitive Information / Scan commits` が PR head で成功することを確認してから、repository ruleset の required check を `sensitive-information/commits` からこの check run へ差し替えます。差し替えが完了するまでは、従来どおり Secret Guard App の status を required gate として扱います。
-
-### Secret Guard GitHub App の初期設定
-
-Enterprise限定のRequired Workflowは使用しません。個人accountのDeveloper settingsで、このrepository専用Appを次のように設定します。
-
-1. **Settings > Developer settings > GitHub Apps > New GitHub App** でAppを作成する。
-2. GitHub App nameは一意な名前、Homepage URLはこのrepository URLを指定する。Webhookは不要なので無効にする。
-3. Repository permissionsは **Commit statuses: Read and write** だけを設定し、その他はNo accessのままにする。
-4. App作成後、**Install App**から自分のaccountへinstallし、**Only select repositories**で`narou-viewer`だけを選ぶ。
-5. App設定画面のClient IDをrepository variable `SECRET_GUARD_APP_CLIENT_ID`へ登録する。
-6. App設定画面の**Generate a private key**で`.pem`を一度生成し、その内容全体をrepository secret `SECRET_GUARD_APP_PRIVATE_KEY`へ登録する。秘密鍵ファイルはrepositoryや共有storageへ置かず、secret登録後にlocalから削除する。
-7. このworkflowがdefault branchへ入った後、**Sensitive Information Events** workflowをPR番号付きで手動実行し、App名義のadvisory statusが成功することを確認する。
-8. repository rulesetで`sensitive-information/commits`をrequired statusに追加し、expected sourceを作成したSecret Guard Appに固定する。`sensitive-information/metadata-advisory`はrequired statusへ追加しない。
-
-Appの秘密鍵を更新する場合は、新しい鍵を先に生成してrepository secretを更新し、手動scanの成功後に古い鍵をApp設定画面から削除します。
+Pull Request のタイトル、本文、通常コメント、review comment は自動検査の対象外です。編集で除去できる情報であっても機微情報を記載せず、maintainer が merge 前に内容を確認します。required check の移行時は、新しい check が Pull Request の head で成功したことを確認してから repository ruleset を差し替えます。
 
 必要なら先に `.env.sample` を `.env.local` へコピーして値を調整してください。root の `.env.local` が存在する場合、`bun run dev` と各 app の主要 script から自動で読み込みます。シェルや CI で明示した環境変数は `.env.local` より優先されます。
 

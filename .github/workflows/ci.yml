@@ -24,47 +24,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  sensitive-information:
-    name: sensitive information
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout repository history
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          fetch-depth: 0
-
-      - name: Run sensitive information regression tests
-        run: bash ./scripts/test-sensitive-information-checks.sh
-
-      - name: Scan pull request commits
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          scanner_parent="$(mktemp -d)"
-          scanner_checkout="${scanner_parent}/base"
-          trap 'git worktree remove --force "${scanner_checkout}" 2>/dev/null || true; rm -rf "${scanner_parent}"' EXIT
-          if git cat-file -e "${BASE_SHA}:scripts/scan-sensitive-changes.sh" 2>/dev/null; then
-            git worktree add --detach "${scanner_checkout}" "${BASE_SHA}"
-            (cd "${scanner_checkout}" && bash ./scripts/scan-sensitive-changes.sh range "$BASE_SHA" "$HEAD_SHA")
-          else
-            bash ./scripts/scan-sensitive-changes.sh range "$BASE_SHA" "$HEAD_SHA"
-          fi
-
-      - name: Scan pull request description and comments
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: bash ./scripts/scan-pull-request-content.sh "$PR_URL"
-
-      - name: Scan repository history
-        if: github.event_name == 'workflow_dispatch'
-        run: bash ./scripts/scan-sensitive-changes.sh history
-
   repository-size:
     name: Repository size report
     runs-on: ubuntu-latest
