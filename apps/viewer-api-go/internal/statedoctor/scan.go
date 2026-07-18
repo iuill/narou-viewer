@@ -43,26 +43,17 @@ type scannedFile struct {
 }
 
 type scanner struct {
-	dataDir          string
-	stateDir         string
-	novelFetcherDir  string
-	report           Report
-	yamlFiles        map[string]scannedFile
-	jsonFiles        map[string]scannedFile
-	libraryNovelIDs  map[string]bool
-	libraryReadable  bool
-	excludedTopLevel map[string]bool
+	dataDir         string
+	stateDir        string
+	novelFetcherDir string
+	report          Report
+	yamlFiles       map[string]scannedFile
+	jsonFiles       map[string]scannedFile
+	libraryNovelIDs map[string]bool
+	libraryReadable bool
 }
 
 func Scan(ctx context.Context, dataDir string) (Report, error) {
-	return ScanWithOptions(ctx, dataDir, ScanOptions{})
-}
-
-type ScanOptions struct {
-	ExcludedTopLevel []string
-}
-
-func ScanWithOptions(ctx context.Context, dataDir string, options ScanOptions) (Report, error) {
 	dataDir = strings.TrimSpace(dataDir)
 	if dataDir == "" {
 		return Report{}, errors.New("data directory is required")
@@ -75,22 +66,14 @@ func ScanWithOptions(ctx context.Context, dataDir string, options ScanOptions) (
 	if !info.IsDir() {
 		return Report{}, fmt.Errorf("data path is not a directory: %s", dataDir)
 	}
-	excludedTopLevel := map[string]bool{}
-	for _, name := range options.ExcludedTopLevel {
-		if name == "" || name == "." || filepath.Base(name) != name {
-			return Report{}, fmt.Errorf("state doctor exclusion must be a top-level base name: %q", name)
-		}
-		excludedTopLevel[name] = true
-	}
 	s := &scanner{
-		dataDir:          dataDir,
-		stateDir:         filepath.Join(dataDir, "state"),
-		novelFetcherDir:  filepath.Join(dataDir, "novel-fetcher"),
-		report:           Report{DataDir: dataDir, Findings: []Finding{}},
-		yamlFiles:        map[string]scannedFile{},
-		jsonFiles:        map[string]scannedFile{},
-		libraryNovelIDs:  map[string]bool{},
-		excludedTopLevel: excludedTopLevel,
+		dataDir:         dataDir,
+		stateDir:        filepath.Join(dataDir, "state"),
+		novelFetcherDir: filepath.Join(dataDir, "novel-fetcher"),
+		report:          Report{DataDir: dataDir, Findings: []Finding{}},
+		yamlFiles:       map[string]scannedFile{},
+		jsonFiles:       map[string]scannedFile{},
+		libraryNovelIDs: map[string]bool{},
 	}
 	s.scanFileInventory()
 	s.scanSensitiveState()
@@ -302,12 +285,6 @@ func (s *scanner) scanSensitivePlacement() {
 		if walkErr != nil {
 			return nil
 		}
-		if s.excludedTopLevelPath(path) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		if entry.IsDir() {
 			return nil
 		}
@@ -318,15 +295,6 @@ func (s *scanner) scanSensitivePlacement() {
 		s.add(Finding{SchemaID: schemaID, Path: s.rel(path), Kind: "sensitive_file_outside_state", Severity: SeverityWarning, Observed: "unexpected placement", Supported: "state/" + entry.Name(), RecoveryHint: "意図した backup / quarantine か確認し、不要な複製を安全に廃棄してください。内容を表示しないでください。"})
 		return nil
 	})
-}
-
-func (s *scanner) excludedTopLevelPath(path string) bool {
-	relative, err := filepath.Rel(s.dataDir, path)
-	if err != nil || relative == "." || filepath.IsAbs(relative) {
-		return false
-	}
-	first := strings.SplitN(filepath.ToSlash(relative), "/", 2)[0]
-	return s.excludedTopLevel[first]
 }
 
 func (s *scanner) add(finding Finding) {

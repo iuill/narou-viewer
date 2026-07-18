@@ -36,9 +36,6 @@ func Apply(ctx context.Context, dataDir string, findingIDs []string) (Report, er
 		return Report{}, fmt.Errorf("state repair requires viewer-api to be stopped: %w", err)
 	}
 	defer writerLock.Close()
-	if err := statebarrier.EnsureNoRestoreInProgress(dataDir); err != nil {
-		return Report{}, err
-	}
 	report, err := Scan(ctx, dataDir)
 	if err != nil {
 		return Report{}, err

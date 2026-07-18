@@ -7,8 +7,7 @@ RUN go mod download
 
 COPY apps/viewer-api-go ./
 RUN CGO_ENABLED=0 go build -o /tmp/viewer-api-go ./cmd/viewer-api \
-    && CGO_ENABLED=0 go build -o /tmp/state-doctor ./cmd/state-doctor \
-    && CGO_ENABLED=0 go build -o /tmp/state-backup ./cmd/state-backup
+    && CGO_ENABLED=0 go build -o /tmp/state-doctor ./cmd/state-doctor
 
 FROM debian:bookworm-slim AS runtime
 
@@ -23,7 +22,6 @@ ENV VIEWER_API_GO_ADDR=:8080 \
 
 COPY --from=build /tmp/viewer-api-go /usr/local/bin/viewer-api-go
 COPY --from=build /tmp/state-doctor /usr/local/bin/state-doctor
-COPY --from=build /tmp/state-backup /usr/local/bin/state-backup
 
 USER 1000:1000
 

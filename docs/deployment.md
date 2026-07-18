@@ -59,7 +59,51 @@ GOOGLE_BOOKS_API_KEY=...
 - `docker-compose.prod.yml` 自体は TLS や認証を終端せず、既定では `127.0.0.1` に bind する。
 - インターネットへ公開する場合は、Caddy、Traefik、Nginx、Cloudflare Tunnel、VPN など任意の前段で TLS と認証を設定する。
 - `novel-fetcher` の `33006` は publish しない。取得 sidecar 操作は `viewer-api` の `/api/fetcher/*` 経由に限定する。
-- runtime data は file / SQLite を個別に copy せず、[`state-backup`](state-backup.md) で viewer-api / novel-fetcher を停止した 1 generation の暗号化 archive として取得・復元する。
+
+## backup と restore
+
+backup は `viewer-api` と `novel-fetcher` を停止し、共有 data root 全体を一度に copy する。
+稼働中の file や SQLite、作品単位の部分 copy は正式な復旧手段として扱わない。
+
+```bash
+docker compose -f docker-compose.prod.yml stop viewer-api novel-fetcher
+tar czf backup-$(date +%Y%m%d).tar.gz -C /path/to/data-root .
+docker compose -f docker-compose.prod.yml start novel-fetcher viewer-api
+```
+
+保存先が暗号化されていない場合は、`age` などで archive を暗号化する。
+暗号化、保存先、世代管理、retention は運用者または外部 backup 基盤が管理する。
+
+```bash
+age -r 'age1...' -o backup.tar.gz.age backup.tar.gz
+```
+
+restore は両 service を停止したまま、空の data root または新しい volume へ backup 全体を展開する。
+既存 data への上書き restore と application binary だけを戻す downgrade はサポートしない。
+rollback では upgrade 前の data root 全体と、それに対応する旧 build を組み合わせる。
+
+```bash
+tar xzf backup.tar.gz -C /path/to/empty-data-root
+```
+
+旧 `state-backup` が作成した `.tar.gz.age` は標準の age、gzip、tar 形式なので、専用 CLI がなくても復元できる。
+archive 内の `manifest.json` は新 build では使用しない。
+
+```bash
+age -d -i /path/to/identity.txt backup.tar.gz.age | tar xz -C /path/to/empty-data-root
+```
+
+### 専用 backup tooling を削除する build への upgrade
+
+旧 restore journal が残った状態で新 build を起動すると、未完了 restore の recovery を実行できない。
+専用 backup tooling を含む build から初めて upgrade するときは、次の順序を守る。
+
+1. 現行 build のまま `viewer-api` と `novel-fetcher` を停止する。
+2. 現行 build の `state-backup recover` を実行し、中断 restore の rollback または cleanup を完了する。
+3. data root 直下に `.state-restore-transaction.json`、`.restore-staging-*`、`.restore-rollback-*` が残っていないことを確認する。残っている場合は手動削除せず、現行 build の recovery で解消する。
+4. 現行 build で最後の cold backup を取得する。
+5. 新 build へ upgrade する。
+6. 問題があれば、upgrade 前 backup と対応する旧 build の組で rollback する。
 
 ## 確認
 

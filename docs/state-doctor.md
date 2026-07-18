@@ -2,7 +2,7 @@
 
 `state-doctor` は `data/` 配下の viewer-api / novel-fetcher state を横断して診断する CLI です。既定は read-only dry-run で、YAML / JSON / SQLite の version、integrity、owner 間の対応関係、機微 file の配置と mode を確認します。
 
-暗号化 cold backup / restore は [`state-backup.md`](state-backup.md) を参照してください。restore tooling は staging と公開後の両方で doctor を再利用します。
+backup と restore は [`deployment.md`](deployment.md#backup-と-restore) の手動手順を参照してください。
 
 ## 実行
 
@@ -58,9 +58,7 @@ bun run state:doctor --data-dir ./data --apply --finding finding-0123456789abcde
 - current character events を正本とする derived character profile の quarantine / rebuild
 - `reader_search.sqlite` の connection close、quarantine、新規 cache 作成。本文は通常アクセス時に lazy rebuild
 
-`--apply` は最初の走査より前に viewer-api の writer lock を取得し、全 repair と再走査が終わるまで保持します。viewer-api が稼働中、または restore recovery journal が残る状態では mutation を開始せず拒否します。dry-run は lock を取得せず read-only のまま実行できます。
-
-通常のscanは`.restore-staging-*` / `.restore-rollback-*`に似た名前も含めてdata tree全体の機微file配置を診断します。restore内部のpost-publish scanだけは、検証済みdurable journalが指す正確なtop-level staging / rollback pathとjournalを明示指定して除外します。名前prefixだけで任意directoryを除外しません。
+`--apply` は最初の走査より前に viewer-api の writer lock を取得し、全 repair と再走査が終わるまで保持します。viewer-api が稼働中なら mutation を開始せず拒否します。dry-run は lock を取得せず read-only のまま実行できます。
 
 YAML / JSONのcanonical stateとAI credential scanは、symlinkを辿らないnon-blocking open後に同じdescriptorでregular fileかを確認し、64 MiBを上限として読みます。FIFOやdeviceなどの特殊file、上限超過fileは待機・無制限読取せず`read_error`またはcredential scan errorとして報告します。
 

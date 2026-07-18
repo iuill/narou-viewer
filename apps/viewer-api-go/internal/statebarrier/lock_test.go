@@ -7,34 +7,32 @@ import (
 	"testing"
 )
 
-func TestAcquireWritersRejectsActiveWriterAndReleasesBoth(t *testing.T) {
+func TestAcquireViewerAPIRejectsActiveWriterAndReleases(t *testing.T) {
 	dataDir := t.TempDir()
-	locks, err := AcquireWriters(dataDir)
+	lock, err := AcquireViewerAPI(dataDir)
 	if err != nil {
-		t.Fatalf("AcquireWriters: %v", err)
+		t.Fatalf("AcquireViewerAPI: %v", err)
 	}
 	if _, err := AcquireViewerAPI(dataDir); !errors.Is(err, ErrWriterActive) {
 		t.Fatalf("second viewer lock error = %v", err)
 	}
-	if _, err := AcquireNovelFetcher(dataDir); !errors.Is(err, ErrWriterActive) {
-		t.Fatalf("second fetcher lock error = %v", err)
-	}
-	if err := locks.Close(); err != nil {
+	if err := lock.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := locks.Close(); err != nil {
+	if err := lock.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	reacquired, err := AcquireWriters(dataDir)
+	if err := (*Lock)(nil).Close(); err != nil {
+		t.Fatalf("nil lock Close: %v", err)
+	}
+	reacquired, err := AcquireViewerAPI(dataDir)
 	if err != nil {
-		t.Fatalf("reacquire writers: %v", err)
+		t.Fatalf("reacquire viewer-api: %v", err)
 	}
 	defer reacquired.Close()
-	for _, relative := range []string{ViewerAPILockRelativePath, NovelFetcherLockRelativePath} {
-		info, err := os.Stat(filepath.Join(dataDir, filepath.FromSlash(relative)))
-		if err != nil || info.Mode().Perm() != 0o600 {
-			t.Fatalf("lock mode for %s: info=%v err=%v", relative, info, err)
-		}
+	info, err := os.Stat(filepath.Join(dataDir, filepath.FromSlash(ViewerAPILockRelativePath)))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("lock mode: info=%v err=%v", info, err)
 	}
 }
 
@@ -50,31 +48,6 @@ func TestAcquireRejectsSymlink(t *testing.T) {
 	}
 	if _, err := Acquire(link); err == nil {
 		t.Fatal("Acquire should refuse a symlink")
-	}
-}
-
-func TestAcquireWritersReleasesViewerLockWhenFetcherIsBusy(t *testing.T) {
-	dataDir := t.TempDir()
-	activeFetcher, err := AcquireNovelFetcher(dataDir)
-	if err != nil {
-		t.Fatalf("AcquireNovelFetcher: %v", err)
-	}
-	defer activeFetcher.Close()
-	if _, err := AcquireWriters(dataDir); !errors.Is(err, ErrWriterActive) {
-		t.Fatalf("AcquireWriters error = %v", err)
-	}
-	viewer, err := AcquireViewerAPI(dataDir)
-	if err != nil {
-		t.Fatalf("viewer lock should have been released: %v", err)
-	}
-	if err := viewer.Close(); err != nil {
-		t.Fatalf("close viewer lock: %v", err)
-	}
-	if err := (*Lock)(nil).Close(); err != nil {
-		t.Fatalf("nil lock Close: %v", err)
-	}
-	if err := (*WriterLocks)(nil).Close(); err != nil {
-		t.Fatalf("nil writer locks Close: %v", err)
 	}
 }
 
@@ -104,32 +77,5 @@ func TestAcquireRejectsSymlinkParentWithoutCreatingExternalLock(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(outside, ".writer.lock")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("external lock should not be created: %v", err)
-	}
-}
-
-func TestEnsureNoRestoreInProgressFailsClosed(t *testing.T) {
-	dataDir := t.TempDir()
-	journal := filepath.Join(dataDir, RestoreJournalRelativePath)
-	if err := os.WriteFile(journal, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write journal: %v", err)
-	}
-	if err := EnsureNoRestoreInProgress(dataDir); !errors.Is(err, ErrRestoreInProgress) {
-		t.Fatalf("journal check error = %v", err)
-	}
-	if err := os.Remove(journal); err != nil {
-		t.Fatalf("remove journal: %v", err)
-	}
-	if err := EnsureNoRestoreInProgress(dataDir); err != nil {
-		t.Fatalf("journal-free check: %v", err)
-	}
-	target := filepath.Join(dataDir, "target")
-	if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write journal target: %v", err)
-	}
-	if err := os.Symlink(target, journal); err != nil {
-		t.Fatalf("symlink journal: %v", err)
-	}
-	if err := EnsureNoRestoreInProgress(dataDir); !errors.Is(err, ErrRestoreInProgress) {
-		t.Fatalf("symlink journal check error = %v", err)
 	}
 }

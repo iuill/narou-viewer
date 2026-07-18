@@ -72,33 +72,6 @@ func TestScanRejectsInvalidRootsAndReportsInventoryIOFailures(t *testing.T) {
 	}
 }
 
-func TestScanExcludesOnlyExplicitRestoreTransactionPaths(t *testing.T) {
-	dataDir := t.TempDir()
-	excluded := ".restore-rollback-active"
-	for _, directory := range []string{excluded, ".restore-rollback-untracked"} {
-		path := filepath.Join(dataDir, directory, "state", "ai_usage.sqlite")
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			t.Fatalf("mkdir %s: %v", directory, err)
-		}
-		if err := os.WriteFile(path, []byte("synthetic sensitive copy"), 0o600); err != nil {
-			t.Fatalf("write %s: %v", directory, err)
-		}
-	}
-	report, err := ScanWithOptions(context.Background(), dataDir, ScanOptions{ExcludedTopLevel: []string{excluded}})
-	if err != nil {
-		t.Fatalf("ScanWithOptions: %v", err)
-	}
-	if reportHasPath(report, excluded+"/state/ai_usage.sqlite") {
-		t.Fatalf("explicit transaction path should be excluded: %+v", report.Findings)
-	}
-	if !reportHasPath(report, ".restore-rollback-untracked/state/ai_usage.sqlite") {
-		t.Fatalf("untracked lookalike path must remain visible: %+v", report.Findings)
-	}
-	if _, err := ScanWithOptions(context.Background(), dataDir, ScanOptions{ExcludedTopLevel: []string{"../outside"}}); err == nil {
-		t.Fatal("unsafe state doctor exclusion should fail")
-	}
-}
-
 func TestScannerReconciliationCoversInvalidAndConflictingDerivedState(t *testing.T) {
 	dataDir := t.TempDir()
 	stateDir := filepath.Join(dataDir, "state")
