@@ -31,6 +31,8 @@ bun run verify:api-go
 bun run verify:api-go:contract
 ```
 
+`verify:api-go:contract` は、直接起動した Go binary に通常の contract suite を流すローカルの変更範囲別確認とする。CI の通常 suite は独立した `Service API contract` job で 1 回だけ実行する。
+
 ### Go fetcher sidecar のみ
 
 ```bash
@@ -87,4 +89,4 @@ bun run verify
 
 - 実行時挙動、画面遷移、複数サービス連携、キャッシュや service worker 互換性に触れたら `bun run e2e:test:container` を優先する。
 - E2E の前に fixture や常駐サービスが怪しい場合は [`.agents/skills/e2e-recovery/SKILL.md`](../e2e-recovery/SKILL.md) を使う。
-- read-only smoke だけで足りる場合は [`.agents/skills/e2e-smoke/SKILL.md`](../e2e-smoke/SKILL.md) を使う。
+- generic self-host origin などを read-only で局所確認する場合は [`.agents/skills/e2e-smoke/SKILL.md`](../e2e-smoke/SKILL.md) を使う。smoke は通常の application E2E や PR / main の 2 browser 全 suite を代替しない。

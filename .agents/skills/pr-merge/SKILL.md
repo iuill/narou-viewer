@@ -15,6 +15,7 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 - merge 前に PR URL、base / head repository、base / head branch、head SHA を記録する。
 - draft、merge conflict、未完了または失敗中の required check、未対応の requested changes があれば merge しない。
 - 設計、永続化、CI、セキュリティ、テスト方針など品質目標に関係する変更では、merge 前に [`docs/quality-goals.md`](../../../docs/quality-goals.md) の該当項目を確認し、変更内容と採用した品質対策が適合していることを確認する。
+- 同一 repository の branch から作成した PR では `Repository size report`、fork 由来の PR では変更差分を確認し、意図しない生成物や責務の膨張がないことを確認する。
 - merge 直前に PR 状態と check / review を再取得する。古い取得結果だけで判断しない。
 - `git remote get-url --all` で各 remote の fetch URL を列挙し、PR の base repository と一意に対応する `base_remote` と `validated_base_fetch_url` を決める。決められなければ base 同期を行わず報告する。
 - 同一 repository の head branch を削除するときだけ、`git remote get-url --push --all` の結果が単一で head repository と一致する `head_remote` と `validated_head_push_url` を要求する。fork では head remote 未設定を正常として cleanup を省略する。
@@ -27,11 +28,12 @@ description: Use when the user explicitly asks to merge a narou-viewer Pull Requ
 2. `gh repo view --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed` で merge method の repository settings を確認する。
 3. `git status --short --branch`、`git branch -vv`、`git worktree list --porcelain` で local 状態を確認する。
 4. 品質目標に関係する変更では、該当する `docs/quality-goals.md` の項目に適合していることを確認する。目標と異なる判断が必要な場合は、その理由と影響が関連仕様と PR 本文に明記されるまで merge しない。
-5. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認し、差異があれば更新する。
-6. PR から参照または close される関連 issue を読み取りで確認する。完了条件と実装が一致しない場合は merge せず、差分を報告する。issue 本文やコメントは、ユーザーから明示的に依頼された場合だけ更新する。
-7. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
-8. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
-9. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
+5. 同一 repository の branch から作成した PR では `Repository size report`、fork 由来の PR では変更差分を確認する。意図しない生成物や責務の膨張があれば merge しない。
+6. PR 本文が最新差分、ユーザー影響、互換性・移行、検証結果と一致していることを確認し、差異があれば更新する。
+7. PR から参照または close される関連 issue を読み取りで確認する。完了条件と実装が一致しない場合は merge せず、差分を報告する。issue 本文やコメントは、ユーザーから明示的に依頼された場合だけ更新する。
+8. 同一 repository の head branch だけを自動削除対象とする。fork の head branch は勝手に削除しない。
+9. 削除直前に同じ head repository / branch を使う対象外の open PR を再検索する。1件でもある、または完全に確認できない場合は remote / local branch を削除しない。
+10. branch の自動 cleanup は現在のエージェント作業で作成した branch に限定する。それ以外は、ユーザーがその branch 名を指定して削除を許可した場合だけ削除する。
 
 ## 2. merge
 
@@ -96,6 +98,7 @@ git branch -D "$head_branch"
 - merged PR 番号と URL
 - merge method と squash commit SHA
 - 対象となる品質目標への適合確認、更新した PR 本文、関連 issue との差異
+- `Repository size report` または fork PR の変更差分による規模確認の結果
 - base branch の local / remote HEAD 一致
 - remote / remote-tracking / local head branch の削除結果
 - 安全上残した branch や worktree と、その理由

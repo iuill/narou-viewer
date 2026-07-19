@@ -111,16 +111,26 @@ describe("ci.yml application workflow", () => {
     expect(serviceCommands.some((command) => command.includes("bun run audit:"))).toBe(false);
   });
 
-  it("starts downstream service tests after only the viewer-web build", () => {
+  it("starts E2E after only the viewer-web build and keeps API contract independent", () => {
     const { jobs } = readWorkflow("ci.yml");
 
     expect(jobs.e2e.needs).toBe("viewer-web-build");
-    expect(jobs["api-contract"].needs).toBe("viewer-web-build");
+    expect(jobs["api-contract"].needs).toBeUndefined();
 
     const e2eCommands = (jobs.e2e.steps ?? []).map((step) => step.run ?? "");
     expect(
       e2eCommands.filter((command) => command === "bash ./scripts/wait-and-download-artifact.sh"),
     ).toHaveLength(2);
+  });
+
+  it("runs the normal API contract suite once in its dedicated job", () => {
+    const { jobs } = readWorkflow("ci.yml");
+    const commands = Object.values(jobs).flatMap((job) =>
+      (job.steps ?? []).map((step) => step.run ?? ""),
+    );
+
+    expect(commands.filter((command) => command === "bun run test:api-contract")).toHaveLength(1);
+    expect(commands.some((command) => command.includes("verify:api-go:contract"))).toBe(false);
   });
 });
 

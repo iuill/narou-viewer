@@ -127,6 +127,13 @@ build まで含めて確認する場合:
 bun run verify:fast
 ```
 
+`viewer-api` を変更した場合は、Go の検証とローカル用 API contract helper を実行します。CI の通常 contract suite は独立した `Service API contract` job で 1 回だけ実行します。
+
+```bash
+bun run verify:api-go
+bun run verify:api-go:contract
+```
+
 lint / format を CLI で確認する場合:
 
 ```bash
@@ -171,6 +178,6 @@ bun run --filter @narou-viewer/viewer-web test:unit
 
 ## リポジトリ規模の確認
 
-公開 repository では、commit 履歴や coverage 推移をまとめた静的統計ページは生成しません。リポジトリ規模や言語別 footprint は、Pull Request ごとに CI の `Repository size report` で確認します。
+公開 repository では、commit 履歴や coverage 推移をまとめた静的統計ページは生成しません。同一 repository の branch から作成した Pull Request では、専用 workflow がコメントする `Repository size report` を maintainer が確認します。fork 由来の Pull Request では書き込み workflow を実行せず、maintainer が変更差分から規模、意図しない生成物、責務の膨張を確認します。
 
 将来 public repository 上で長期的な coverage 推移や履歴ダッシュボードが必要になった場合は、public repository の初回 commit 以降を対象にした新しい記録方式として設計します。

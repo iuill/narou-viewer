@@ -3,15 +3,17 @@
 ## 1. 目的
 
 - Playwright を使う E2E はブラウザ起動、複数サービス起動、fixture 初期化を含むため、回帰確認としては有効だが日常的な変更確認には遅い。
-- コード変更時は、まず Playwright を使わない高速なコードレベルテストを通し、その後に Playwright E2E を実行する。
+- コード変更時は、まず Playwright を使わない高速なコードレベルテストを通し、必要な service 境界を API contract で確認してから Playwright E2E を実行する。
 - この文書は、`narou-viewer` に追加する高速テストの方法、採用ツール、優先すべきテスト観点、実行ルールを定義する。
 
 ## 2. 基本方針
 
-- テストは次の 2 段階で運用する。
+- テストは次の 3 段階で運用する。
   1. 高速コードレベルテスト
-  2. Playwright E2E
+  2. API contract
+  3. Playwright E2E
 - 日常の変更確認、PR 作成前、CI の前段では高速コードレベルテストを優先する。
+- API contract は、ブラウザを起動せずに `viewer-api` と `novel-fetcher` の HTTP 外部契約を確認する service-level black-box test として扱う。
 - Playwright E2E は、ブラウザ実動作や複数サービス連携を確認する最終ゲートとして扱う。
 - 高速テストは、できるだけブラウザ起動や Docker 起動を避け、Node 互換 CLI だけで完結させる。
 - このリポジトリの検証導線は `bun run ...` を標準入口にするが、`Vitest` / `Vite` / `TypeScript` / `Playwright` 自体は Node エコシステムのツールとして扱う。
@@ -67,7 +69,14 @@
   - API route が `httptest` で期待する status / body / header を返すか
 - 境界条件、データ契約、永続化、ETag、HTTP ステータスの確認に使う。
 
-### 4.3 Playwright E2E
+### 4.3 API contract
+
+- `viewer-api` の内部 package を import せず、`API_BASE_URL` に対する HTTP response だけで request、response、status、error shape を確認する。
+- CI の通常 suite は fixture 専用の独立 job で 1 回実行し、各 service の検証 job では重複実行しない。
+- ローカルの変更範囲別確認では `bun run verify:api-go:contract` を使い、直接起動した `viewer-api` と `novel-fetcher` の Go binary に同じ suite を流す。
+- destructive contract は通常の mutation と分離し、fixture 専用環境と削除対象を明示した場合だけ実行する。詳細は [`tests/api-contract/README.md`](../../tests/api-contract/README.md) を参照する。
+
+### 4.4 Playwright E2E
 
 - UI 操作、複数サービス間連携、レスポンシブ表示、スクリーンショット、ブラウザ依存挙動を確認する。
 - 高速コードレベルテストで担保できない部分だけを残し、回帰の主戦場にしすぎない。
@@ -233,7 +242,8 @@ bun run e2e:test:container
 
 ### 6.2 CI
 
-- application CI は独立した job を並列に流し、`viewer-web-build` 完了後に Playwright E2E matrix を開始する。TypeScript coverage 閾値付き unit test、各 Go service の検証、API contract はそれぞれ独立した品質ゲートとして同じ workflow 内で確認する。
+- application CI は役割別の job を可能な範囲で並列に流し、`viewer-web-build` 完了後に Playwright E2E matrix を開始する。TypeScript coverage 閾値付き unit test、各 Go service の検証、API contract はそれぞれ独立した品質ゲートとして同じ workflow 内で確認する。
+- API contract の通常 suite は fixture 専用の独立 job で 1 回だけ実行する。`bun run verify:api-go:contract` は、同じ suite を直接起動した Go binary に対して流すローカルの変更範囲別確認として維持する。
 - 依存・toolchain 監査は application CI から分離した workflow で PR、main push、manual dispatch、週次実行を扱う。E2E の依存先には追加せず、監査によって application CI の critical path を延ばさない。
 - repository-size report は `pull-requests: write` 権限を application CI から分離した PR 専用 workflow で実行する。
 - 公開入口の TLS / 認証を含む確認は、配置先や前段 proxy の責務に応じて個別に行う。app repository の常設 CI では、汎用 self-host sample とアプリ本体の検証に留める。

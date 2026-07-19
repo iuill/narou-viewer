@@ -11,6 +11,7 @@
 
 - [`testing/testing-strategy.md`](testing/testing-strategy.md): 高速コードレベルテストと E2E の役割分担
 - [`testing/e2e-setup.md`](testing/e2e-setup.md): E2E セットアップ、Codespaces 差分、smoke、成果物運用
+- [`../tests/api-contract/README.md`](../tests/api-contract/README.md): API contract suite、fixture 必須 mode、destructive contract の安全な実行手順
 
 ## 開発
 
