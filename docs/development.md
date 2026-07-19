@@ -4,6 +4,8 @@
 
 ## Dev Container セットアップ
 
+以下の Dev Container 手順は Linux ホストで検証しています。ネイティブ Windows ホストでは、`${localEnv:HOME}`、ホスト側の `bash`、bind mount を含む現在の初期化経路は未検証です。Windows から利用する場合は、この制約を理解したうえで WSL などの Linux 環境を優先してください。
+
 1. このリポジトリを VS Code で開きます。
    - 複数の git worktree を別 Dev Container として同時起動する場合は、各 worktree フォルダ自体を VS Code で開きます。親フォルダを VS Code workspace として開く運用とは混ぜないでください。
    - 2 つ目以降の worktree では `.devcontainer/.env.example` を `.devcontainer/.env` にコピーし、ホスト側公開ポートを重複しない値へ変更してください。通常の単一 Dev Container では `.devcontainer/.env` は不要です。
@@ -12,7 +14,7 @@
    - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.25.12 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) も `bun add -g` で固定版インストールされます。coding agent 向けのブラウザ操作 CLI として `@playwright/cli` (`playwright-cli`) も固定版インストールされ、Go LSP の `gopls` も導入されます。
    - Dev Container は `${localEnv:HOME}/.codex/auth.json` だけを `/home/node/.codex/auth.json` へ read-write で bind mount します。ローカルでは Dev Container を開く前にホスト側で `codex login` を実行しておくと、その認証を複数の repository / worktree のコンテナから共有できます。`config.toml`、session、history、database、log など `.codex` 配下の他の状態は共有しません。
-   - 認証ファイルがまだ存在しない場合は `initializeCommand` が権限 `0600` の空ファイルを作るため、コンテナ起動後に `codex login` できます。GitHub Codespaces ではローカルホストの認証は引き継がれないため、Codespace 内で別途ログインしてください。
+   - 認証ファイルがまだ存在しない場合は `initializeCommand` が権限 `0600` の空ファイルを作るため、コンテナ起動後に `codex login` できます。`auth.json` 自体が bind mount point になるため、コンテナ内の `codex logout` ではファイルを削除できない場合があります。認証情報を完全に削除する場合は、Dev Container を停止してホスト側で `codex logout` を実行するか、`${HOME}/.codex/auth.json` を削除してください。GitHub Codespaces ではローカルホストの認証は引き継がれないため、Codespace 内で別途ログインし、削除が必要な場合も Codespace の shell から `codex logout` または `${HOME}/.codex/auth.json` の削除を行ってください。
    - GitHub CLI はホストの `${HOME}/.config/gh-devcontainers` をコンテナの `/home/node/.config/gh` へ read-write で bind mountし、`GH_CONFIG_DIR` も同じコンテナ内パスへ設定します。初回はホスト側で `GH_CONFIG_DIR="${HOME}/.config/gh-devcontainers" gh auth login --insecure-storage` を実行してください。OS の credential store はコンテナから参照できないため、Dev Container 専用ディレクトリへ保存します。このディレクトリには平文の token が含まれるので Git 管理せず、他ユーザーへ公開しないでください。
    - GitHub CLI の専用設定ディレクトリがまだ存在しない場合は `initializeCommand` が権限 `0700` で作成します。GitHub Codespaces ではローカルホストの設定は引き継がれないため、Codespace 内で別途 `gh auth login` を実行してください。
    - コンテナ起動時に `.github/skills` が `.agents/skills` へのシンボリックリンクとして自動作成され、`GitHub Copilot CLI` など `.github/skills` を参照する環境から project skills として見える形になります。
@@ -47,7 +49,7 @@ PWA のインストール確認を行う場合は、`bun run --filter @narou-vie
 
 ## git worktree を Dev Container で並行利用する場合
 
-Windows ホスト側で `git worktree add` すると、worktree の `.git` 参照や Git 内部メタデータに Windows パスが入り、Dev Container 内で解決できない場合があります。worktree は Dev Container 内で作成してください。
+ネイティブ Windows ホストでの現在の Dev Container 初期化経路は未検証です。Windows ホスト側で `git worktree add` すると、worktree の `.git` 参照や Git 内部メタデータに Windows パスが入り、Dev Container 内で解決できない場合があります。Windows から試行する場合も、worktree は Dev Container 内で作成してください。
 
 既存 clone を並行開発用の親フォルダ配下へ移す場合の例:
 

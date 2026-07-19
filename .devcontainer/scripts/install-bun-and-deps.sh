@@ -20,10 +20,19 @@ remove_line_from_file() {
   local file_path="$1"
   local line="$2"
   local temp_file
+  local grep_status
 
   if [[ -f "${file_path}" ]]; then
     temp_file="$(mktemp)"
-    grep -Fvx -- "${line}" "${file_path}" >"${temp_file}" || true
+    if grep -Fvx -- "${line}" "${file_path}" >"${temp_file}"; then
+      :
+    else
+      grep_status=$?
+      if ((grep_status != 1)); then
+        rm -f "${temp_file}"
+        return "${grep_status}"
+      fi
+    fi
     mv "${temp_file}" "${file_path}"
   fi
 }
