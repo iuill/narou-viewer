@@ -77,6 +77,10 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 	case "reader-assistant/chat/stream":
 		s.handleReaderAssistantChat(w, r, novelID, true)
 	default:
+		if strings.HasPrefix(suffix, "extraction-jobs/") {
+			s.handleExtractionJobControl(w, r, novelID, trimPathValue(strings.TrimPrefix(suffix, "extraction-jobs/")))
+			return
+		}
 		writeError(w, http.StatusNotFound, "Not found.")
 	}
 }
@@ -388,6 +392,46 @@ func (s *Server) handleExtractionJobs(w http.ResponseWriter, r *http.Request, no
 	default:
 		methodOnly(w, r, http.MethodGet, http.MethodPost)
 	}
+}
+
+func (s *Server) handleExtractionJobControl(w http.ResponseWriter, r *http.Request, novelID string, jobID string) {
+	if !methodOnly(w, r, http.MethodPatch) {
+		return
+	}
+	body, ok := decodeObjectOrBadRequest(w, r)
+	if !ok {
+		return
+	}
+	action, ok := body["action"].(string)
+	if !ok || (action != "pause" && action != "resume" && action != "cancel") {
+		writeError(w, http.StatusBadRequest, "action must be pause, resume, or cancel.")
+		return
+	}
+	job, err := s.extractionJobQueue.Control(r.Context(), novelID, jobID, extractionjobs.ControlInput{Action: action})
+	if writeStateSchemaError(w, err) {
+		return
+	}
+	switch {
+	case errors.Is(err, extractionjobs.ErrNovelNotFound), errors.Is(err, extractionjobs.ErrJobNotFound):
+		writeError(w, http.StatusNotFound, "Character job not found.")
+		return
+	case errors.Is(err, extractionjobs.ErrInvalidJobAction):
+		writeError(w, http.StatusConflict, "The requested action is not allowed for the current job status.")
+		return
+	case errors.Is(err, extractionjobs.ErrJobSave):
+		writeError(w, http.StatusInternalServerError, "Character job could not be saved.")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if action == "pause" || action == "cancel" {
+		s.extractionJobs.Cancel(job.JobID)
+	}
+	if action == "resume" {
+		s.extractionJobs.Kick(s.ctx)
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) writeCharacterJobsResult(w http.ResponseWriter, result extractionjobs.JobsResponse, err error) {

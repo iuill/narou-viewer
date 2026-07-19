@@ -244,8 +244,8 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after StartBackground: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
-	if jobs[0].Status != "queued" {
-		t.Fatalf("StartBackground should recover running jobs, got status %q", jobs[0].Status)
+	if jobs[0].Status != extractdomain.JobStatusInterrupted {
+		t.Fatalf("StartBackground should mark running jobs interrupted, got status %q", jobs[0].Status)
 	}
 }
 
@@ -755,6 +755,35 @@ func TestCharacterJobSubmitStoresGenerationStrategy(t *testing.T) {
 	if firstJob := aiJobs["jobs"].([]any)[0].(map[string]any); firstJob["generationStrategy"] != "parallel_identity" {
 		t.Fatalf("AI jobs response should include generationStrategy: %+v", firstJob)
 	}
+}
+
+func TestCharacterJobControlEndpoint(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	server := handler.(*Server)
+	server.cancel()
+	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
+	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
+	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{"upToEpisodeIndex": "1"}, http.StatusAccepted)
+	jobID := created["jobId"].(string)
+	path := "/api/library/novels/" + novelID + "/extraction-jobs/" + jobID
+	paused := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "pause"}, http.StatusOK)
+	if paused["status"] != extractdomain.JobStatusPaused {
+		t.Fatalf("pause response = %+v", paused)
+	}
+	resumed := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "resume"}, http.StatusOK)
+	if resumed["status"] != extractdomain.JobStatusQueued {
+		t.Fatalf("resume response = %+v", resumed)
+	}
+	canceled := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "cancel"}, http.StatusOK)
+	if canceled["status"] != extractdomain.JobStatusCanceled {
+		t.Fatalf("cancel response = %+v", canceled)
+	}
+	requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "resume"}, http.StatusConflict)
 }
 
 func TestReaderAssistantToolContextUsesBoundaryTools(t *testing.T) {

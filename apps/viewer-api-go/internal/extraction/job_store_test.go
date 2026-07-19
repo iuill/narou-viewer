@@ -349,6 +349,32 @@ func TestRecoverRunningJobsMarksJobsInterrupted(t *testing.T) {
 	}
 }
 
+func TestControlJobTransitionsPauseResumeAndCancel(t *testing.T) {
+	stateDir := t.TempDir()
+	job := Job{JobID: "job-control", RequestedUpToEpisodeIndex: "2", Status: JobStatusRunning, CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := SaveJob(stateDir, "novel-1", job); err != nil {
+		t.Fatal(err)
+	}
+	pausing, err := ControlJob(stateDir, "novel-1", job.JobID, "pause")
+	if err != nil || pausing.Status != JobStatusPausing {
+		t.Fatalf("pause = %+v, %v", pausing, err)
+	}
+	if err := FinalizePausingJob(stateDir, "novel-1", job.JobID); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := ControlJob(stateDir, "novel-1", job.JobID, "resume")
+	if err != nil || resumed.Status != JobStatusQueued {
+		t.Fatalf("resume = %+v, %v", resumed, err)
+	}
+	canceled, err := ControlJob(stateDir, "novel-1", job.JobID, "cancel")
+	if err != nil || canceled.Status != JobStatusCanceled || canceled.FinishedAt == nil {
+		t.Fatalf("cancel = %+v, %v", canceled, err)
+	}
+	if _, err := ControlJob(stateDir, "novel-1", job.JobID, "resume"); !errors.Is(err, ErrInvalidJobAction) {
+		t.Fatalf("resume canceled job error = %v", err)
+	}
+}
+
 func TestRecoverRunningJobsDoesNotRequeueUnsupportedCheckpoint(t *testing.T) {
 	stateDir := t.TempDir()
 	if err := SaveJob(stateDir, "novel-checkpoint", Job{

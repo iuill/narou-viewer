@@ -14,13 +14,16 @@ type JobCoordinator struct {
 	stateDir string
 	process  JobProcessor
 
-	mu sync.Mutex
+	mu       sync.Mutex
+	activeMu sync.Mutex
+	active   map[string]context.CancelFunc
 }
 
 func NewJobCoordinator(stateDir string, process JobProcessor) *JobCoordinator {
 	return &JobCoordinator{
 		stateDir: stateDir,
 		process:  process,
+		active:   map[string]context.CancelFunc{},
 	}
 }
 
@@ -41,6 +44,18 @@ func (c *JobCoordinator) Kick(ctx context.Context) {
 		ctx = context.Background()
 	}
 	go c.processJobs(ctx)
+}
+
+func (c *JobCoordinator) Cancel(jobID string) {
+	if c == nil {
+		return
+	}
+	c.activeMu.Lock()
+	cancel := c.active[jobID]
+	c.activeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (c *JobCoordinator) processJobs(ctx context.Context) {
@@ -65,7 +80,19 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		if next == nil {
 			return
 		}
-		if !c.process(ctx, next.NovelID, next.Job) {
+		jobCtx, cancel := context.WithCancel(ctx)
+		c.activeMu.Lock()
+		c.active[next.Job.JobID] = cancel
+		c.activeMu.Unlock()
+		processed := c.process(jobCtx, next.NovelID, next.Job)
+		cancel()
+		c.activeMu.Lock()
+		delete(c.active, next.Job.JobID)
+		c.activeMu.Unlock()
+		if err := extractdomain.FinalizePausingJob(c.stateDir, next.NovelID, next.Job.JobID); err != nil {
+			return
+		}
+		if !processed && ctx.Err() != nil {
 			return
 		}
 	}

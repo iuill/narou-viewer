@@ -99,3 +99,37 @@ func TestJobCoordinatorProcessJobsStopsWhenContextCanceled(t *testing.T) {
 		t.Fatal("processor should not be called for a canceled context")
 	}
 }
+
+func TestJobCoordinatorCancelStopsRunningJobAndFinalizesPause(t *testing.T) {
+	stateDir := t.TempDir()
+	job := extractdomain.Job{JobID: "job-pause", RequestedUpToEpisodeIndex: "1", Status: extractdomain.JobStatusQueued, CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := extractdomain.SaveJob(stateDir, "novel-1", job); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	coordinator := NewJobCoordinator(stateDir, func(ctx context.Context, _ string, _ extractdomain.Job) bool {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return false
+	})
+	coordinator.Kick(context.Background())
+	<-started
+	if _, err := extractdomain.ControlJob(stateDir, "novel-1", job.JobID, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.Cancel(job.JobID)
+	<-stopped
+	for index := 0; index < 100; index++ {
+		jobs, _, err := extractdomain.LoadJobs(stateDir, "novel-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(jobs) == 1 && jobs[0].Status == extractdomain.JobStatusPaused {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("job was not finalized as paused")
+}
