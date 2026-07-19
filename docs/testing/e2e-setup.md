@@ -69,7 +69,7 @@ TTY なしのローカル実行環境では、`e2e:test:container` が `script` 
 
 `e2e:services:up` は `viewer-api-e2e` と `novel-fetcher-e2e` を起動する。AI 生成は `viewer-api` の internal AI module が扱う。
 
-`novel-fetcher-e2e` は既定では `golang:1.25.12-bookworm` 上で dev 起動する。`NOVEL_FETCHER_E2E_BINARY_PATH` と `NOVEL_FETCHER_E2E_IMAGE` を指定すると、事前ビルドした `novel-fetcher` binary を軽量 runtime image 上で起動できる。GitHub Actions では `NOVEL_FETCHER_E2E_BINARY_PATH=/workspace/.tmp/e2e-binaries/novel-fetcher` と `NOVEL_FETCHER_E2E_IMAGE=busybox:1.37` を使い、Go toolchain image の pull を避ける。
+`novel-fetcher-e2e` と `viewer-api-e2e` は既定では `golang:1.25.12-bookworm` 上で dev 起動する。各 service の E2E binary path と image を指定すると、事前 build した binary を軽量 runtime image 上で起動できる。GitHub Actions の Playwright E2E job では、同じ workflow run で build した両 service の binary artifact と `busybox:1.37` を使い、Go toolchain image の pull を避ける。`Service API contract` job は web と Playwright を起動せず、既定の Go dev container で `viewer-api` と `novel-fetcher` だけを起動する。
 
 `playwright-e2e` は `ghcr.io/iuill/narou-viewer-playwright` の image を base にする。image は公開リポジトリ [`iuill/narou-viewer-playwright-images`](https://github.com/iuill/narou-viewer-playwright-images) で daily build し、Chromium headless shell / WebKit / Bun / curl / Noto CJK fonts だけを含める。full Chromium と Firefox を含まないため、公式 Playwright image より CI の pull cost を抑えられる。既定 tag は `.devcontainer/docker-compose.yml` の `PLAYWRIGHT_IMAGE_VERSION` で管理し、`latest` ではなく `@playwright/test` と揃う固定 tag を使う。`@playwright/test` を更新するときは image 側の Playwright version とあわせて更新する。
 

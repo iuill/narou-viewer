@@ -52,6 +52,7 @@ bun run e2e:test:smoke:container
 ### GitHub Actions
 
 - 通常の CI では `E2E_SERVICE_USER=0:0 bun run e2e:test:container -- --project=...` の系統を使う。
+- 常設 CI は `pc-xga` と `iphone-16e` の各 project で suite 全体を実行し、read-only smoke を代替 gate にはしない。
 - read-only smoke spec だけを局所的に見る場合は `bun run e2e:test:smoke` を使う。
 
 ### Docker が使えないコンテナ環境

@@ -50,7 +50,7 @@
 - ユーザーへの応答、commit message、PR title / body / comment は、特段の指定がない限り日本語で書く。
 - PR は、特段の理由や明示的な指定がない限り draft ではなく ready for review で起票する。
 - PR を作成・更新する前に `.github/pull_request_template.md` を読み、各セクションを省略せず、該当しない項目にも理由を記載する。追いコミット後は変更内容、ユーザー影響、互換性・移行、検証結果が PR 本文と一致しているか再確認する。
-- merge 前の最終確認では、設計、永続化、CI、セキュリティ、テスト方針など品質目標に関係する変更について、該当する `docs/quality-goals.md` の項目に適合しているかを確認する。PR 本文は実装、仕様、検証結果と一致させる。関連 issue は読み取りで完了条件と照合し、差異があれば merge せず報告する。issue 本文やコメントは、ユーザーから明示的に依頼された場合だけ更新する。
+- merge 前の最終確認では、設計、永続化、CI、セキュリティ、テスト方針など品質目標に関係する変更について、該当する `docs/quality-goals.md` の項目に適合しているかを確認する。同一 repository の branch から作成した PR では `Repository size report`、fork 由来の PR では変更差分を確認し、意図しない生成物や責務の膨張がないかを確認する。PR 本文は実装、仕様、検証結果と一致させる。関連 issue は読み取りで完了条件と照合し、差異があれば merge せず報告する。issue 本文やコメントは、ユーザーから明示的に依頼された場合だけ更新する。
 - PR の merge はユーザーが明示的に依頼した場合だけ行い、squash merge を使用する。GitHub repository settings は squash merge だけを許可する運用とし、merge commit と rebase merge は無効であることを前提とする。merge 後は `.agents/skills/pr-merge/SKILL.md` に従い、base branch の local HEAD を remote HEAD へ同期し、安全に削除できる remote / local の作業 branch を片付けてから完了とする。
 - 仕様、セットアップ、データ契約に影響する変更をした場合は、関連ドキュメントも更新する。
 - 破壊的な git 操作は避ける。
@@ -139,7 +139,6 @@
 - `viewer-api` のみ:
   - `bun run lint`
   - `bun run verify:api-go`
-  - `bun run verify:api-go:contract`
 - `novel-fetcher` のみ:
   - `bun run lint`
   - `bun run verify:novel-fetcher`
@@ -152,6 +151,9 @@
   - `bun run lint`
   - `bun run test:unit`
   - `bun run build`
+- `viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合:
+  - E2E の前に `bun run verify:api-go:contract`
+  - この helper は直接起動した両 service の Go binary に通常の contract suite を流すローカル確認とし、CI では独立した `Service API contract` job で同 suite を 1 回だけ実行する。
 
 ## エージェント向け補助
 

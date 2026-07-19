@@ -28,7 +28,6 @@ description: Use when changing code in narou-viewer and you need to choose or ru
 ```bash
 bun run lint
 bun run verify:api-go
-bun run verify:api-go:contract
 ```
 
 ### Go fetcher sidecar のみ
@@ -57,6 +56,16 @@ bun run build
 ```
 
 `services/novel-fetcher` も含む場合は、上記に加えて `bun run verify:novel-fetcher` を実行する。
+
+### HTTP contract 境界を変更した場合
+
+`viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合は、変更範囲の既定検証に加えて E2E の前に次を実行する。parser 内部だけの変更など、HTTP 契約に触れない場合は必須としない。
+
+```bash
+bun run verify:api-go:contract
+```
+
+この helper は、直接起動した両 service の Go binary に通常の contract suite を流すローカル確認とする。CI の通常 suite は独立した `Service API contract` job で 1 回だけ実行する。
 
 ### 高速確認をまとめて行う場合
 
@@ -87,4 +96,4 @@ bun run verify
 
 - 実行時挙動、画面遷移、複数サービス連携、キャッシュや service worker 互換性に触れたら `bun run e2e:test:container` を優先する。
 - E2E の前に fixture や常駐サービスが怪しい場合は [`.agents/skills/e2e-recovery/SKILL.md`](../e2e-recovery/SKILL.md) を使う。
-- read-only smoke だけで足りる場合は [`.agents/skills/e2e-smoke/SKILL.md`](../e2e-smoke/SKILL.md) を使う。
+- generic self-host origin などを read-only で局所確認する場合は [`.agents/skills/e2e-smoke/SKILL.md`](../e2e-smoke/SKILL.md) を使う。smoke は通常の application E2E や PR / main の 2 browser 全 suite を代替しない。

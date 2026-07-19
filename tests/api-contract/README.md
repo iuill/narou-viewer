@@ -13,7 +13,7 @@ API_BASE_URL=http://viewer-api-e2e:18080 bun run test:api-contract
 API_BASE_URL=http://viewer-api-e2e:18080 API_CONTRACT_MUTATING=1 bun run test:api-contract
 ```
 
-CI や Phase 1 gate では fixture が空の場合に落とすため、次の strict mode を使います。
+CI など fixture の完全性を必須にする実行では、fixture が空の場合に落とすため次の strict mode を使います。
 
 ```bash
 API_BASE_URL=http://viewer-api-e2e:18080 API_CONTRACT_MUTATING=1 API_CONTRACT_REQUIRE_FIXTURE=1 bun run test:api-contract
@@ -40,10 +40,11 @@ Dev Container 内から service name で直接叩く場合は、上記の `API_B
 
 ## 方針
 
-- Go 実装にも同じ suite を流せるよう、HTTP response のみを見る。
+- `viewer-api` の内部実装に依存しないよう、HTTP response のみを見る。
 - `API_BASE_URL` は必須。未指定時の既定値は置かず、対象 API の取り違えを避ける。
 - timestamp や環境依存の service 状態は型と必須 field を確認し、値の完全一致は避ける。
 - mutation を伴うテストは `API_CONTRACT_MUTATING=1` で明示的に有効化する。
 - fetcher の destructive mutation を伴うテストは `API_CONTRACT_DESTRUCTIVE_FETCHER=1` と `API_CONTRACT_DESTRUCTIVE_FETCHER_TARGET_NOVEL_ID` でさらに明示的に有効化する。
 - fixture 必須 gate は `API_CONTRACT_REQUIRE_FIXTURE=1` で明示的に有効化する。
 - snapshot は初期段階では使わず、required fields / nullable fields / error shape を matcher で固定する。
+- CI では fixture 専用の `Service API contract` job で通常の contract suite を 1 回実行し、destructive contract を同じ job で別途明示的に実行する。`bun run verify:api-go:contract` は、直接起動した Go binary に同じ通常 suite を流すローカル確認用とする。

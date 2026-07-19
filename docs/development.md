@@ -106,7 +106,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 ## Go ツールチェーン方針
 
 - Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。CI でも脆弱性検査とは別 step で実行するため、どの方針に違反したかを job 上で区別できます。
-- Go は `services/novel-fetcher` の取得 sidecar 用に使います。Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
+- Go は `apps/viewer-api-go` と `services/novel-fetcher` で使います。どちらも Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。
 - `bun run verify:fast` は従来どおり Bun / TypeScript workspace の高速確認です。`novel-fetcher` を変更した場合は、別途 `bun run verify:novel-fetcher` も実行してください。
@@ -125,6 +125,18 @@ build まで含めて確認する場合:
 
 ```bash
 bun run verify:fast
+```
+
+`viewer-api` を変更した場合は Go の検証を実行します。
+
+```bash
+bun run verify:api-go
+```
+
+`viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合は、E2E の前にローカル用 API contract helper を実行します。CI の通常 contract suite は独立した `Service API contract` job で 1 回だけ実行します。
+
+```bash
+bun run verify:api-go:contract
 ```
 
 lint / format を CLI で確認する場合:
@@ -171,6 +183,6 @@ bun run --filter @narou-viewer/viewer-web test:unit
 
 ## リポジトリ規模の確認
 
-公開 repository では、commit 履歴や coverage 推移をまとめた静的統計ページは生成しません。リポジトリ規模や言語別 footprint は、Pull Request ごとに CI の `Repository size report` で確認します。
+公開 repository では、commit 履歴や coverage 推移をまとめた静的統計ページは生成しません。同一 repository の branch から作成した Pull Request では、専用 workflow がコメントする `Repository size report` を maintainer が確認します。fork 由来の Pull Request では書き込み workflow を実行せず、maintainer が変更差分から規模、意図しない生成物、責務の膨張を確認します。
 
 将来 public repository 上で長期的な coverage 推移や履歴ダッシュボードが必要になった場合は、public repository の初回 commit 以降を対象にした新しい記録方式として設計します。
