@@ -50,6 +50,22 @@ export async function fetchAiGenerationJobs(): Promise<AiGenerationJobsResponse>
   return requestJson<AiGenerationJobsResponse>("/api/ai-generation/jobs", undefined, "キャラ生成履歴の取得に失敗しました。");
 }
 
+export async function controlAiGenerationJob(
+  novelId: string,
+  jobId: string,
+  action: "pause" | "resume" | "cancel"
+): Promise<void> {
+  await requestJson(
+    `/api/library/novels/${encodeURIComponent(novelId)}/extraction-jobs/${encodeURIComponent(jobId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action })
+    },
+    "抽出ジョブの操作に失敗しました。"
+  );
+}
+
 export async function fetchAiUsage(): Promise<AiUsageResponse> {
   return requestJson<AiUsageResponse>("/api/ai-generation/usage", undefined, "AI使用量の取得に失敗しました。");
 }

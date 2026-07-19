@@ -13,6 +13,8 @@ export type AiJobsViewProps = {
   aiGenerationCompletedJobsCount: number;
   visibleAiGenerationJobs: AiGenerationJobSummary[];
   onOpenNovelFromJob: (novelId: string) => void;
+  controllingJobId: string | null;
+  onControlJob: (novelId: string, jobId: string, action: "pause" | "resume" | "cancel") => void | Promise<void>;
 };
 
 export function AiJobsView({
@@ -25,7 +27,9 @@ export function AiJobsView({
   aiGenerationFailedJobsCount,
   aiGenerationCompletedJobsCount,
   visibleAiGenerationJobs,
-  onOpenNovelFromJob
+  onOpenNovelFromJob,
+  controllingJobId,
+  onControlJob
 }: AiJobsViewProps) {
   return <div className="ai-workspace-body">
           {aiGenerationJobsError ? <p className="message error">{aiGenerationJobsError}</p> : null}
@@ -67,7 +71,7 @@ export function AiJobsView({
                     </div>
                     <div className="library-queue-card-badges">
                       <span className={`queue-task-badge status-${job.status}`}>
-                        {job.status === "incompatible" ? "互換性なし・要復旧" : job.status}
+                        {formatAiGenerationJobStatus(job.status)}
                       </span>
                     </div>
                   </div>
@@ -81,6 +85,21 @@ export function AiJobsView({
                     <button onClick={() => onOpenNovelFromJob(job.novelId)} type="button">
                       作品を開く
                     </button>
+                    {job.status === "queued" || job.status === "running" ? (
+                      <button disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.novelId, job.jobId, "pause")} type="button">
+                        一時停止
+                      </button>
+                    ) : null}
+                    {job.status === "paused" || job.status === "interrupted" ? (
+                      <button disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.novelId, job.jobId, "resume")} type="button">
+                        再開
+                      </button>
+                    ) : null}
+                    {["queued", "running", "pausing", "paused", "interrupted"].includes(job.status) ? (
+                      <button className="danger-button" disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.novelId, job.jobId, "cancel")} type="button">
+                        取消
+                      </button>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -96,6 +115,20 @@ export function AiJobsView({
           )}
 
   </div>;
+}
+
+function formatAiGenerationJobStatus(status: AiGenerationJobSummary["status"]): string {
+  return ({
+    queued: "待機中",
+    running: "実行中",
+    pausing: "停止処理中",
+    paused: "一時停止",
+    interrupted: "中断・再開可能",
+    canceled: "取消済み",
+    completed: "完了",
+    failed: "失敗",
+    incompatible: "互換性なし・要復旧"
+  } satisfies Record<AiGenerationJobSummary["status"], string>)[status];
 }
 
 function formatAiGenerationJobTarget(episodeIndex: string): string {

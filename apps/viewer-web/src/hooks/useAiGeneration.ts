@@ -147,6 +147,8 @@ export function useAiGeneration({
     extractionStrategyModelsDraft: settings.extractionStrategyModelsDraft,
     extractionRuntimeDraft: settings.extractionRuntimeDraft,
     completedJobs: jobs.completedJobs,
+    controllingJobId: jobs.controllingJobId,
+    controlJob: jobs.controlJob,
     defaultProfileDraft: profileSelection.defaultProfile,
     editingProfileDraft: profileSelection.editingProfile,
     editingProfileId: settings.editingProfileId,

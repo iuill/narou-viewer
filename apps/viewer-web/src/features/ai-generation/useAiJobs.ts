@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { fetchAiGenerationJobs } from "./api";
+import { controlAiGenerationJob, fetchAiGenerationJobs } from "./api";
 import type { AiGenerationJobsResponse } from "./types";
 import { getVisibleAiGenerationJobs, partitionAiGenerationJobs, type AiGenerationJobFilter } from "./model";
 
@@ -8,6 +8,7 @@ export function useAiJobs() {
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [isJobsLoading, setIsJobsLoading] = useState(false);
   const [jobFilter, setJobFilter] = useState<AiGenerationJobFilter>("active");
+  const [controllingJobId, setControllingJobId] = useState<string | null>(null);
 
   const jobBuckets = useMemo(() => partitionAiGenerationJobs(jobs?.jobs), [jobs]);
   const visibleJobs = useMemo(
@@ -34,9 +35,23 @@ export function useAiJobs() {
     }
   }, []);
 
+  const controlJob = useCallback(async (novelId: string, jobId: string, action: "pause" | "resume" | "cancel") => {
+    setControllingJobId(jobId);
+    try {
+      await controlAiGenerationJob(novelId, jobId, action);
+      await loadJobs({ background: true });
+    } catch (controlError) {
+      setJobsError(controlError instanceof Error ? controlError.message : "Unknown error");
+    } finally {
+      setControllingJobId(null);
+    }
+  }, [loadJobs]);
+
   return {
     activeJobs: jobBuckets.active,
     completedJobs: jobBuckets.completed,
+    controllingJobId,
+    controlJob,
     failedJobs: jobBuckets.failed,
     hasJobs: jobs !== null,
     isJobsLoading,
