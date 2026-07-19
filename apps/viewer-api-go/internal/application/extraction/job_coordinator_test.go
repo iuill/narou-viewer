@@ -100,6 +100,17 @@ func TestJobCoordinatorProcessJobsStopsWhenContextCanceled(t *testing.T) {
 	}
 }
 
+func TestJobStillExecutableRejectsStoppedStaleSelection(t *testing.T) {
+	jobs := []extractdomain.Job{{JobID: "job-1", Status: extractdomain.JobStatusPaused}}
+	if jobStillExecutable(jobs, "job-1") {
+		t.Fatal("paused job selected before a control request must not start")
+	}
+	jobs[0].Status = extractdomain.JobStatusQueued
+	if !jobStillExecutable(jobs, "job-1") {
+		t.Fatal("queued job should remain executable")
+	}
+}
+
 func TestJobCoordinatorCancelStopsRunningJobAndFinalizesPause(t *testing.T) {
 	stateDir := t.TempDir()
 	job := extractdomain.Job{JobID: "job-pause", RequestedUpToEpisodeIndex: "1", Status: extractdomain.JobStatusQueued, CreatedAt: "2026-01-01T00:00:00Z"}

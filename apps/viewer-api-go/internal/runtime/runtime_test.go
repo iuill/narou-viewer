@@ -153,8 +153,8 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after StartBackground: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
-	if jobs[0].Status != "queued" {
-		t.Fatalf("StartBackground should recover running jobs, got status %q", jobs[0].Status)
+	if jobs[0].Status != extractdomain.JobStatusInterrupted {
+		t.Fatalf("StartBackground should mark running jobs interrupted, got status %q", jobs[0].Status)
 	}
 }
 

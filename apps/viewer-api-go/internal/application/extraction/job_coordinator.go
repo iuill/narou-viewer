@@ -72,7 +72,7 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		}
 		var next *extractdomain.JobWithNovel
 		for i := range records {
-			if records[i].Job.Status == "queued" || records[i].Job.Status == "running" {
+			if records[i].Job.Status == extractdomain.JobStatusQueued || records[i].Job.Status == extractdomain.JobStatusRunning {
 				record := records[i]
 				next = &record
 			}
@@ -84,6 +84,14 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		c.activeMu.Lock()
 		c.active[next.Job.JobID] = cancel
 		c.activeMu.Unlock()
+		jobs, _, err := extractdomain.LoadJobs(c.stateDir, next.NovelID)
+		if err != nil || !jobStillExecutable(jobs, next.Job.JobID) {
+			cancel()
+			c.activeMu.Lock()
+			delete(c.active, next.Job.JobID)
+			c.activeMu.Unlock()
+			continue
+		}
 		processed := c.process(jobCtx, next.NovelID, next.Job)
 		cancel()
 		c.activeMu.Lock()
@@ -96,4 +104,13 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func jobStillExecutable(jobs []extractdomain.Job, jobID string) bool {
+	for _, job := range jobs {
+		if job.JobID == jobID {
+			return job.Status == extractdomain.JobStatusQueued || job.Status == extractdomain.JobStatusRunning
+		}
+	}
+	return false
 }
