@@ -295,7 +295,7 @@ func TestSaveJobIfNoActiveKeepsActiveJobAtomic(t *testing.T) {
 	}
 }
 
-func TestRecoverRunningJobsRequeuesInterruptedJobs(t *testing.T) {
+func TestRecoverRunningJobsMarksJobsInterrupted(t *testing.T) {
 	stateDir := t.TempDir()
 	progress := 40
 	stage := "batch"
@@ -337,12 +337,12 @@ func TestRecoverRunningJobsRequeuesInterruptedJobs(t *testing.T) {
 	for _, job := range jobs {
 		byID[job.JobID] = job
 	}
-	requeued := byID["job-running"]
-	if requeued.Status != "queued" || requeued.StartedAt != nil || requeued.FinishedAt != nil || requeued.ErrorMessage != nil {
-		t.Fatalf("running job should be reset to queued: %+v", requeued)
+	interrupted := byID["job-running"]
+	if interrupted.Status != JobStatusInterrupted || interrupted.StartedAt == nil || interrupted.FinishedAt != nil || interrupted.ErrorMessage == nil {
+		t.Fatalf("running job should be marked interrupted: %+v", interrupted)
 	}
-	if requeued.Progress == nil || *requeued.Progress != 0 || requeued.ProgressStage == nil || *requeued.ProgressStage != "recovered" {
-		t.Fatalf("recovered job should expose reset progress metadata: %+v", requeued)
+	if interrupted.Progress == nil || *interrupted.Progress != progress || interrupted.ProgressStage == nil || *interrupted.ProgressStage != "interrupted" {
+		t.Fatalf("interrupted job should retain progress metadata: %+v", interrupted)
 	}
 	if byID["job-completed"].Status != "completed" {
 		t.Fatalf("completed job should not be changed: %+v", byID["job-completed"])
