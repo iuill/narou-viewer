@@ -23,7 +23,7 @@ remove_line_from_file() {
 
   if [[ -f "${file_path}" ]]; then
     temp_file="$(mktemp)"
-    awk -v line="${line}" '$0 != line { print }' "${file_path}" >"${temp_file}"
+    grep -Fvx -- "${line}" "${file_path}" >"${temp_file}" || true
     mv "${temp_file}" "${file_path}"
   fi
 }
@@ -32,9 +32,9 @@ export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="${BUN_INSTALL}/bin:${PATH}"
 # 以下の CLI バージョンは viewer-dev/Dockerfile の ARG と一致させること。
 # Dockerfile 側で焼き込み済みならこのスクリプトはインストールをスキップする。
-OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-0.139.0}"
-GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-1.0.61}"
-PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.9}"
+OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-0.144.6}"
+GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-1.0.71}"
+PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.17}"
 SERENA_AGENT_VERSION="${SERENA_AGENT_VERSION:-1.3.0}"
 SCC_VERSION="${SCC_VERSION:-v3.7.0}"
 SCC_LINUX_X86_64_SHA256="${SCC_LINUX_X86_64_SHA256:-3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a}"
@@ -277,10 +277,12 @@ remove_line_from_file "${HOME}/.bashrc" 'export PATH="$(go env GOPATH 2>/dev/nul
 remove_line_from_file "${HOME}/.profile" 'export PATH="$(go env GOPATH 2>/dev/null)/bin:$PATH"'
 remove_line_from_file "${HOME}/.bashrc" 'if command -v go >/dev/null 2>&1; then go_path="$(go env GOPATH 2>/dev/null || true)"; if [ -n "$go_path" ]; then export PATH="$go_path/bin:$PATH"; fi; unset go_path; fi'
 remove_line_from_file "${HOME}/.profile" 'if command -v go >/dev/null 2>&1; then go_path="$(go env GOPATH 2>/dev/null || true)"; if [ -n "$go_path" ]; then export PATH="$go_path/bin:$PATH"; fi; unset go_path; fi'
+remove_line_from_file "${HOME}/.bashrc" 'if [[ "${PS1:-}" != *"[DEV]"* ]]; then PS1="\[\033[1;36m\][DEV]\[\033[0m\] ${PS1:-}"; fi'
 ensure_line_in_file "${HOME}/.bashrc" 'export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"'
 ensure_line_in_file "${HOME}/.bashrc" 'export PATH="$BUN_INSTALL/bin:$PATH"'
 ensure_line_in_file "${HOME}/.bashrc" 'export PATH="$HOME/.local/bin:$PATH"'
 ensure_line_in_file "${HOME}/.bashrc" 'export PATH="/workspace/.devcontainer/bin:$PATH"'
+ensure_line_in_file "${HOME}/.bashrc" 'if [[ "${PS1:-}" != *"[DEV]"* ]]; then PS1="[DEV] ${PS1:-}"; fi'
 ensure_line_in_file "${HOME}/.profile" 'export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"'
 ensure_line_in_file "${HOME}/.profile" 'export PATH="$BUN_INSTALL/bin:$PATH"'
 ensure_line_in_file "${HOME}/.profile" 'export PATH="$HOME/.local/bin:$PATH"'
@@ -295,6 +297,9 @@ bun run install:locked
 
 # Keep container-scoped CLIs out of the workspace lockfile while making them
 # available from the standard Bun global bin directory.
+# @playwright/cli is the coding-agent screenshot/browser-control CLI.
+# It is intentionally separate from E2E Playwright, which is pinned by
+# @playwright/test, PLAYWRIGHT_TEST_VERSION, and the playwright-e2e image tag.
 packages_to_install=()
 
 if [ "$(get_codex_version)" != "${OPENAI_CODEX_VERSION}" ]; then

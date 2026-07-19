@@ -48,9 +48,12 @@ ENV PATH=/usr/local/go/bin:${PATH}
 # コンテナ再作成のたびに install-bun-and-deps.sh がツール群を再ダウンロードしないよう
 # イメージに焼き込む。バージョンは install-bun-and-deps.sh のデフォルトと一致させること
 # (不一致の場合は postCreate 側が検出して入れ直すため壊れはしないが、焼き込みが無駄になる)。
-ARG OPENAI_CODEX_VERSION=0.139.0
-ARG GITHUB_COPILOT_VERSION=1.0.61
-ARG PLAYWRIGHT_CLI_VERSION=0.1.9
+ARG OPENAI_CODEX_VERSION=0.144.6
+ARG GITHUB_COPILOT_VERSION=1.0.71
+# Coding-agent screenshot/browser-control CLI. This is intentionally separate
+# from E2E Playwright, which is pinned by @playwright/test and the
+# playwright-e2e image tag.
+ARG PLAYWRIGHT_CLI_VERSION=0.1.17
 ARG SERENA_AGENT_VERSION=1.3.0
 ARG SCC_VERSION=v3.7.0
 ARG SCC_LINUX_X86_64_SHA256=3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a
@@ -93,7 +96,7 @@ USER node
 
 RUN curl -fsSL https://bun.sh/install | bash \
  && /home/node/.bun/bin/bun add -g "@openai/codex@${OPENAI_CODEX_VERSION}" "@github/copilot@${GITHUB_COPILOT_VERSION}" \
- && mkdir -p /home/node/.bun/install/cache
+ && mkdir -p /home/node/.bun/install/cache /home/node/.codex
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
  && /home/node/.local/bin/uv tool install -p 3.13 "serena-agent==${SERENA_AGENT_VERSION}"

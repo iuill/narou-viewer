@@ -11,6 +11,10 @@
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
    - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.25.12 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) も `bun add -g` で固定版インストールされます。coding agent 向けのブラウザ操作 CLI として `@playwright/cli` (`playwright-cli`) も固定版インストールされ、Go LSP の `gopls` も導入されます。
+   - Dev Container は `${localEnv:HOME}/.codex/auth.json` だけを `/home/node/.codex/auth.json` へ read-write で bind mount します。ローカルでは Dev Container を開く前にホスト側で `codex login` を実行しておくと、その認証を複数の repository / worktree のコンテナから共有できます。`config.toml`、session、history、database、log など `.codex` 配下の他の状態は共有しません。
+   - 認証ファイルがまだ存在しない場合は `initializeCommand` が権限 `0600` の空ファイルを作るため、コンテナ起動後に `codex login` できます。GitHub Codespaces ではローカルホストの認証は引き継がれないため、Codespace 内で別途ログインしてください。
+   - GitHub CLI はホストの `${HOME}/.config/gh-devcontainers` をコンテナの `/home/node/.config/gh` へ read-write で bind mountし、`GH_CONFIG_DIR` も同じコンテナ内パスへ設定します。初回はホスト側で `GH_CONFIG_DIR="${HOME}/.config/gh-devcontainers" gh auth login --insecure-storage` を実行してください。OS の credential store はコンテナから参照できないため、Dev Container 専用ディレクトリへ保存します。このディレクトリには平文の token が含まれるので Git 管理せず、他ユーザーへ公開しないでください。
+   - GitHub CLI の専用設定ディレクトリがまだ存在しない場合は `initializeCommand` が権限 `0700` で作成します。GitHub Codespaces ではローカルホストの設定は引き継がれないため、Codespace 内で別途 `gh auth login` を実行してください。
    - コンテナ起動時に `.github/skills` が `.agents/skills` へのシンボリックリンクとして自動作成され、`GitHub Copilot CLI` など `.github/skills` を参照する環境から project skills として見える形になります。
 3. コンテナ起動後、次を実行します。
 

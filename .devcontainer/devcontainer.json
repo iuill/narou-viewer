@@ -8,6 +8,7 @@
   "shutdownAction": "stopCompose",
   "containerEnv": {
     "DEVCONTAINER_DOCKER_PROXY_SOCKET": "/run/devcontainer-docker-proxy/docker.sock",
+    "GH_CONFIG_DIR": "/home/node/.config/gh",
     "LANG": "ja_JP.UTF-8",
     "LC_ALL": "ja_JP.UTF-8",
     "TZ": "Asia/Tokyo"
@@ -23,8 +24,13 @@
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/sshd:1": {}
   },
-  "mounts": ["source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"],
+  "mounts": [
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+    "source=${localEnv:HOME}/.codex/auth.json,target=/home/node/.codex/auth.json,type=bind",
+    "source=${localEnv:HOME}/.config/gh-devcontainers,target=/home/node/.config/gh,type=bind"
+  ],
   "forwardPorts": [5173, 8080, 24283],
+  "initializeCommand": "bash .devcontainer/scripts/ensure-host-codex-auth.sh '${localEnv:HOME}/.codex/auth.json' && bash .devcontainer/scripts/ensure-host-gh-config.sh '${localEnv:HOME}/.config/gh-devcontainers'",
   "postCreateCommand": "bash .devcontainer/scripts/install-bun-and-deps.sh",
   "postStartCommand": "(bash .devcontainer/scripts/configure-git-safe-directories.sh || true) && bash .devcontainer/scripts/ensure-docker-socket-proxy.sh && (bash .devcontainer/scripts/ensure-ssh-logfile.sh || true) && (bash .devcontainer/scripts/ensure-copilot-skills-links.sh || true)",
   "postAttachCommand": "bash .devcontainer/scripts/configure-git-safe-directories.sh || true",
