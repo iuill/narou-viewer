@@ -125,12 +125,24 @@ describe("ci.yml application workflow", () => {
 
   it("runs the normal API contract suite once in its dedicated job", () => {
     const { jobs } = readWorkflow("ci.yml");
-    const commands = Object.values(jobs).flatMap((job) =>
-      (job.steps ?? []).map((step) => step.run ?? ""),
+    const apiContractCommands = (jobs["api-contract"].steps ?? []).map(
+      (step) => step.run ?? "",
     );
 
-    expect(commands.filter((command) => command === "bun run test:api-contract")).toHaveLength(1);
-    expect(commands.some((command) => command.includes("verify:api-go:contract"))).toBe(false);
+    expect(
+      apiContractCommands.filter((command) => command.includes("bun run test:api-contract")),
+    ).toHaveLength(1);
+
+    for (const [jobName, job] of Object.entries(jobs)) {
+      const commands = (job.steps ?? []).map((step) => step.run ?? "");
+
+      if (jobName !== "api-contract") {
+        expect(commands.some((command) => command.includes("bun run test:api-contract"))).toBe(
+          false,
+        );
+      }
+      expect(commands.some((command) => command.includes("verify:api-go:contract"))).toBe(false);
+    }
   });
 });
 

@@ -139,8 +139,6 @@
 - `viewer-api` のみ:
   - `bun run lint`
   - `bun run verify:api-go`
-  - `bun run verify:api-go:contract`
-  - `verify:api-go:contract` は直接起動した Go binary に通常の contract suite を流すローカル確認とし、CI では独立した `Service API contract` job で同 suite を 1 回だけ実行する。
 - `novel-fetcher` のみ:
   - `bun run lint`
   - `bun run verify:novel-fetcher`
@@ -153,6 +151,9 @@
   - `bun run lint`
   - `bun run test:unit`
   - `bun run build`
+- `viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合:
+  - E2E の前に `bun run verify:api-go:contract`
+  - この helper は直接起動した両 service の Go binary に通常の contract suite を流すローカル確認とし、CI では独立した `Service API contract` job で同 suite を 1 回だけ実行する。
 
 ## エージェント向け補助
 

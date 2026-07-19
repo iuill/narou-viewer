@@ -73,7 +73,7 @@
 
 - `viewer-api` の内部 package を import せず、`API_BASE_URL` に対する HTTP response だけで request、response、status、error shape を確認する。
 - CI の通常 suite は fixture 専用の独立 job で 1 回実行し、各 service の検証 job では重複実行しない。
-- ローカルの変更範囲別確認では `bun run verify:api-go:contract` を使い、直接起動した `viewer-api` と `novel-fetcher` の Go binary に同じ suite を流す。
+- ローカルで `viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合は、`bun run verify:api-go:contract` を使い、直接起動した両 service の Go binary に同じ suite を流す。
 - destructive contract は通常の mutation と分離し、fixture 専用環境と削除対象を明示した場合だけ実行する。詳細は [`tests/api-contract/README.md`](../../tests/api-contract/README.md) を参照する。
 
 ### 4.4 Playwright E2E
@@ -224,6 +224,7 @@
 
 - コード変更時は、まず変更箇所に対応する高速コードレベルテストを実行する。
 - 高速テストが通ってから build を実行する。
+- `viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合は、build 後かつ Playwright E2E の前に API contract を実行する。
 - build が通ってから Playwright E2E を実行する。
 - 実行コマンドは `bun run ...` に統一するが、内部で呼ばれる `vitest` / `tsc` / `playwright` は Node 系 CLI として扱う。
 
@@ -233,6 +234,7 @@
 bun run test:unit
 bun run build
 bun run verify:novel-fetcher  # services/novel-fetcher を変更した場合
+bun run verify:api-go:contract  # 公開 API / fetcher proxy / fetcher HTTP 契約を変更した場合
 bun run e2e:test:container
 ```
 

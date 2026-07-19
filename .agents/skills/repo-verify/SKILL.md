@@ -28,10 +28,7 @@ description: Use when changing code in narou-viewer and you need to choose or ru
 ```bash
 bun run lint
 bun run verify:api-go
-bun run verify:api-go:contract
 ```
-
-`verify:api-go:contract` は、直接起動した Go binary に通常の contract suite を流すローカルの変更範囲別確認とする。CI の通常 suite は独立した `Service API contract` job で 1 回だけ実行する。
 
 ### Go fetcher sidecar のみ
 
@@ -59,6 +56,16 @@ bun run build
 ```
 
 `services/novel-fetcher` も含む場合は、上記に加えて `bun run verify:novel-fetcher` を実行する。
+
+### HTTP contract 境界を変更した場合
+
+`viewer-api` の公開 API、fetcher proxy、または `novel-fetcher` の HTTP 契約に触れた場合は、変更範囲の既定検証に加えて E2E の前に次を実行する。parser 内部だけの変更など、HTTP 契約に触れない場合は必須としない。
+
+```bash
+bun run verify:api-go:contract
+```
+
+この helper は、直接起動した両 service の Go binary に通常の contract suite を流すローカル確認とする。CI の通常 suite は独立した `Service API contract` job で 1 回だけ実行する。
 
 ### 高速確認をまとめて行う場合
 
