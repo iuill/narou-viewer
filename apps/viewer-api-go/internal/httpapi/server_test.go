@@ -1000,14 +1000,14 @@ func TestServerAddsCORSHeadersAndHandlesPreflight(t *testing.T) {
 	t.Setenv("VIEWER_API_DEV_CORS", "1")
 	handler := newTestServerWithStore(store.New(t.TempDir()))
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodOptions, "/api/reader/state", nil)
+	request := httptest.NewRequest(http.MethodOptions, "/api/library/novels/novel-1/extraction-jobs/job-1", nil)
 	request.Header.Set("Origin", "http://localhost:5173")
-	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	request.Header.Set("Access-Control-Request-Method", http.MethodPatch)
 	request.Header.Set("Access-Control-Request-Headers", "content-type, x-request-id")
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent ||
 		response.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" ||
-		!strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPut) {
+		!strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPatch) {
 		t.Fatalf("unexpected CORS preflight response: code=%d headers=%v", response.Code, response.Header())
 	}
 	allowHeaders := response.Header().Get("Access-Control-Allow-Headers")

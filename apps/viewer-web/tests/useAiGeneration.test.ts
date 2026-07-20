@@ -234,6 +234,35 @@ describe("useAiGeneration", () => {
 
   });
 
+  it("does not poll while only paused jobs remain and the jobs view is closed", async () => {
+    installDom();
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    vi.mocked(fetchAiGenerationSettings).mockResolvedValue(createSettings());
+    vi.mocked(fetchAiGenerationJobs).mockResolvedValue({
+      jobs: [
+        {
+          jobId: "job-paused",
+          novelId: "novel-a",
+          requestedUpToEpisodeIndex: "2",
+          generationMode: "openrouter",
+          modelId: "openai/gpt",
+          status: "paused",
+          createdAt: "2026-06-15T00:00:00.000Z",
+          startedAt: "2026-06-15T00:00:00.000Z",
+          finishedAt: null,
+          errorMessage: null
+        }
+      ]
+    });
+
+    await act(async () => {
+      root = renderHookHarness({ onRender: () => undefined });
+      await flushAsyncWork();
+    });
+
+    expect(setIntervalSpy).not.toHaveBeenCalled();
+  });
+
   it("saves preferred mode and refreshes runtime status", async () => {
     installDom();
     vi.mocked(fetchAiGenerationSettings).mockResolvedValue(createSettings());

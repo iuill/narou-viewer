@@ -295,6 +295,42 @@ func TestSaveJobIfNoActiveKeepsActiveJobAtomic(t *testing.T) {
 	}
 }
 
+func TestSaveJobIfCurrentStatusRejectsStaleProcessorUpdates(t *testing.T) {
+	stateDir := t.TempDir()
+	job := Job{JobID: "job-conditional", RequestedUpToEpisodeIndex: "2", Status: JobStatusQueued, CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := SaveJob(stateDir, "novel-1", job); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	job.Status = JobStatusRunning
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusQueued); err != nil || !saved {
+		t.Fatalf("queued to running transition should be saved: saved=%v err=%v", saved, err)
+	}
+	job.Status = JobStatusCompleted
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusQueued); err != nil || saved {
+		t.Fatalf("stale completion should be rejected: saved=%v err=%v", saved, err)
+	}
+	job.Status = "invalid"
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusRunning); err == nil || saved {
+		t.Fatalf("invalid conditional update should fail validation: saved=%v err=%v", saved, err)
+	}
+	if _, err := SaveJobIfCurrentStatus(stateDir, "novel-1", Job{JobID: "missing"}, JobStatusQueued); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing job error = %v, want ErrJobNotFound", err)
+	}
+	blockedStateDir := filepath.Join(t.TempDir(), "state-file")
+	if err := os.WriteFile(blockedStateDir, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocked state path: %v", err)
+	}
+	if saved, err := SaveJobIfCurrentStatus(blockedStateDir, "novel-1", job, JobStatusRunning); err == nil || saved {
+		t.Fatalf("state read failure should be returned: saved=%v err=%v", saved, err)
+	}
+
+	jobs, _, err := LoadJobs(stateDir, "novel-1")
+	if err != nil || len(jobs) != 1 || jobs[0].Status != JobStatusRunning {
+		t.Fatalf("rejected save must preserve running status: jobs=%+v err=%v", jobs, err)
+	}
+}
+
 func TestRecoverRunningJobsMarksJobsInterrupted(t *testing.T) {
 	stateDir := t.TempDir()
 	progress := 40

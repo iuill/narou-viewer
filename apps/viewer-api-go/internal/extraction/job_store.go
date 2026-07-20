@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -497,6 +498,29 @@ func SaveJob(stateDir string, novelID string, job Job) error {
 	defer jobsMu.Unlock()
 
 	return saveJobUnlocked(stateDir, novelID, job)
+}
+
+func SaveJobIfCurrentStatus(stateDir string, novelID string, job Job, expectedStatuses ...string) (bool, error) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
+	if err != nil {
+		return false, err
+	}
+	for _, current := range jobs {
+		if current.JobID != job.JobID {
+			continue
+		}
+		if !slices.Contains(expectedStatuses, current.Status) {
+			return false, nil
+		}
+		if err := saveJobUnlocked(stateDir, novelID, job); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, ErrJobNotFound
 }
 
 func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, error) {

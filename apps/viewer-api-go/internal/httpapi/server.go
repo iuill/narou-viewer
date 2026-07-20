@@ -240,7 +240,7 @@ func handleCORS(w http.ResponseWriter, r *http.Request) bool {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Add("Vary", "Origin")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", strings.Join([]string{
 		"Content-Type",
 		"Authorization",

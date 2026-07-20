@@ -17,7 +17,7 @@ type Workflow interface {
 }
 
 type JobStore interface {
-	Save(novelID string, job extractdomain.Job) error
+	SaveIfCurrentStatus(novelID string, job extractdomain.Job, expectedStatuses ...string) (bool, error)
 }
 
 type ExecutionSettings interface {
@@ -46,8 +46,8 @@ type filesystemJobStore struct {
 	stateDir string
 }
 
-func (s filesystemJobStore) Save(novelID string, job extractdomain.Job) error {
-	return extractdomain.SaveJob(s.stateDir, novelID, job)
+func (s filesystemJobStore) SaveIfCurrentStatus(novelID string, job extractdomain.Job, expectedStatuses ...string) (bool, error) {
+	return extractdomain.SaveJobIfCurrentStatus(s.stateDir, novelID, job, expectedStatuses...)
 }
 
 func NewProcessor(deps Dependencies) *Processor {
@@ -81,7 +81,8 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		job.FinishedAt = &finishedAt
 		job.ErrorMessage = &message
 		SetExtractionJobProgress(&job, 0, "failed", nil, nil, nil, nil)
-		return p.store.Save(novelID, job) == nil
+		saved, err := p.store.SaveIfCurrentStatus(novelID, job, extractdomain.JobStatusQueued, extractdomain.JobStatusRunning)
+		return err == nil && saved
 	}
 	now := ai.NowISO()
 	if job.StartedAt == nil || job.Status == "queued" {
@@ -91,7 +92,8 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		job.ErrorMessage = nil
 		SetExtractionJobProgress(&job, 0, "preparing", nil, nil, nil, nil)
 		saveStartedAt := time.Now()
-		if err := p.store.Save(novelID, job); err != nil {
+		saved, err := p.store.SaveIfCurrentStatus(novelID, job, extractdomain.JobStatusQueued, extractdomain.JobStatusRunning)
+		if err != nil || !saved {
 			p.log("job_save", saveStartedAt, "status", "error", "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
 			return false
 		}
@@ -140,7 +142,7 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 			return
 		}
 		saveStartedAt := time.Now()
-		err := p.store.Save(novelID, job)
+		_, err := p.store.SaveIfCurrentStatus(novelID, job, extractdomain.JobStatusRunning)
 		status := "ok"
 		if err != nil {
 			status = "error"
@@ -159,13 +161,13 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		job.ErrorMessage = &message
 		SetExtractionJobProgress(&job, ValueOrDefaultInt(job.Progress, 0), "failed", job.CurrentBatchIndex, job.BatchCount, job.GeneratedCharacterCount, job.GeneratedTermCount)
 		saveStartedAt := time.Now()
-		err := p.store.Save(novelID, job)
+		saved, err := p.store.SaveIfCurrentStatus(novelID, job, extractdomain.JobStatusRunning)
 		status := "ok"
 		if err != nil {
 			status = "error"
 		}
 		p.log("job_save", saveStartedAt, "status", status, "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
-		return err == nil
+		return err == nil && saved
 	}
 
 	finishedAt := ai.NowISO()
@@ -177,13 +179,13 @@ func (p *Processor) Process(ctx context.Context, novelID string, job extractdoma
 		SetExtractionJobCompletedBatchCount(&job, *job.BatchCount)
 	}
 	saveStartedAt := time.Now()
-	err := p.store.Save(novelID, job)
+	saved, err := p.store.SaveIfCurrentStatus(novelID, job, extractdomain.JobStatusRunning)
 	status := "ok"
 	if err != nil {
 		status = "error"
 	}
 	p.log("job_save", saveStartedAt, "status", status, "novelId", novelID, "jobId", job.JobID, "jobStatus", job.Status, "stage", ValueOrDefaultString(job.ProgressStage, ""))
-	return err == nil
+	return err == nil && saved
 }
 
 func (p *Processor) resolveExecutionContext(job *extractdomain.Job) (*store.ResolvedAIGenerationConfig, error) {
