@@ -263,6 +263,52 @@ describe("useAiGeneration", () => {
     expect(setIntervalSpy).not.toHaveBeenCalled();
   });
 
+  it("polls running jobs only while the document is visible", async () => {
+    const dom = installDom();
+    let intervalCallback: Parameters<typeof window.setInterval>[0] | null = null;
+    vi.spyOn(window, "setInterval").mockImplementation((callback) => {
+      intervalCallback = callback;
+      return 1;
+    });
+    vi.mocked(fetchAiGenerationSettings).mockResolvedValue(createSettings());
+    vi.mocked(fetchAiGenerationJobs).mockResolvedValue({
+      jobs: [
+        {
+          jobId: "job-running",
+          novelId: "novel-a",
+          requestedUpToEpisodeIndex: "2",
+          generationMode: "openrouter",
+          modelId: "openai/gpt",
+          status: "running",
+          createdAt: "2026-06-15T00:00:00.000Z",
+          startedAt: "2026-06-15T00:00:00.000Z",
+          finishedAt: null,
+          errorMessage: null
+        }
+      ]
+    });
+
+    await act(async () => {
+      root = renderHookHarness({ onRender: () => undefined });
+      await flushAsyncWork();
+    });
+    expect(intervalCallback).not.toBeNull();
+
+    await act(async () => {
+      if (typeof intervalCallback === "function") {
+        intervalCallback();
+      }
+      await flushAsyncWork();
+    });
+    expect(fetchAiGenerationJobs).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(dom.window.document, "hidden", { configurable: true, value: true });
+    if (typeof intervalCallback === "function") {
+      intervalCallback();
+    }
+    expect(fetchAiGenerationJobs).toHaveBeenCalledTimes(2);
+  });
+
   it("saves preferred mode and refreshes runtime status", async () => {
     installDom();
     vi.mocked(fetchAiGenerationSettings).mockResolvedValue(createSettings());
