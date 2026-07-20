@@ -60,6 +60,7 @@ export type ReaderScreenState = {
   characterSummaryCanClear: boolean;
   characterSummaryCanGenerate: boolean;
   characterSummaryCompletedJobs: ExtractionJobSummary[];
+  characterSummaryControllingJobId: string | null;
   characterSummaryData: CharacterSummaryResponse | null;
   characterSummaryDefaultUpToEpisodeIndex: EpisodeIndex | null;
   characterSummaryError: string | null;
@@ -165,6 +166,7 @@ export type ReaderScreenCommands = {
   getCurrentReaderViewportPosition: () => number | null;
   handleApplyReaderSyncConflict: () => Promise<void>;
   handleClearCharacterSummary: () => void | Promise<void>;
+  handleControlCharacterSummaryJob: (jobId: string, action: "pause" | "resume" | "cancel") => void | Promise<void>;
   handleConfirmNextEpisode: () => void;
   handleCreateBookmark: () => Promise<void>;
   handleDeleteBookmark: (bookmarkId: string) => Promise<void>;
@@ -246,6 +248,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     characterSummaryCanClear,
     characterSummaryCanGenerate,
     characterSummaryCompletedJobs,
+    characterSummaryControllingJobId,
     characterSummaryData,
     characterSummaryDefaultUpToEpisodeIndex,
     characterSummaryError,
@@ -268,6 +271,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     getCurrentReaderViewportPosition,
     handleApplyReaderSyncConflict,
     handleClearCharacterSummary,
+    handleControlCharacterSummaryJob,
     handleConfirmNextEpisode,
     handleCreateBookmark,
     handleDeleteBookmark,
@@ -649,6 +653,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
               canClear={characterSummaryCanClear}
               canGenerate={characterSummaryCanGenerate}
               completedJobs={characterSummaryCompletedJobs}
+              controllingJobId={characterSummaryControllingJobId}
               data={characterSummaryData}
               defaultUpToEpisodeIndex={characterSummaryDefaultUpToEpisodeIndex}
               error={characterSummaryError}
@@ -659,6 +664,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
               isSubmitting={isCharacterSummarySubmitting}
               notice={characterSummaryNotice}
               onClear={handleClearCharacterSummary}
+              onControlJob={handleControlCharacterSummaryJob}
               onIncludeCurrentEpisodeChange={setCharacterSummaryIncludeCurrentEpisode}
               onClose={closeReaderPanel}
               onRequestedGenerationStrategyChange={setCharacterSummaryGenerationStrategy}
@@ -677,6 +683,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
               canClear={characterSummaryCanClear}
               canGenerate={characterSummaryCanGenerate}
               completedJobs={characterSummaryCompletedJobs}
+              controllingJobId={characterSummaryControllingJobId}
               data={termsData}
               defaultUpToEpisodeIndex={characterSummaryDefaultUpToEpisodeIndex}
               error={characterSummaryError}
@@ -687,6 +694,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
               isSubmitting={isCharacterSummarySubmitting}
               notice={characterSummaryNotice}
               onClear={handleClearCharacterSummary}
+              onControlJob={handleControlCharacterSummaryJob}
               onIncludeCurrentEpisodeChange={setCharacterSummaryIncludeCurrentEpisode}
               onClose={closeReaderPanel}
               onRequestedGenerationStrategyChange={setCharacterSummaryGenerationStrategy}

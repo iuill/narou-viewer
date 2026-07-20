@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isCharacterSummaryActiveJob,
   isCharacterSummaryCompletedJob,
+  isCharacterSummaryProcessingJob,
   isCharacterSummaryRequestAllowed,
   resolveCharacterSummaryRefreshTarget
 } from "../src/characterSummaryUtils";
@@ -67,15 +68,28 @@ describe("characterSummaryUtils", () => {
     ).toBe(false);
   });
 
-  it("treats failed and incompatible jobs as finished, not active", () => {
+  it("keeps paused and interrupted jobs actionable without polling them as processing", () => {
     expect(isCharacterSummaryActiveJob("queued")).toBe(true);
     expect(isCharacterSummaryActiveJob("running")).toBe(true);
+    expect(isCharacterSummaryActiveJob("pausing")).toBe(true);
+    expect(isCharacterSummaryActiveJob("paused")).toBe(true);
+    expect(isCharacterSummaryActiveJob("interrupted")).toBe(true);
     expect(isCharacterSummaryActiveJob("completed")).toBe(false);
     expect(isCharacterSummaryActiveJob("failed")).toBe(false);
+    expect(isCharacterSummaryActiveJob("canceled")).toBe(false);
     expect(isCharacterSummaryActiveJob("incompatible")).toBe(false);
 
+    expect(isCharacterSummaryProcessingJob("queued")).toBe(true);
+    expect(isCharacterSummaryProcessingJob("running")).toBe(true);
+    expect(isCharacterSummaryProcessingJob("pausing")).toBe(true);
+    expect(isCharacterSummaryProcessingJob("paused")).toBe(false);
+    expect(isCharacterSummaryProcessingJob("interrupted")).toBe(false);
+  });
+
+  it("treats canceled, failed, and incompatible jobs as completed history", () => {
     expect(isCharacterSummaryCompletedJob("completed")).toBe(true);
     expect(isCharacterSummaryCompletedJob("failed")).toBe(true);
+    expect(isCharacterSummaryCompletedJob("canceled")).toBe(true);
     expect(isCharacterSummaryCompletedJob("incompatible")).toBe(true);
     expect(isCharacterSummaryCompletedJob("queued")).toBe(false);
     expect(isCharacterSummaryCompletedJob("running")).toBe(false);

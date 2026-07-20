@@ -2,6 +2,7 @@ import { mutateJson, requestJson } from "../../api/http";
 import type {
   ExtractionClearResponse,
   ExtractionJobsResponse,
+  ExtractionJobSummary,
   ExtractionSubmitRequest,
   ExtractionSubmitResponse,
 } from "./types";
@@ -34,5 +35,21 @@ export async function submitExtraction(
     `/api/library/novels/${encodeURIComponent(novelId)}/extraction-jobs`,
     payload,
     "人物と用語の抽出依頼に失敗しました。",
+  );
+}
+
+export async function controlExtractionJob(
+  novelId: string,
+  jobId: string,
+  action: "pause" | "resume" | "cancel",
+): Promise<ExtractionJobSummary> {
+  return requestJson<ExtractionJobSummary>(
+    `/api/library/novels/${encodeURIComponent(novelId)}/extraction-jobs/${encodeURIComponent(jobId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action }),
+    },
+    "抽出ジョブの操作に失敗しました。",
   );
 }

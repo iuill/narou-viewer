@@ -35,9 +35,13 @@ export function isCharacterSummaryRequestAllowed(input: {
 }
 
 export function isCharacterSummaryActiveJob(status: CharacterJobStatus): boolean {
+  return isCharacterSummaryProcessingJob(status) || status === "paused" || status === "interrupted";
+}
+
+export function isCharacterSummaryProcessingJob(status: CharacterJobStatus): boolean {
   return status === "queued" || status === "running" || status === "pausing";
 }
 
 export function isCharacterSummaryCompletedJob(status: CharacterJobStatus): boolean {
-  return status === "completed" || status === "failed" || status === "incompatible";
+  return status === "completed" || status === "failed" || status === "canceled" || status === "incompatible";
 }

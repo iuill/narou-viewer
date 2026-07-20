@@ -29,9 +29,11 @@ type Props = {
   data: CharacterSummaryResponseLike | null;
   activeJobs: ExtractionJobSummary[];
   completedJobs: ExtractionJobSummary[];
+  controllingJobId: string | null;
   onClose: () => void;
   onShowTerms: () => void | Promise<void>;
   onClear: () => void | Promise<void>;
+  onControlJob: (jobId: string, action: "pause" | "resume" | "cancel") => void | Promise<void>;
   onIncludeCurrentEpisodeChange: (include: boolean) => void;
   onRequestedGenerationStrategyChange: (strategy: ExtractionGenerationStrategy) => void;
   onRequestedUpToEpisodeIndexChange: (episodeIndex: string) => void;
@@ -60,9 +62,11 @@ export function ReaderCharacterSummaryPanel({
   data,
   activeJobs,
   completedJobs,
+  controllingJobId,
   onClose,
   onShowTerms,
   onClear,
+  onControlJob,
   onIncludeCurrentEpisodeChange,
   onRequestedGenerationStrategyChange,
   onRequestedUpToEpisodeIndexChange,
@@ -121,7 +125,9 @@ export function ReaderCharacterSummaryPanel({
       <ReaderExtractionJobs
         activeJobs={activeJobs}
         completedJobs={completedJobs}
+        controllingJobId={controllingJobId}
         formatEpisodeOrderLabel={formatEpisodeOrderLabel}
+        onControlJob={onControlJob}
       />
       <ReaderExtractionTabs
         activeView="characters"
