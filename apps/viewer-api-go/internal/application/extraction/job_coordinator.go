@@ -14,13 +14,16 @@ type JobCoordinator struct {
 	stateDir string
 	process  JobProcessor
 
-	mu sync.Mutex
+	mu       sync.Mutex
+	activeMu sync.Mutex
+	active   map[string]context.CancelFunc
 }
 
 func NewJobCoordinator(stateDir string, process JobProcessor) *JobCoordinator {
 	return &JobCoordinator{
 		stateDir: stateDir,
 		process:  process,
+		active:   map[string]context.CancelFunc{},
 	}
 }
 
@@ -43,6 +46,18 @@ func (c *JobCoordinator) Kick(ctx context.Context) {
 	go c.processJobs(ctx)
 }
 
+func (c *JobCoordinator) Cancel(jobID string) {
+	if c == nil {
+		return
+	}
+	c.activeMu.Lock()
+	cancel := c.active[jobID]
+	c.activeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (c *JobCoordinator) processJobs(ctx context.Context) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -57,7 +72,7 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		}
 		var next *extractdomain.JobWithNovel
 		for i := range records {
-			if records[i].Job.Status == "queued" || records[i].Job.Status == "running" {
+			if records[i].Job.Status == extractdomain.JobStatusQueued || records[i].Job.Status == extractdomain.JobStatusRunning {
 				record := records[i]
 				next = &record
 			}
@@ -65,8 +80,37 @@ func (c *JobCoordinator) processJobs(ctx context.Context) {
 		if next == nil {
 			return
 		}
-		if !c.process(ctx, next.NovelID, next.Job) {
+		jobCtx, cancel := context.WithCancel(ctx)
+		c.activeMu.Lock()
+		c.active[next.Job.JobID] = cancel
+		c.activeMu.Unlock()
+		jobs, _, err := extractdomain.LoadJobs(c.stateDir, next.NovelID)
+		if err != nil || !jobStillExecutable(jobs, next.Job.JobID) {
+			cancel()
+			c.activeMu.Lock()
+			delete(c.active, next.Job.JobID)
+			c.activeMu.Unlock()
+			continue
+		}
+		processed := c.process(jobCtx, next.NovelID, next.Job)
+		cancel()
+		c.activeMu.Lock()
+		delete(c.active, next.Job.JobID)
+		c.activeMu.Unlock()
+		if err := extractdomain.FinalizePausingJob(c.stateDir, next.NovelID, next.Job.JobID); err != nil {
+			return
+		}
+		if !processed && ctx.Err() != nil {
 			return
 		}
 	}
+}
+
+func jobStillExecutable(jobs []extractdomain.Job, jobID string) bool {
+	for _, job := range jobs {
+		if job.JobID == jobID {
+			return job.Status == extractdomain.JobStatusQueued || job.Status == extractdomain.JobStatusRunning
+		}
+	}
+	return false
 }

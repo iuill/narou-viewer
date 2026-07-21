@@ -117,6 +117,8 @@ export function useAiGenerationWorkspaceModel({
         aiGenerationJobsError: aiGeneration.jobsError,
         hasAiGenerationJobs: aiGeneration.hasJobs,
         isAiGenerationJobsLoading: aiGeneration.isJobsLoading,
+        controllingJobId: aiGeneration.controllingJobId,
+        onControlJob: aiGeneration.controlJob,
         onOpenNovelFromJob,
         onSetAiGenerationJobFilter: aiGeneration.setJobFilter,
         visibleAiGenerationJobs: aiGeneration.visibleJobs

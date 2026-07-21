@@ -40,7 +40,9 @@ export function useAiGeneration({
     novels,
     selectedNovelId
   });
-  const activeJobCount = jobs.activeJobs.length;
+  const processingJobCount = jobs.activeJobs.filter((job) =>
+    ["queued", "running", "pausing"].includes(job.status)
+  ).length;
   const aiGenerationSettings = settings.settings;
 
   const profileSelection = useMemo(
@@ -123,7 +125,7 @@ export function useAiGeneration({
       return;
     }
 
-    if (activeJobCount === 0 && activeView !== "jobs") {
+    if (processingJobCount === 0 && activeView !== "jobs") {
       return;
     }
 
@@ -136,7 +138,7 @@ export function useAiGeneration({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [activeJobCount, activeView, isPaused, jobs.loadJobs]);
+  }, [processingJobCount, activeView, isPaused, jobs.loadJobs]);
 
   return {
     activeJobs: jobs.activeJobs,
@@ -147,6 +149,8 @@ export function useAiGeneration({
     extractionStrategyModelsDraft: settings.extractionStrategyModelsDraft,
     extractionRuntimeDraft: settings.extractionRuntimeDraft,
     completedJobs: jobs.completedJobs,
+    controllingJobId: jobs.controllingJobId,
+    controlJob: jobs.controlJob,
     defaultProfileDraft: profileSelection.defaultProfile,
     editingProfileDraft: profileSelection.editingProfile,
     editingProfileId: settings.editingProfileId,

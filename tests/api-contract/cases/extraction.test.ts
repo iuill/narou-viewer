@@ -132,6 +132,21 @@ describe("extraction contract", () => {
     );
     expectJsonResponse(invalid, 400);
     expectErrorShape(invalid.json);
+
+    const fixture = await findFixtureEpisode("extraction job control validation");
+    if (!fixture) return;
+    const invalidAction = await requestJson(
+      `/api/library/novels/${encodeURIComponent(fixture.novelId)}/extraction-jobs/missing-job`,
+      { method: "PATCH", body: { action: "retry" } },
+    );
+    expectJsonResponse(invalidAction, 400);
+    expectErrorShape(invalidAction.json);
+    const missingJob = await requestJson(
+      `/api/library/novels/${encodeURIComponent(fixture.novelId)}/extraction-jobs/missing-job`,
+      { method: "PATCH", body: { action: "pause" } },
+    );
+    expectJsonResponse(missingJob, 404);
+    expectErrorShape(missingJob.json);
   });
 
   it.runIf(MUTATING_CONTRACT_TESTS_ENABLED)(

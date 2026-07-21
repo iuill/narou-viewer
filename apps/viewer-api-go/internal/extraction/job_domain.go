@@ -1,5 +1,26 @@
 package extraction
 
+const (
+	JobStatusQueued       = "queued"
+	JobStatusRunning      = "running"
+	JobStatusPausing      = "pausing"
+	JobStatusPaused       = "paused"
+	JobStatusInterrupted  = "interrupted"
+	JobStatusCanceled     = "canceled"
+	JobStatusCompleted    = "completed"
+	JobStatusFailed       = "failed"
+	JobStatusIncompatible = "incompatible"
+)
+
+func IsActiveJobStatus(status string) bool {
+	switch status {
+	case JobStatusQueued, JobStatusRunning, JobStatusPausing:
+		return true
+	default:
+		return false
+	}
+}
+
 type ActiveWorker struct {
 	WorkerIndex       int    `json:"workerIndex" yaml:"worker_index"`
 	BatchIndex        int    `json:"batchIndex" yaml:"batch_index"`

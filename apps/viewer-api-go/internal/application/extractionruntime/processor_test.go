@@ -42,6 +42,8 @@ type multiBatchWorkflow struct{}
 
 type parallelWorkerWorkflow struct{}
 
+type discoveryWorkflow struct{}
+
 func (multiBatchWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, _ *store.ResolvedAIGenerationConfig, _ string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
 	progressSink(appextraction.BatchProgress{Phase: "start", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}})
 	progressSink(appextraction.BatchProgress{Phase: "complete", Batch: core.Batch{BatchIndex: 1, BatchCount: 2}, CompletedBatchCount: 1, MergedCharacterCount: 3, MergedTermCount: 2})
@@ -56,6 +58,15 @@ func (parallelWorkerWorkflow) GenerateAndSave(_ context.Context, _ string, _ str
 	progressSink(appextraction.BatchProgress{Phase: "parallelStart", Batch: second, WorkerIndex: 2})
 	progressSink(appextraction.BatchProgress{Phase: "complete", Batch: first, WorkerIndex: 1, CompletedBatchCount: 1, MergedCharacterCount: 2, MergedTermCount: 1})
 	return appextraction.FinalCounts{CharacterCount: 2, TermCount: 1}, nil
+}
+
+func (discoveryWorkflow) GenerateAndSave(_ context.Context, _ string, _ string, _ *store.ResolvedAIGenerationConfig, _ string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
+	batch := core.Batch{BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"1"}}
+	progressSink(appextraction.BatchProgress{Phase: "discoveryStart", Batch: batch, WorkerIndex: 1})
+	progressSink(appextraction.BatchProgress{Phase: "discoveryComplete", Batch: batch, WorkerIndex: 1, CompletedBatchCount: 1})
+	progressSink(appextraction.BatchProgress{Phase: "discoveryError", Batch: batch, WorkerIndex: 1})
+	progressSink(appextraction.BatchProgress{Phase: "error", Batch: batch, WorkerIndex: 1})
+	return appextraction.FinalCounts{}, nil
 }
 
 func (w fakeWorkflow) GenerateAndSave(ctx context.Context, novelID string, upToEpisodeIndex string, resolvedOverride *store.ResolvedAIGenerationConfig, strategy string, progressSink func(appextraction.BatchProgress)) (appextraction.FinalCounts, error) {
@@ -78,10 +89,22 @@ type fakeJobStore struct {
 	err  error
 }
 
-func (s *fakeJobStore) Save(_ string, job core.Job) error {
+func (s *fakeJobStore) SaveIfCurrentStatus(_ string, job core.Job, _ ...string) (bool, error) {
 	job.ActiveWorkers = append([]core.ActiveWorker(nil), job.ActiveWorkers...)
 	s.jobs = append(s.jobs, job)
-	return s.err
+	return s.err == nil, s.err
+}
+
+type blockingFilesystemJobStore struct {
+	stateDir string
+	entered  chan struct{}
+	release  chan struct{}
+}
+
+func (s *blockingFilesystemJobStore) SaveIfCurrentStatus(novelID string, job core.Job, expectedStatuses ...string) (bool, error) {
+	s.entered <- struct{}{}
+	<-s.release
+	return core.SaveJobIfCurrentStatus(s.stateDir, novelID, job, expectedStatuses...)
 }
 
 func TestProcessorMarksCompletedJob(t *testing.T) {
@@ -150,6 +173,23 @@ func TestProcessorTracksActiveParallelWorkers(t *testing.T) {
 	last := jobStore.jobs[len(jobStore.jobs)-1]
 	if len(last.ActiveWorkers) != 0 {
 		t.Fatalf("completed job should clear active workers: %+v", last.ActiveWorkers)
+	}
+}
+
+func TestProcessorPersistsDiscoveryProgress(t *testing.T) {
+	jobStore := &fakeJobStore{}
+	processor := NewProcessor(Dependencies{Workflow: discoveryWorkflow{}, JobStore: jobStore})
+	if !processor.Process(t.Context(), "novel", core.Job{Status: "queued", RequestedUpToEpisodeIndex: "1"}) {
+		t.Fatal("processor should report success")
+	}
+	foundDiscoveryWorker := false
+	for _, job := range jobStore.jobs {
+		if job.ProgressStage != nil && *job.ProgressStage == "discovery" && len(job.ActiveWorkers) == 1 {
+			foundDiscoveryWorker = true
+		}
+	}
+	if !foundDiscoveryWorker {
+		t.Fatalf("discovery progress should expose its active worker: %+v", jobStore.jobs)
 	}
 }
 
@@ -252,6 +292,34 @@ func TestProcessorStopsWhenContextCanceled(t *testing.T) {
 	}
 	if len(store.jobs) != 0 {
 		t.Fatalf("canceled context should not save jobs: %+v", store.jobs)
+	}
+}
+
+func TestProcessorDoesNotOverwritePauseWhileStarting(t *testing.T) {
+	stateDir := t.TempDir()
+	job := core.Job{JobID: "job-race", Status: core.JobStatusQueued, RequestedUpToEpisodeIndex: "2", CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := core.SaveJob(stateDir, "novel", job); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+	store := &blockingFilesystemJobStore{stateDir: stateDir, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	processor := NewProcessor(Dependencies{Workflow: fakeWorkflow{}, JobStore: store})
+	done := make(chan bool, 1)
+	go func() {
+		done <- processor.Process(t.Context(), "novel", job)
+	}()
+
+	<-store.entered
+	if _, err := core.ControlJob(stateDir, "novel", job.JobID, "pause"); err != nil {
+		t.Fatalf("ControlJob pause: %v", err)
+	}
+	close(store.release)
+	if <-done {
+		t.Fatal("processor should stop when the queued job was paused before its running transition")
+	}
+
+	jobs, _, err := core.LoadJobs(stateDir, "novel")
+	if err != nil || len(jobs) != 1 || jobs[0].Status != core.JobStatusPaused {
+		t.Fatalf("paused state must win over the stale processor save: jobs=%+v err=%v", jobs, err)
 	}
 }
 

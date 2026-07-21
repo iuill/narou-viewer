@@ -295,7 +295,43 @@ func TestSaveJobIfNoActiveKeepsActiveJobAtomic(t *testing.T) {
 	}
 }
 
-func TestRecoverRunningJobsRequeuesInterruptedJobs(t *testing.T) {
+func TestSaveJobIfCurrentStatusRejectsStaleProcessorUpdates(t *testing.T) {
+	stateDir := t.TempDir()
+	job := Job{JobID: "job-conditional", RequestedUpToEpisodeIndex: "2", Status: JobStatusQueued, CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := SaveJob(stateDir, "novel-1", job); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	job.Status = JobStatusRunning
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusQueued); err != nil || !saved {
+		t.Fatalf("queued to running transition should be saved: saved=%v err=%v", saved, err)
+	}
+	job.Status = JobStatusCompleted
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusQueued); err != nil || saved {
+		t.Fatalf("stale completion should be rejected: saved=%v err=%v", saved, err)
+	}
+	job.Status = "invalid"
+	if saved, err := SaveJobIfCurrentStatus(stateDir, "novel-1", job, JobStatusRunning); err == nil || saved {
+		t.Fatalf("invalid conditional update should fail validation: saved=%v err=%v", saved, err)
+	}
+	if _, err := SaveJobIfCurrentStatus(stateDir, "novel-1", Job{JobID: "missing"}, JobStatusQueued); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("missing job error = %v, want ErrJobNotFound", err)
+	}
+	blockedStateDir := filepath.Join(t.TempDir(), "state-file")
+	if err := os.WriteFile(blockedStateDir, []byte("blocked"), 0o644); err != nil {
+		t.Fatalf("write blocked state path: %v", err)
+	}
+	if saved, err := SaveJobIfCurrentStatus(blockedStateDir, "novel-1", job, JobStatusRunning); err == nil || saved {
+		t.Fatalf("state read failure should be returned: saved=%v err=%v", saved, err)
+	}
+
+	jobs, _, err := LoadJobs(stateDir, "novel-1")
+	if err != nil || len(jobs) != 1 || jobs[0].Status != JobStatusRunning {
+		t.Fatalf("rejected save must preserve running status: jobs=%+v err=%v", jobs, err)
+	}
+}
+
+func TestRecoverRunningJobsMarksJobsInterrupted(t *testing.T) {
 	stateDir := t.TempDir()
 	progress := 40
 	stage := "batch"
@@ -337,15 +373,41 @@ func TestRecoverRunningJobsRequeuesInterruptedJobs(t *testing.T) {
 	for _, job := range jobs {
 		byID[job.JobID] = job
 	}
-	requeued := byID["job-running"]
-	if requeued.Status != "queued" || requeued.StartedAt != nil || requeued.FinishedAt != nil || requeued.ErrorMessage != nil {
-		t.Fatalf("running job should be reset to queued: %+v", requeued)
+	interrupted := byID["job-running"]
+	if interrupted.Status != JobStatusInterrupted || interrupted.StartedAt == nil || interrupted.FinishedAt != nil || interrupted.ErrorMessage == nil {
+		t.Fatalf("running job should be marked interrupted: %+v", interrupted)
 	}
-	if requeued.Progress == nil || *requeued.Progress != 0 || requeued.ProgressStage == nil || *requeued.ProgressStage != "recovered" {
-		t.Fatalf("recovered job should expose reset progress metadata: %+v", requeued)
+	if interrupted.Progress == nil || *interrupted.Progress != progress || interrupted.ProgressStage == nil || *interrupted.ProgressStage != "interrupted" {
+		t.Fatalf("interrupted job should retain progress metadata: %+v", interrupted)
 	}
 	if byID["job-completed"].Status != "completed" {
 		t.Fatalf("completed job should not be changed: %+v", byID["job-completed"])
+	}
+}
+
+func TestControlJobTransitionsPauseResumeAndCancel(t *testing.T) {
+	stateDir := t.TempDir()
+	job := Job{JobID: "job-control", RequestedUpToEpisodeIndex: "2", Status: JobStatusRunning, CreatedAt: "2026-01-01T00:00:00Z"}
+	if err := SaveJob(stateDir, "novel-1", job); err != nil {
+		t.Fatal(err)
+	}
+	pausing, err := ControlJob(stateDir, "novel-1", job.JobID, "pause")
+	if err != nil || pausing.Status != JobStatusPausing {
+		t.Fatalf("pause = %+v, %v", pausing, err)
+	}
+	if err := FinalizePausingJob(stateDir, "novel-1", job.JobID); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := ControlJob(stateDir, "novel-1", job.JobID, "resume")
+	if err != nil || resumed.Status != JobStatusQueued {
+		t.Fatalf("resume = %+v, %v", resumed, err)
+	}
+	canceled, err := ControlJob(stateDir, "novel-1", job.JobID, "cancel")
+	if err != nil || canceled.Status != JobStatusCanceled || canceled.FinishedAt == nil {
+		t.Fatalf("cancel = %+v, %v", canceled, err)
+	}
+	if _, err := ControlJob(stateDir, "novel-1", job.JobID, "resume"); !errors.Is(err, ErrInvalidJobAction) {
+		t.Fatalf("resume canceled job error = %v", err)
 	}
 }
 

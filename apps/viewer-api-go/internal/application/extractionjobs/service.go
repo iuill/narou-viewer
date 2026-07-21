@@ -24,6 +24,8 @@ var (
 	ErrSettingsRead              = errors.New("AI generation settings could not be read")
 	ErrExtractionClear           = errors.New("extraction state could not be cleared")
 	ErrExtractionActive          = errors.New("extraction is still running")
+	ErrJobNotFound               = errors.New("character job not found")
+	ErrInvalidJobAction          = errors.New("character job action is not allowed")
 )
 
 type LibraryPort interface {
@@ -60,6 +62,10 @@ type ClearResponse struct {
 	ExtractionJobsDeleted        int    `json:"extractionJobsDeleted"`
 	ExtractionJobIndexDeleted    bool   `json:"extractionJobIndexDeleted"`
 	ExtractionCheckpointsDeleted int    `json:"extractionCheckpointsDeleted"`
+}
+
+type ControlInput struct {
+	Action string
 }
 
 type Service struct {
@@ -159,6 +165,23 @@ func (s *Service) Clear(ctx context.Context, novelID string) (ClearResponse, err
 		ExtractionJobIndexDeleted:    result.JobIndexDeleted,
 		ExtractionCheckpointsDeleted: result.CheckpointsDeleted,
 	}, nil
+}
+
+func (s *Service) Control(ctx context.Context, novelID string, jobID string, input ControlInput) (extractdomain.Job, error) {
+	if err := s.ensureNovelExists(ctx, novelID); err != nil {
+		return extractdomain.Job{}, err
+	}
+	job, err := extractdomain.ControlJob(s.stateDir, novelID, strings.TrimSpace(jobID), strings.TrimSpace(input.Action))
+	if errors.Is(err, extractdomain.ErrJobNotFound) {
+		return extractdomain.Job{}, ErrJobNotFound
+	}
+	if errors.Is(err, extractdomain.ErrInvalidJobAction) {
+		return extractdomain.Job{}, ErrInvalidJobAction
+	}
+	if err != nil {
+		return extractdomain.Job{}, fmt.Errorf("%w: %w", ErrJobSave, err)
+	}
+	return job, nil
 }
 
 func (s *Service) ensureNovelExists(_ context.Context, novelID string) error {

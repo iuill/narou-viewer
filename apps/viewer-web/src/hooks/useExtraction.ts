@@ -12,6 +12,7 @@ import { fetchCharacterSummary } from "../features/characters/api";
 import type { CharacterSummaryResponse } from "../features/characters/types";
 import {
   clearExtraction,
+  controlExtractionJob,
   fetchExtractionJobs,
   submitExtraction,
 } from "../features/extraction/api";
@@ -27,6 +28,7 @@ import {
   isCharacterSummaryActiveJob,
   isCharacterSummaryCompletedJob,
   isCharacterSummaryRequestAllowed,
+  isCharacterSummaryProcessingJob,
   resolveCharacterSummaryRefreshTarget,
 } from "../characterSummaryUtils";
 
@@ -51,11 +53,13 @@ type UseExtractionResult = {
   canGenerate: boolean;
   canClear: boolean;
   completedJobs: NonNullable<ExtractionJobsResponse["jobs"]>;
+  controllingJobId: string | null;
   data: CharacterSummaryResponse | null;
   termsData: TermsResponse | null;
   defaultUpToEpisodeIndex: string | null;
   error: string | null;
   handleClear: () => Promise<void>;
+  handleControlJob: (jobId: string, action: "pause" | "resume" | "cancel") => Promise<void>;
   handleGenerate: () => Promise<void>;
   handleOpen: () => Promise<void>;
   handleOpenTerms: () => Promise<void>;
@@ -102,6 +106,7 @@ export function useExtraction({
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [controllingJobId, setControllingJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobPollError, setJobPollError] = useState<string | null>(null);
   const requestSeqRef = useRef(0);
@@ -315,7 +320,7 @@ export function useExtraction({
         setJobs(nextJobs);
         setJobPollError(null);
         const hasActiveJobs = nextJobs.jobs.some((job) =>
-          isCharacterSummaryActiveJob(job.status),
+          isCharacterSummaryProcessingJob(job.status),
         );
         if (!hasActiveJobs) {
           await load(targetUpToEpisodeIndex, { background: true }, scope);
@@ -353,6 +358,7 @@ export function useExtraction({
     setIsLoading(false);
     setIsSubmitting(false);
     setIsClearing(false);
+    setControllingJobId(null);
   }, [selectedNovelId]);
 
   useEffect(() => {
@@ -619,16 +625,43 @@ export function useExtraction({
     }
   }
 
+  async function handleControlJob(jobId: string, action: "pause" | "resume" | "cancel") {
+    const scope = selectionScope;
+    const novelId = scope.novelId;
+    if (!novelId) {
+      return;
+    }
+    setControllingJobId(jobId);
+    setError(null);
+    try {
+      await controlExtractionJob(novelId, jobId, action);
+      const nextJobs = await fetchExtractionJobs(novelId);
+      if (scope.token === selectionScopeRef.current.token) {
+        setJobs(nextJobs);
+      }
+    } catch (controlError) {
+      if (scope.token === selectionScopeRef.current.token) {
+        setError(controlError instanceof Error ? controlError.message : "Unknown error");
+      }
+    } finally {
+      if (scope.token === selectionScopeRef.current.token) {
+        setControllingJobId(null);
+      }
+    }
+  }
+
   return {
     activeJobs,
     canClear,
     canGenerate,
     completedJobs,
+    controllingJobId,
     data,
     termsData,
     defaultUpToEpisodeIndex,
     error: error ?? jobPollError,
     handleClear,
+    handleControlJob,
     handleGenerate,
     handleOpen,
     handleOpenTerms,

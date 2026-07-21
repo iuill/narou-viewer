@@ -1,5 +1,5 @@
 export type EpisodeIndex = string;
-export type CharacterJobStatus = "queued" | "running" | "completed" | "failed" | "incompatible";
+export type CharacterJobStatus = "queued" | "running" | "pausing" | "paused" | "interrupted" | "canceled" | "completed" | "failed" | "incompatible";
 
 function compareEpisodeIndex(left: EpisodeIndex, right: EpisodeIndex): number {
   return Number.parseInt(left, 10) - Number.parseInt(right, 10);
@@ -35,9 +35,13 @@ export function isCharacterSummaryRequestAllowed(input: {
 }
 
 export function isCharacterSummaryActiveJob(status: CharacterJobStatus): boolean {
-  return status === "queued" || status === "running";
+  return isCharacterSummaryProcessingJob(status) || status === "paused" || status === "interrupted";
+}
+
+export function isCharacterSummaryProcessingJob(status: CharacterJobStatus): boolean {
+  return status === "queued" || status === "running" || status === "pausing";
 }
 
 export function isCharacterSummaryCompletedJob(status: CharacterJobStatus): boolean {
-  return status === "completed" || status === "failed" || status === "incompatible";
+  return status === "completed" || status === "failed" || status === "canceled" || status === "incompatible";
 }

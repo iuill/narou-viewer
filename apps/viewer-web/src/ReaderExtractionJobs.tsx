@@ -5,7 +5,9 @@ import { EXTRACTION_GENERATION_STRATEGY_LABELS } from "./ReaderExtractionControl
 type Props = {
   activeJobs: ExtractionJobSummary[];
   completedJobs: ExtractionJobSummary[];
+  controllingJobId: string | null;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
+  onControlJob: (jobId: string, action: "pause" | "resume" | "cancel") => void | Promise<void>;
 };
 
 const EXTRACTION_JOB_STAGE_LABELS: Record<string, string> = {
@@ -18,10 +20,14 @@ const EXTRACTION_JOB_STAGE_LABELS: Record<string, string> = {
   completed: "完了",
   failed: "失敗",
   incompatible: "互換性なし・要復旧",
-  recovered: "再開待ち"
+  recovered: "再開待ち",
+  pausing: "停止処理中",
+  paused: "一時停止",
+  interrupted: "中断・再開可能",
+  canceled: "取消済み"
 };
 
-export function ReaderExtractionJobs({ activeJobs, completedJobs, formatEpisodeOrderLabel }: Props) {
+export function ReaderExtractionJobs({ activeJobs, completedJobs, controllingJobId, formatEpisodeOrderLabel, onControlJob }: Props) {
   return (
     <>
       {activeJobs.length ? (
@@ -32,7 +38,7 @@ export function ReaderExtractionJobs({ activeJobs, completedJobs, formatEpisodeO
           </div>
           <div className="reader-character-job-items">
             {activeJobs.map((job) => (
-              <ExtractionJobCard formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} key={job.jobId} />
+              <ExtractionJobCard controllingJobId={controllingJobId} formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} key={job.jobId} onControlJob={onControlJob} />
             ))}
           </div>
         </section>
@@ -46,7 +52,7 @@ export function ReaderExtractionJobs({ activeJobs, completedJobs, formatEpisodeO
           </summary>
           <div className="reader-character-job-items">
             {completedJobs.map((job) => (
-              <ExtractionJobCard formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} key={job.jobId} />
+              <ExtractionJobCard controllingJobId={controllingJobId} formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} key={job.jobId} onControlJob={onControlJob} />
             ))}
           </div>
         </details>
@@ -56,11 +62,15 @@ export function ReaderExtractionJobs({ activeJobs, completedJobs, formatEpisodeO
 }
 
 function ExtractionJobCard({
+  controllingJobId,
   formatEpisodeOrderLabel,
-  job
+  job,
+  onControlJob
 }: {
+  controllingJobId: string | null;
   formatEpisodeOrderLabel: (episodeIndex: string) => string;
   job: ExtractionJobSummary;
+  onControlJob: Props["onControlJob"];
 }) {
   return (
     <article className={`reader-panel-card reader-character-job job-${job.status}`}>
@@ -74,8 +84,29 @@ function ExtractionJobCard({
       <ExtractionJobProgress formatEpisodeOrderLabel={formatEpisodeOrderLabel} job={job} />
       <p>{formatDate(job.createdAt)}</p>
       {job.errorMessage ? <p className="message error">{job.errorMessage}</p> : null}
+      {canControlJob(job) ? (
+        <div className="reader-character-actions">
+          {job.status === "queued" || job.status === "running" ? (
+            <button disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.jobId, "pause")} type="button">
+              一時停止
+            </button>
+          ) : null}
+          {job.status === "paused" || job.status === "interrupted" ? (
+            <button disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.jobId, "resume")} type="button">
+              再開
+            </button>
+          ) : null}
+          <button className="reader-character-clear-button" disabled={controllingJobId === job.jobId} onClick={() => void onControlJob(job.jobId, "cancel")} type="button">
+            取消
+          </button>
+        </div>
+      ) : null}
     </article>
   );
+}
+
+function canControlJob(job: ExtractionJobSummary): boolean {
+  return ["queued", "running", "pausing", "paused", "interrupted"].includes(job.status);
 }
 
 function ExtractionJobProgress({

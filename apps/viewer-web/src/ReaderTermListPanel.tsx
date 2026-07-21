@@ -11,6 +11,7 @@ type Props = {
   canClear: boolean;
   canGenerate: boolean;
   completedJobs: ExtractionJobSummary[];
+  controllingJobId: string | null;
   data: TermsResponse | null;
   defaultUpToEpisodeIndex: string | null;
   error: string | null;
@@ -21,6 +22,7 @@ type Props = {
   isSubmitting: boolean;
   notice: string | null;
   onClear: () => void | Promise<void>;
+  onControlJob: (jobId: string, action: "pause" | "resume" | "cancel") => void | Promise<void>;
   onIncludeCurrentEpisodeChange: (include: boolean) => void;
   onClose: () => void;
   onRequestedGenerationStrategyChange: (strategy: ExtractionGenerationStrategy) => void;
@@ -47,6 +49,7 @@ export function ReaderTermListPanel({
   canClear,
   canGenerate,
   completedJobs,
+  controllingJobId,
   data,
   defaultUpToEpisodeIndex,
   error,
@@ -57,6 +60,7 @@ export function ReaderTermListPanel({
   isSubmitting,
   notice,
   onClear,
+  onControlJob,
   onIncludeCurrentEpisodeChange,
   onClose,
   onRequestedGenerationStrategyChange,
@@ -118,7 +122,9 @@ export function ReaderTermListPanel({
       <ReaderExtractionJobs
         activeJobs={activeJobs}
         completedJobs={completedJobs}
+        controllingJobId={controllingJobId}
         formatEpisodeOrderLabel={formatEpisodeOrderLabel}
+        onControlJob={onControlJob}
       />
       <ReaderExtractionTabs
         activeView="terms"

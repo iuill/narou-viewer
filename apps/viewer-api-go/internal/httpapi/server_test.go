@@ -244,8 +244,8 @@ func TestServerConstructorDoesNotStartCharacterJobLifecycle(t *testing.T) {
 	if err != nil || !ok || len(jobs) != 1 {
 		t.Fatalf("LoadJobs after StartBackground: jobs=%+v ok=%v err=%v", jobs, ok, err)
 	}
-	if jobs[0].Status != "queued" {
-		t.Fatalf("StartBackground should recover running jobs, got status %q", jobs[0].Status)
+	if jobs[0].Status != extractdomain.JobStatusInterrupted {
+		t.Fatalf("StartBackground should mark running jobs interrupted, got status %q", jobs[0].Status)
 	}
 }
 
@@ -757,6 +757,35 @@ func TestCharacterJobSubmitStoresGenerationStrategy(t *testing.T) {
 	}
 }
 
+func TestCharacterJobControlEndpoint(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	server := handler.(*Server)
+	server.cancel()
+	novels := requestJSON(t, handler, http.MethodGet, "/api/library/novels", nil, http.StatusOK)
+	novelID := novels["novels"].([]any)[0].(map[string]any)["novelId"].(string)
+	created := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/extraction-jobs", map[string]any{"upToEpisodeIndex": "1"}, http.StatusAccepted)
+	jobID := created["jobId"].(string)
+	path := "/api/library/novels/" + novelID + "/extraction-jobs/" + jobID
+	paused := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "pause"}, http.StatusOK)
+	if paused["status"] != extractdomain.JobStatusPaused {
+		t.Fatalf("pause response = %+v", paused)
+	}
+	resumed := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "resume"}, http.StatusOK)
+	if resumed["status"] != extractdomain.JobStatusQueued {
+		t.Fatalf("resume response = %+v", resumed)
+	}
+	canceled := requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "cancel"}, http.StatusOK)
+	if canceled["status"] != extractdomain.JobStatusCanceled {
+		t.Fatalf("cancel response = %+v", canceled)
+	}
+	requestJSON(t, handler, http.MethodPatch, path, map[string]any{"action": "resume"}, http.StatusConflict)
+}
+
 func TestReaderAssistantToolContextUsesBoundaryTools(t *testing.T) {
 	dataDir := newHTTPAPITestData(t)
 	stateStore := store.New(dataDir)
@@ -971,14 +1000,14 @@ func TestServerAddsCORSHeadersAndHandlesPreflight(t *testing.T) {
 	t.Setenv("VIEWER_API_DEV_CORS", "1")
 	handler := newTestServerWithStore(store.New(t.TempDir()))
 	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodOptions, "/api/reader/state", nil)
+	request := httptest.NewRequest(http.MethodOptions, "/api/library/novels/novel-1/extraction-jobs/job-1", nil)
 	request.Header.Set("Origin", "http://localhost:5173")
-	request.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	request.Header.Set("Access-Control-Request-Method", http.MethodPatch)
 	request.Header.Set("Access-Control-Request-Headers", "content-type, x-request-id")
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNoContent ||
 		response.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" ||
-		!strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPut) {
+		!strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPatch) {
 		t.Fatalf("unexpected CORS preflight response: code=%d headers=%v", response.Code, response.Header())
 	}
 	allowHeaders := response.Header().Get("Access-Control-Allow-Headers")

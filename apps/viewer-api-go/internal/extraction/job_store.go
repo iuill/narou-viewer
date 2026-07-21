@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
@@ -23,6 +25,11 @@ import (
 )
 
 var jobsMu sync.Mutex
+
+var (
+	ErrJobNotFound      = errors.New("extraction job not found")
+	ErrInvalidJobAction = errors.New("extraction job action is not allowed")
+)
 
 func LoadJobs(stateDir string, novelID string) ([]Job, bool, error) {
 	jobsMu.Lock()
@@ -103,7 +110,7 @@ func PruneNovelStateIfNoActive(stateDir string, novelID string) (NovelStatePrune
 		return NovelStatePruneResult{}, false, err
 	}
 	for _, job := range jobs {
-		if job.Status == "queued" || job.Status == "running" {
+		if IsActiveJobStatus(job.Status) {
 			return NovelStatePruneResult{}, true, nil
 		}
 	}
@@ -305,7 +312,7 @@ func loadJobRecordsForExecution(stateDir string) ([]JobWithNovel, error) {
 		}
 		record := JobWithNovel{NovelID: read.document.NovelID, Job: read.document.toJob()}
 		records = append(records, record)
-		if record.Job.Status == "queued" || record.Job.Status == "running" {
+		if IsActiveJobStatus(record.Job.Status) {
 			activeCounts[record.NovelID]++
 		}
 	}
@@ -405,7 +412,7 @@ func validateCurrentJobDocument(document jobDocument, path string) error {
 		return errors.New("extraction requested boundary must be a non-negative integer string")
 	}
 	switch document.Status {
-	case "queued", "running", "completed", "failed", "incompatible":
+	case JobStatusQueued, JobStatusRunning, JobStatusPausing, JobStatusPaused, JobStatusInterrupted, JobStatusCanceled, JobStatusCompleted, JobStatusFailed, JobStatusIncompatible:
 	default:
 		return fmt.Errorf("extraction job status is invalid: %q", document.Status)
 	}
@@ -493,6 +500,29 @@ func SaveJob(stateDir string, novelID string, job Job) error {
 	return saveJobUnlocked(stateDir, novelID, job)
 }
 
+func SaveJobIfCurrentStatus(stateDir string, novelID string, job Job, expectedStatuses ...string) (bool, error) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
+	if err != nil {
+		return false, err
+	}
+	for _, current := range jobs {
+		if current.JobID != job.JobID {
+			continue
+		}
+		if !slices.Contains(expectedStatuses, current.Status) {
+			return false, nil
+		}
+		if err := saveJobUnlocked(stateDir, novelID, job); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, ErrJobNotFound
+}
+
 func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, error) {
 	jobsMu.Lock()
 	defer jobsMu.Unlock()
@@ -505,7 +535,7 @@ func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, err
 		return Job{}, false, err
 	}
 	for _, existing := range jobs {
-		if existing.Status == "queued" || existing.Status == "running" {
+		if IsActiveJobStatus(existing.Status) {
 			return existing, false, nil
 		}
 	}
@@ -513,6 +543,83 @@ func SaveJobIfNoActive(stateDir string, novelID string, job Job) (Job, bool, err
 		return Job{}, false, err
 	}
 	return job, true, nil
+}
+
+func ControlJob(stateDir string, novelID string, jobID string, action string) (Job, error) {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+
+	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
+	if err != nil {
+		return Job{}, err
+	}
+	for _, job := range jobs {
+		if job.JobID != jobID {
+			continue
+		}
+		switch action {
+		case "pause":
+			switch job.Status {
+			case JobStatusQueued:
+				job.Status = JobStatusPaused
+				stage := "paused"
+				job.ProgressStage = &stage
+			case JobStatusRunning:
+				job.Status = JobStatusPausing
+				stage := "pausing"
+				job.ProgressStage = &stage
+			default:
+				return Job{}, ErrInvalidJobAction
+			}
+		case "cancel":
+			if !IsActiveJobStatus(job.Status) && job.Status != JobStatusPaused && job.Status != JobStatusInterrupted {
+				return Job{}, ErrInvalidJobAction
+			}
+			job.Status = JobStatusCanceled
+			stage := "canceled"
+			job.ProgressStage = &stage
+			finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
+			job.FinishedAt = &finishedAt
+			job.ActiveWorkers = nil
+		case "resume":
+			if job.Status != JobStatusPaused && job.Status != JobStatusInterrupted {
+				return Job{}, ErrInvalidJobAction
+			}
+			job.Status = JobStatusQueued
+			stage := "queued"
+			job.ProgressStage = &stage
+			job.FinishedAt = nil
+			job.ErrorMessage = nil
+			job.ActiveWorkers = nil
+		default:
+			return Job{}, ErrInvalidJobAction
+		}
+		if err := saveJobUnlocked(stateDir, novelID, job); err != nil {
+			return Job{}, err
+		}
+		return job, nil
+	}
+	return Job{}, ErrJobNotFound
+}
+
+func FinalizePausingJob(stateDir string, novelID string, jobID string) error {
+	jobsMu.Lock()
+	defer jobsMu.Unlock()
+	jobs, _, err := loadJobsUnlocked(stateDir, novelID)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.JobID != jobID || job.Status != JobStatusPausing {
+			continue
+		}
+		job.Status = JobStatusPaused
+		stage := "paused"
+		job.ProgressStage = &stage
+		job.ActiveWorkers = nil
+		return saveJobUnlocked(stateDir, novelID, job)
+	}
+	return nil
 }
 
 func RecoverRunningJobs(stateDir string) (int, error) {
@@ -525,7 +632,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 	}
 	recovered := 0
 	for _, record := range records {
-		if record.Job.Status != "running" {
+		if record.Job.Status != JobStatusRunning && record.Job.Status != JobStatusPausing {
 			continue
 		}
 		job := record.Job
@@ -549,13 +656,11 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 				continue
 			}
 		}
-		job.Status = "queued"
-		job.StartedAt = nil
+		job.Status = JobStatusInterrupted
 		job.FinishedAt = nil
-		job.ErrorMessage = nil
-		progress := 0
-		stage := "recovered"
-		job.Progress = &progress
+		message := "viewer-api の再起動により処理が中断されました。明示的に再開できます。"
+		job.ErrorMessage = &message
+		stage := "interrupted"
 		job.ProgressStage = &stage
 		job.CurrentBatchIndex = nil
 		job.BatchCount = nil
@@ -572,7 +677,7 @@ func RecoverRunningJobs(stateDir string) (int, error) {
 }
 
 func failStopCheckpointIncompatibleJob(job Job) Job {
-	job.Status = "incompatible"
+	job.Status = JobStatusIncompatible
 	message := "抽出チェックポイントが現在の build と互換性がないため自動再開を停止しました。内容を確認してから再実行してください。"
 	job.ErrorMessage = &message
 	job.ActiveWorkers = nil
@@ -620,7 +725,7 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 	if read.incompatible {
 		return read.guardError
 	}
-	if job.Status == "queued" || job.Status == "running" {
+	if IsActiveJobStatus(job.Status) {
 		records, err := loadJobRecords(stateDir)
 		if err != nil {
 			return err
@@ -628,7 +733,7 @@ func saveJobUnlocked(stateDir string, novelID string, job Job) error {
 		for _, record := range records {
 			if record.NovelID == novelID &&
 				record.Job.JobID != job.JobID &&
-				(record.Job.Status == "queued" || record.Job.Status == "running") {
+				IsActiveJobStatus(record.Job.Status) {
 				return fmt.Errorf("extraction novel %q already has active job %q", novelID, record.Job.JobID)
 			}
 		}
@@ -648,7 +753,7 @@ func saveJobIndex(stateDir string, novelID string, job Job) error {
 	doc.Revision++
 	doc.SchemaVersion = jobIndexSchemaVersion
 	doc.NovelID = novelID
-	if job.Status == "queued" || job.Status == "running" {
+	if IsActiveJobStatus(job.Status) {
 		doc.ActiveJobID = &job.JobID
 	} else if doc.ActiveJobID != nil && *doc.ActiveJobID == job.JobID {
 		doc.ActiveJobID = nil
@@ -693,7 +798,7 @@ func loadOrRebuildJobIndex(stateDir string, novelID string, path string) (jobsIn
 			continue
 		}
 		rebuilt.JobIDs = append(rebuilt.JobIDs, record.Job.JobID)
-		if rebuilt.ActiveJobID == nil && (record.Job.Status == "queued" || record.Job.Status == "running") {
+		if rebuilt.ActiveJobID == nil && IsActiveJobStatus(record.Job.Status) {
 			jobID := record.Job.JobID
 			rebuilt.ActiveJobID = &jobID
 		}
