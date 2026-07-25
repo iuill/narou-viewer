@@ -1,7 +1,7 @@
 [install]
 linker = "hoisted"
 minimumReleaseAge = 1814400
-minimumReleaseAgeExcludes = ["esbuild"]
+minimumReleaseAgeExcludes = ["esbuild", "postcss"]
 
 [run]
 bun = true
