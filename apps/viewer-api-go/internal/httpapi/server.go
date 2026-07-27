@@ -95,10 +95,6 @@ type ServerDependencies struct {
 }
 
 func NewServerWithDependencies(deps ServerDependencies) http.Handler {
-	allowedOrigins := deps.AllowedOrigins
-	if allowedOrigins == nil {
-		allowedOrigins, _ = config.ParseAllowedOrigins(os.Getenv("VIEWER_API_ALLOWED_ORIGINS"))
-	}
 	serverCtx, cancel := context.WithCancel(context.Background())
 	publicationService := deps.Publications
 	if publicationService == nil {
@@ -156,7 +152,7 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 		extractionJobQueue: extractionJobQueue,
 		stateInitErr:       deps.StateInitErr,
 		storageProgress:    newStorageUsageProgressStore(),
-		allowedOrigins:     originSet(allowedOrigins),
+		allowedOrigins:     originSet(deps.AllowedOrigins),
 	}
 	s.extractionJobs = deps.ExtractionJobCoordinator
 	if s.extractionJobs == nil && deps.ExtractionJobCoordinatorFactory != nil {
@@ -235,7 +231,8 @@ func (s *Server) handleCORS(w http.ResponseWriter, r *http.Request) bool {
 	if origin == "" {
 		return false
 	}
-	if !s.isAllowedCORSOrigin(r, origin) {
+	allowedOrigin, allowed := s.allowedCORSOrigin(r, origin)
+	if !allowed {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return true
@@ -246,7 +243,7 @@ func (s *Server) handleCORS(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return false
 	}
-	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 	w.Header().Add("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", strings.Join([]string{
@@ -330,32 +327,26 @@ func generateAPIRequestID() string {
 	return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
 }
 
-func (s *Server) isAllowedCORSOrigin(r *http.Request, origin string) bool {
-	normalizedOrigins, err := config.ParseAllowedOrigins(origin)
-	if err != nil || len(normalizedOrigins) != 1 {
-		return false
+func (s *Server) allowedCORSOrigin(r *http.Request, origin string) (string, bool) {
+	normalizedOrigin, err := config.NormalizeOrigin(origin)
+	if err != nil {
+		return "", false
 	}
-	normalizedOrigin := normalizedOrigins[0]
 	if _, ok := s.allowedOrigins[normalizedOrigin]; ok {
-		return true
+		return normalizedOrigin, true
 	}
 	parsed, err := url.Parse(normalizedOrigin)
 	if err != nil {
-		return false
+		return "", false
 	}
 	host := parsed.Hostname()
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return false
+		return "", false
 	}
 	if r != nil && originMatchesRequestHost(parsed, r) {
-		return true
+		return normalizedOrigin, true
 	}
-	return isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host)
-}
-
-func isAllowedCORSOrigin(r *http.Request, origin string) bool {
-	allowedOrigins, _ := config.ParseAllowedOrigins(os.Getenv("VIEWER_API_ALLOWED_ORIGINS"))
-	return (&Server{allowedOrigins: originSet(allowedOrigins)}).isAllowedCORSOrigin(r, origin)
+	return normalizedOrigin, isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host)
 }
 
 func originSet(origins []string) map[string]struct{} {

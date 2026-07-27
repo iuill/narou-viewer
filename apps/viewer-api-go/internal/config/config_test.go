@@ -77,7 +77,7 @@ func TestLoadRejectsInvalidAllowedOrigin(t *testing.T) {
 }
 
 func TestParseAllowedOrigins(t *testing.T) {
-	origins, err := ParseAllowedOrigins("HTTP://Viewer.Example.Test:5173, https://[fd00::1]:8443,http://viewer.example.test:5173")
+	origins, err := ParseAllowedOrigins("HTTP://Viewer.Example.Test:5173, https://[FD00:0:0:0:0:0:0:1]:8443,http://viewer.example.test:5173")
 	if err != nil {
 		t.Fatalf("ParseAllowedOrigins returned error: %v", err)
 	}
@@ -105,6 +105,8 @@ func TestParseAllowedOriginsRejectsInvalidValuesWithoutEchoingThem(t *testing.T)
 		{name: "fragment", value: "http://private-host.example:5173#x", want: "fragmentは指定できません"},
 		{name: "userinfo", value: "http://user:password@private-host.example:5173", want: "userinfoは指定できません"},
 		{name: "scheme", value: "ftp://private-host.example:5173", want: "schemeはhttpまたはhttpsを指定してください"},
+		{name: "internationalized host", value: "http://例.example:5173", want: "非ASCIIのhostはpunycodeで指定してください"},
+		{name: "empty port", value: "http://private-host.example:", want: "port番号が空です"},
 		{name: "empty item", value: "http://valid.example:5173,", want: "空の値は指定できません"},
 	}
 	for _, tc := range tests {

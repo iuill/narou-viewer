@@ -40,7 +40,7 @@ func ParseAllowedOrigins(configured string) ([]string, error) {
 	origins := make([]string, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for index, raw := range items {
-		origin, err := parseOrigin(strings.TrimSpace(raw))
+		origin, err := NormalizeOrigin(strings.TrimSpace(raw))
 		if err != nil {
 			return nil, fmt.Errorf("VIEWER_API_ALLOWED_ORIGINS の%d件目が不正です: %w", index+1, err)
 		}
@@ -53,7 +53,7 @@ func ParseAllowedOrigins(configured string) ([]string, error) {
 	return origins, nil
 }
 
-func parseOrigin(value string) (string, error) {
+func NormalizeOrigin(value string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("空の値は指定できません")
 	}
@@ -66,6 +66,9 @@ func parseOrigin(value string) (string, error) {
 	}
 	if parsed.Host == "" || parsed.Hostname() == "" {
 		return "", fmt.Errorf("hostを指定してください")
+	}
+	if !isASCII(parsed.Hostname()) {
+		return "", fmt.Errorf("非ASCIIのhostはpunycodeで指定してください")
 	}
 	if parsed.User != nil {
 		return "", fmt.Errorf("userinfoは指定できません")
@@ -82,21 +85,30 @@ func parseOrigin(value string) (string, error) {
 	if parsed.Fragment != "" {
 		return "", fmt.Errorf("fragmentは指定できません")
 	}
-	if parsed.Opaque != "" {
-		return "", fmt.Errorf("有効なURL originではありません")
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", fmt.Errorf("port番号が空です")
 	}
 
-	host := strings.ToLower(parsed.Hostname())
-	if strings.Contains(host, ":") {
-		host = "[" + host + "]"
+	hostname := strings.ToLower(parsed.Hostname())
+	if ip := net.ParseIP(hostname); ip != nil {
+		hostname = ip.String()
 	}
+	host := hostname
 	if port := parsed.Port(); port != "" {
-		host = net.JoinHostPort(parsed.Hostname(), port)
-		if !strings.Contains(parsed.Hostname(), ":") {
-			host = strings.ToLower(host)
-		}
+		host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
 	}
 	return strings.ToLower(parsed.Scheme) + "://" + host, nil
+}
+
+func isASCII(value string) bool {
+	for _, char := range value {
+		if char > 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func envOrDefault(name string, fallback string) string {

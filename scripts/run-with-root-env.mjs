@@ -81,4 +81,10 @@ const child = Bun.spawn(command, {
   stderr: "inherit",
 });
 
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    child.kill(signal);
+  });
+}
+
 process.exit(await child.exited);

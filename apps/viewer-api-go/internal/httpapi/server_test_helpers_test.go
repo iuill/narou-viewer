@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
@@ -33,11 +34,29 @@ func newTestServerWithStore(stateStore *store.Store) http.Handler {
 	return newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
 }
 
+func newTestServerWithAllowedOrigins(stateStore *store.Store, allowedOrigins []string) http.Handler {
+	dataDir := filepath.Clean("../../data")
+	libraryService := library.NewService(filepath.Join(dataDir, "novel-fetcher"))
+	fetcherClient := fetcher.NewClient(config.FetcherAPIBaseURL())
+	return NewServerWithDependencies(ServerDependencies{
+		DataDir:        dataDir,
+		Library:        libraryService,
+		StateStore:     stateStore,
+		FetcherClient:  fetcherClient,
+		FetcherCommand: fetchercommands.NewService(fetcherClient, fetchercommands.NewLibraryWorkIDResolver(libraryService)),
+		AllowedOrigins: allowedOrigins,
+	})
+}
+
 func newTestServerWithLibraryAndStore(dataDir string, libraryService *library.Service, stateStore *store.Store) http.Handler {
 	return newTestServerWithDependencies(dataDir, libraryService, nil, stateStore, nil)
 }
 
 func newTestServerWithDependencies(dataDir string, libraryService *library.Service, publicationService *publications.Service, stateStore *store.Store, initErr error) http.Handler {
+	allowedOrigins, err := config.ParseAllowedOrigins(os.Getenv("VIEWER_API_ALLOWED_ORIGINS"))
+	if err != nil {
+		panic(err)
+	}
 	fetcherClient := fetcher.NewClient(config.FetcherAPIBaseURL())
 	stateDir := filepath.Join(dataDir, "state")
 	textCache := readertextcache.New(stateDir)
@@ -53,5 +72,15 @@ func newTestServerWithDependencies(dataDir string, libraryService *library.Servi
 		FetcherClient:  fetcherClient,
 		FetcherCommand: fetcherCommands,
 		StateInitErr:   initErr,
+		AllowedOrigins: allowedOrigins,
 	})
+}
+
+func isAllowedCORSOrigin(r *http.Request, origin string) bool {
+	allowedOrigins, err := config.ParseAllowedOrigins(os.Getenv("VIEWER_API_ALLOWED_ORIGINS"))
+	if err != nil {
+		return false
+	}
+	_, allowed := (&Server{allowedOrigins: originSet(allowedOrigins)}).allowedCORSOrigin(r, origin)
+	return allowed
 }

@@ -93,7 +93,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
   VIEWER_API_ALLOWED_ORIGINS=http://viewer-dev.example.test:5173
   ```
 
-  値は `http` または `https` のscheme、host、必要なportだけで構成します。末尾の `/`、path、query、fragment、userinfoを含む場合、viewer-apiは修正理由を示して起動を中止します。複数指定する場合はカンマで区切ります。診断メッセージには設定値そのものを表示せず、何件目の指定に問題があるかだけを表示します。
+  値は `http` または `https` のscheme、host、必要なportだけで構成します。末尾の `/`、path、query、fragment、userinfoを含む場合、viewer-apiは修正理由を示して起動を中止します。国際化ドメイン名はブラウザの `location.origin` と同じpunycodeで指定してください。複数指定する場合はカンマで区切ります。診断メッセージには設定値そのものを表示せず、何件目の指定に問題があるかだけを表示します。シェル、Dev Container、CIなどで明示した同名の環境変数は `.env.local` より優先されます。
 - 取得 sidecar は `novel-fetcher` です。作品一覧・目次・本文は sidecar の内部 API 経由で読み、保存済み asset 配信時だけ `VIEWER_DATA_DIR/novel-fetcher` 配下の共有ファイルを検証して返します。`novel-fetcher` は小説家になろうとカクヨムの基本取得に対応します。
 - `novel-fetcher` への操作は `viewer-web` -> `viewer-api` -> `/api/fetcher/*` を正規経路とし、sidecar API には compose 外部から直接アクセスしません。旧 `/api/narou/*` 互換 API は廃止済みです。
 - `.agents/skills` は Dev Container / Codespaces のコンテナ起動時に `.github/skills` として symlink 連携されるため、`GitHub Copilot CLI` など `.github/skills` を参照する環境から同じ skill 群を project skills として再利用できます。
