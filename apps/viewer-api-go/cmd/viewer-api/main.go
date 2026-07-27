@@ -19,7 +19,10 @@ func main() {
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load viewer-api configuration: %v", err)
+	}
 	writerLock, err := statebarrier.AcquireViewerAPI(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("acquire viewer-api state writer barrier: %v", err)
@@ -28,7 +31,7 @@ func main() {
 	if _, err := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{}); err != nil {
 		log.Fatalf("validate OPENROUTER_REASONING_EFFORT: %v", err)
 	}
-	handlerResult := runtime.NewHandler(cfg.DataDir)
+	handlerResult := runtime.NewHandler(cfg.DataDir, cfg.AllowedOrigins...)
 	if handlerResult.InitErr != nil {
 		log.Fatalf("initialize viewer-api-go state: %v", handlerResult.InitErr)
 	}
