@@ -33,7 +33,7 @@
 
 ## 主要 tool
 
-- `get_current_episode`: 現在話のタイトルと本文抜粋を返す。
+- `get_current_episode`: 現在話の参照情報を返し、現在話がネタバレ境界内の場合だけ本文抜粋も返す。
 - `get_previous_episode`: 前話のタイトルと本文抜粋を返す。
 - `load_episode`: 指定話を境界内で読み込む。
 - `load_episode_range`: 最大20話の範囲を読み込む。広い振り返りでは `output: "summary"` と `summaryPurpose` / `summaryFocus` を使い、中間要約を返す。

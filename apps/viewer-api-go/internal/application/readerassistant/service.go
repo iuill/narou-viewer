@@ -424,6 +424,10 @@ func (s *Service) recordReaderAssistantUsage(input readerAssistantUsageInput) er
 }
 
 func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai.UsageRequest) map[string]any {
+	recentRangeEndNumber := input.SpoilerBoundaryEpisodeNumber
+	if recentRangeEndNumber == 0 {
+		recentRangeEndNumber = input.CurrentEpisodeNumber
+	}
 	return map[string]any{
 		"readingContext": map[string]any{
 			"novelId":                      input.NovelID,
@@ -435,7 +439,7 @@ func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai
 			"currentPosition":              input.CurrentPosition,
 			"maxEpisodeIndex":              input.SpoilerBoundaryEpisodeIndex,
 			"recentPreviousEpisodeCount":   input.RecentPreviousEpisodeCount,
-			"recentPreviousRange":          readerAssistantUsageRecentPreviousRange(input.CurrentEpisodeNumber, input.RecentPreviousEpisodeCount),
+			"recentPreviousRange":          readerAssistantUsageRecentPreviousRange(recentRangeEndNumber, input.RecentPreviousEpisodeCount),
 		},
 		"conversation": map[string]any{
 			"historyCount": len(input.History),
@@ -451,11 +455,10 @@ func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai
 	}
 }
 
-func readerAssistantUsageRecentPreviousRange(currentNumber int, count int) map[string]any {
-	if currentNumber <= 1 || count <= 0 {
+func readerAssistantUsageRecentPreviousRange(endNumber int, count int) map[string]any {
+	if endNumber < 1 || count <= 0 {
 		return nil
 	}
-	endNumber := currentNumber - 1
 	startNumber := endNumber - count + 1
 	if startNumber < 1 {
 		startNumber = 1
@@ -615,7 +618,7 @@ func buildReaderAssistantInstructions(context readerAssistantContext) string {
 		"必ず日本語で、簡潔かつ根拠に忠実に答えてください。",
 		"読める範囲は現在のネタバレ境界までです。境界より先の話、未読話のタイトル、未読話の内容を推測・言及してはいけません。",
 		"必要な情報はツールで確認してください。手元にない本文・人物・用語情報を記憶や推測で補わないでください。",
-		"現在地の確認だけなら get_current_episode を使ってください。",
+		"現在地の確認には get_current_episode を使ってください。現在話がネタバレ境界外なら話の参照情報だけが返り、本文抜粋は返りません。",
 		"前話を尋ねられた場合は get_previous_episode を使ってください。",
 		"複数話の流れ、1〜5話のような範囲指定、ここまでの状況、読書再開用の確認では load_episode_range を使ってください。",
 		"load_episode_range の startEpisodeNumber/endEpisodeNumber は1始まりです。一度に20話を超える範囲は指定せず、20話以下に分割してください。",
@@ -682,13 +685,13 @@ func readerAssistantRecentPreviousScopeNote(context readerAssistantContext) stri
 
 func readerAssistantToolDefinitions() []ai.ToolDefinition {
 	return []ai.ToolDefinition{
-		readerAssistantTool("get_current_episode", "現在開いている話の本文抜粋を取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
+		readerAssistantTool("get_current_episode", "現在開いている話の参照情報を取得する。現在話がネタバレ境界内の場合だけ本文抜粋も返す。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
 		readerAssistantTool("get_previous_episode", "現在話のひとつ前の話の本文抜粋を取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
-		readerAssistantTool("load_episode_range", "既読範囲内の指定話数範囲をまとめて取得する。startEpisodeNumber/endEpisodeNumber は1始まり。未指定なら現在話までの最大20話。", map[string]any{
+		readerAssistantTool("load_episode_range", "既読範囲内の指定話数範囲をまとめて取得する。startEpisodeNumber/endEpisodeNumber は1始まり。未指定ならネタバレ境界までの最大20話。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"startEpisodeNumber": map[string]any{"type": "number", "description": "読み込み開始話数。1始まり。"},
-				"endEpisodeNumber":   map[string]any{"type": "number", "description": "読み込み終了話数。1始まり。現在話より先は指定しない。"},
+				"endEpisodeNumber":   map[string]any{"type": "number", "description": "読み込み終了話数。1始まり。ネタバレ境界より先は指定しない。"},
 				"output":             map[string]any{"type": "string", "enum": []string{"excerpt", "summary"}},
 				"summaryPurpose":     map[string]any{"type": "string", "enum": []string{"plot", "character_relationships", "reader_resume", "custom"}},
 				"summaryFocus":       map[string]any{"type": "string"},
@@ -740,14 +743,16 @@ func (s *Service) executeReaderAssistantTool(ctx context.Context, contextInfo re
 	args := decodeToolArguments(rawArguments)
 	switch name {
 	case "get_current_episode":
-		if !readerAssistantEpisodeVisible(contextInfo, contextInfo.CurrentEpisodeIndex) {
-			return readerAssistantToolRecovery(name, errors.New("current episode is outside the spoiler boundary."))
-		}
+		currentEpisodeVisible := readerAssistantEpisodeVisible(contextInfo, contextInfo.CurrentEpisodeIndex)
 		result := map[string]any{
 			"novelTitle":     contextInfo.NovelTitle,
 			"currentEpisode": contextInfo.CurrentEpisodeRef,
-			"excerpt":        truncateRunes(contextInfo.CurrentExcerpt, 700),
-			"scopeNote":      "現在話より先の本文は参照していません。",
+			"excerpt":        "",
+			"scopeNote":      "現在話はネタバレ境界外のため、話の参照情報だけを返し、本文抜粋は返していません。",
+		}
+		if currentEpisodeVisible {
+			result["excerpt"] = truncateRunes(contextInfo.CurrentExcerpt, 700)
+			result["scopeNote"] = "現在話より先の本文は参照していません。"
 		}
 		return readerAssistantToolResult{Name: name, Result: result}
 	case "get_previous_episode":
@@ -2172,7 +2177,7 @@ func readerAssistantEpisodeNumberArg(value any, fallback int, maxNumber int) (in
 		return 0, errors.New("episode number must be an integer.")
 	}
 	if number < 1 || number > maxNumber {
-		return 0, errors.New("episode number must be between 1 and the current episode number.")
+		return 0, errors.New("episode number must be between 1 and the spoiler boundary episode number.")
 	}
 	return number, nil
 }
