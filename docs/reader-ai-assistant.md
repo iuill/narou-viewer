@@ -19,8 +19,9 @@
 
 - 境界は `episodeIndex` を基準にする。
 - 本文画面では「現在話を含む」を既定で無効にし、直前話を上限とする。有効にした場合だけ現在表示中の話を上限へ含める。第1話では、有効にするまで質問を送信できない。
-- `viewer-web` は `novelId`、選択した上限話、直近会話履歴、ユーザー発話を送る。同一作品では話移動や境界切替後も会話を保持し、各発話にその時点の参照上限を記録する。過去の回答は読者が既に得た情報として履歴に含める一方、新しい検索、本文ロード、人物・用語情報参照にはリクエスト時点の上限を適用する。
-- `viewer-api` は目次と照合して境界を決め、tool 実行時にも `maxEpisodeIndex` を強制する。
+- `viewer-web` は `novelId`、実際に開いている `currentEpisodeIndex`、選択した `spoilerBoundaryEpisodeIndex`、直近会話履歴、ユーザー発話を送る。同一作品では話移動や境界切替後も会話を保持し、各発話にその時点の参照上限を記録する。過去の回答は読者が既に得た情報として履歴に含める一方、新しい検索、本文ロード、人物・用語情報参照にはリクエスト時点の上限を適用する。
+- `viewer-api` は両方の episode index を目次と照合する。「前話」「直近N話」などの相対表現は実際の現在話を基準に解決し、本文・検索・人物・用語の取得可否には `spoilerBoundaryEpisodeIndex` を強制する。旧クライアントが境界を送らない場合は、`currentEpisodeIndex` を境界として扱う。
+- 「直近N話」は、現在話を含める場合は現在話、含めない場合は前話を終端とするN話として扱う。
 - 境界外の検索、本文ロード、人物・用語情報参照はサーバ側で拒否する。
 
 ## 実行境界
@@ -32,7 +33,7 @@
 
 ## 主要 tool
 
-- `get_current_episode`: 現在話のタイトルと本文抜粋を返す。
+- `get_current_episode`: 現在話の参照情報を返し、現在話がネタバレ境界内の場合だけ本文抜粋も返す。
 - `get_previous_episode`: 前話のタイトルと本文抜粋を返す。
 - `load_episode`: 指定話を境界内で読み込む。
 - `load_episode_range`: 最大20話の範囲を読み込む。広い振り返りでは `output: "summary"` と `summaryPurpose` / `summaryFocus` を使い、中間要約を返す。
@@ -50,6 +51,7 @@
   - 非 streaming の最終回答を返す。
 - `POST /api/library/novels/{novelId}/reader-assistant/chat/stream`
   - `application/x-ndjson` で `status`、`tool_call`、`tool_result`、`result`、`error` を返す。
+- request の `currentEpisodeIndex` は実際に開いている話、`spoilerBoundaryEpisodeIndex` は参照上限を表す。response の `currentEpisodeIndex` は実際の現在話、`maxEpisodeIndex` は参照上限を表す。
 - 読書AIの run / request 単位の usage は AI機能ワークスペースの「読書AI利用統計」で確認できる。
 
 ## テスト観点

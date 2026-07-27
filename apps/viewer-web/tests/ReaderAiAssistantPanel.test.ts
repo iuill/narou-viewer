@@ -206,6 +206,7 @@ describe("ReaderAiAssistantPanel", () => {
           body: JSON.stringify({
             message: "直近5話の流れを要約して",
             currentEpisodeIndex: "2",
+            spoilerBoundaryEpisodeIndex: "2",
             position: 123,
             history: []
           })
@@ -261,12 +262,54 @@ describe("ReaderAiAssistantPanel", () => {
         expect.objectContaining({
           body: JSON.stringify({
             message: "直近5話の流れを要約して",
-            currentEpisodeIndex: "1",
+            currentEpisodeIndex: "2",
+            spoilerBoundaryEpisodeIndex: "1",
             position: 0,
             history: []
           })
         })
       );
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("submits questions when randomUUID is unavailable in a non-secure context", async () => {
+    const fetchMock = vi.fn(async () =>
+      createNdjsonResponse([
+        {
+          type: "result",
+          response: {
+            answer: "回答しました。",
+            currentEpisodeIndex: "2",
+            maxEpisodeIndex: "1",
+            novelId: "novel-a",
+            runId: null,
+            toolRequests: [],
+            generationMode: "remote",
+            toolResults: []
+          }
+        }
+      ])
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {});
+    const { container, root, dom } = await renderPanel(createProps());
+
+    try {
+      const promptButton = Array.from(container.querySelectorAll("button")).find(
+        (button) => button.textContent === "直近5話の流れを要約して"
+      );
+      if (!(promptButton instanceof dom.window.HTMLButtonElement)) {
+        throw new Error("prompt button not found");
+      }
+
+      await act(async () => {
+        promptButton.click();
+      });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain("回答しました。");
     } finally {
       await act(async () => root.unmount());
     }
@@ -393,7 +436,8 @@ describe("ReaderAiAssistantPanel", () => {
         expect.objectContaining({
           body: JSON.stringify({
             message: "直近5話の流れを要約して",
-            currentEpisodeIndex: "1",
+            currentEpisodeIndex: "2",
+            spoilerBoundaryEpisodeIndex: "1",
             position: 0,
             history: []
           })
@@ -473,7 +517,8 @@ describe("ReaderAiAssistantPanel", () => {
         expect.objectContaining({
           body: JSON.stringify({
             message: "それは誰？",
-            currentEpisodeIndex: "1",
+            currentEpisodeIndex: "2",
+            spoilerBoundaryEpisodeIndex: "1",
             position: 0,
             history: [
               {

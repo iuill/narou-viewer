@@ -540,6 +540,15 @@ func (s *Server) handleReaderAssistantChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	currentEpisodeIndex, _ := isNonNegativeIntegerString(body["currentEpisodeIndex"])
+	spoilerBoundaryEpisodeIndex := currentEpisodeIndex
+	if boundary, exists := body["spoilerBoundaryEpisodeIndex"]; exists {
+		parsedBoundary, valid := isNonNegativeIntegerString(boundary)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "spoilerBoundaryEpisodeIndex must be a non-negative integer string.")
+			return
+		}
+		spoilerBoundaryEpisodeIndex = parsedBoundary
+	}
 	readerPosition := 0
 	if position, exists := body["position"]; exists && position != nil {
 		number, ok := position.(float64)
@@ -562,16 +571,37 @@ func (s *Server) handleReaderAssistantChat(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "currentEpisodeIndex is out of range.")
 		return
 	}
+	_, boundaryFound, err := s.validateNovelEpisode(r.Context(), novelID, spoilerBoundaryEpisodeIndex)
+	if err != nil {
+		writeLibraryLookupError(w, r, novelID, spoilerBoundaryEpisodeIndex, err)
+		return
+	}
+	if !boundaryFound {
+		writeError(w, http.StatusBadRequest, "spoilerBoundaryEpisodeIndex is out of range.")
+		return
+	}
+	episodeIndexes := s.episodeIndexes(r.Context(), novelID)
+	currentNumber := indexOfString(episodeIndexes, currentEpisodeIndex)
+	boundaryNumber := indexOfString(episodeIndexes, spoilerBoundaryEpisodeIndex)
+	if currentNumber < 0 || boundaryNumber < 0 {
+		writeError(w, http.StatusBadRequest, "reader assistant episode context is out of range.")
+		return
+	}
+	if boundaryNumber > currentNumber {
+		writeError(w, http.StatusBadRequest, "spoilerBoundaryEpisodeIndex must not be after currentEpisodeIndex.")
+		return
+	}
 	history := readerassistant.NormalizeHistory(body["history"])
 	if !stream {
 		ctx, cancel := nonStreamingLLMContext(r.Context())
 		defer cancel()
 		response, err := s.readerAssistant.Respond(ctx, readerassistant.Request{
-			NovelID:             novelID,
-			CurrentEpisodeIndex: currentEpisodeIndex,
-			ReaderPosition:      readerPosition,
-			Message:             message,
-			History:             history,
+			NovelID:                     novelID,
+			CurrentEpisodeIndex:         currentEpisodeIndex,
+			SpoilerBoundaryEpisodeIndex: spoilerBoundaryEpisodeIndex,
+			ReaderPosition:              readerPosition,
+			Message:                     message,
+			History:                     history,
 		}, nil)
 		if err != nil {
 			writeError(w, readerAssistantErrorStatus(err), readerAssistantErrorMessage(err))
@@ -609,11 +639,12 @@ func (s *Server) handleReaderAssistantChat(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	response, err := s.readerAssistant.Respond(r.Context(), readerassistant.Request{
-		NovelID:             novelID,
-		CurrentEpisodeIndex: currentEpisodeIndex,
-		ReaderPosition:      readerPosition,
-		Message:             message,
-		History:             history,
+		NovelID:                     novelID,
+		CurrentEpisodeIndex:         currentEpisodeIndex,
+		SpoilerBoundaryEpisodeIndex: spoilerBoundaryEpisodeIndex,
+		ReaderPosition:              readerPosition,
+		Message:                     message,
+		History:                     history,
 	}, readerassistant.StreamSink(writeStreamEvent))
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -685,6 +716,15 @@ func (s *Server) episodeIndexes(ctx context.Context, novelID string) []string {
 		return nil
 	}
 	return episodeIndexesFromToc(toc.Episodes)
+}
+
+func indexOfString(values []string, target string) int {
+	for index, value := range values {
+		if value == target {
+			return index
+		}
+	}
+	return -1
 }
 
 func episodeIndexesFromToc(episodes []library.TocEpisodeSummary) []string {

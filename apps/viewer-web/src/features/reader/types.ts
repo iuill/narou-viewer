@@ -80,6 +80,7 @@ export type ReaderAiAssistantHistoryMessage = {
 export type ReaderAiAssistantChatRequest = {
   message: string;
   currentEpisodeIndex: EpisodeIndex;
+  spoilerBoundaryEpisodeIndex: EpisodeIndex;
   position: number;
   history: ReaderAiAssistantHistoryMessage[];
 };
@@ -97,6 +98,7 @@ export type ReaderAiAssistantToolRequest = {
 export type ReaderAiAssistantResponse = {
   answer: string;
   novelId: string;
+  currentEpisodeIndex?: string;
   maxEpisodeIndex: string;
   runId: string | null;
   toolRequests: ReaderAiAssistantToolRequest[];

@@ -47,11 +47,12 @@ type Service struct {
 }
 
 type Request struct {
-	NovelID             string
-	CurrentEpisodeIndex string
-	ReaderPosition      int
-	Message             string
-	History             []map[string]string
+	NovelID                     string
+	CurrentEpisodeIndex         string
+	SpoilerBoundaryEpisodeIndex string
+	ReaderPosition              int
+	Message                     string
+	History                     []map[string]string
 }
 
 type StreamSink func(map[string]any) bool
@@ -95,7 +96,11 @@ func (s *Service) Respond(ctx context.Context, request Request, streamSink Strea
 	if s == nil {
 		return nil, ErrUnavailable
 	}
-	return s.readerAssistantResponse(ctx, request.NovelID, request.CurrentEpisodeIndex, request.ReaderPosition, request.Message, request.History, streamSink)
+	spoilerBoundaryEpisodeIndex := request.SpoilerBoundaryEpisodeIndex
+	if spoilerBoundaryEpisodeIndex == "" {
+		spoilerBoundaryEpisodeIndex = request.CurrentEpisodeIndex
+	}
+	return s.readerAssistantResponse(ctx, request.NovelID, request.CurrentEpisodeIndex, spoilerBoundaryEpisodeIndex, request.ReaderPosition, request.Message, request.History, streamSink)
 }
 
 var ErrUnavailable = errReaderAssistantUnavailable
@@ -121,18 +126,34 @@ const (
 )
 
 type readerAssistantContext struct {
-	NovelID                    string
-	NovelTitle                 string
-	CurrentEpisodeIndex        string
-	CurrentEpisodeNumber       int
-	CurrentEpisodeRef          map[string]any
-	CurrentExcerpt             string
-	CurrentPosition            int
-	Message                    string
-	History                    []map[string]string
-	TocEpisodes                []library.TocEpisodeSummary
-	RecentPreviousEpisodeCount int
-	HitRegistry                *readerAssistantHitRegistry
+	NovelID                      string
+	NovelTitle                   string
+	CurrentEpisodeIndex          string
+	CurrentEpisodeNumber         int
+	SpoilerBoundaryEpisodeIndex  string
+	SpoilerBoundaryEpisodeNumber int
+	CurrentEpisodeRef            map[string]any
+	CurrentExcerpt               string
+	CurrentPosition              int
+	Message                      string
+	History                      []map[string]string
+	TocEpisodes                  []library.TocEpisodeSummary
+	RecentPreviousEpisodeCount   int
+	HitRegistry                  *readerAssistantHitRegistry
+}
+
+func (context readerAssistantContext) spoilerBoundaryEpisodeIndex() string {
+	if context.SpoilerBoundaryEpisodeIndex != "" {
+		return context.SpoilerBoundaryEpisodeIndex
+	}
+	return context.CurrentEpisodeIndex
+}
+
+func (context readerAssistantContext) spoilerBoundaryEpisodeNumber() int {
+	if context.SpoilerBoundaryEpisodeNumber > 0 {
+		return context.SpoilerBoundaryEpisodeNumber
+	}
+	return episodeNumberByIndex(context.TocEpisodes, context.spoilerBoundaryEpisodeIndex())
 }
 
 type readerAssistantToolResult struct {
@@ -179,7 +200,7 @@ const (
 	DefaultFullTextResults = readerAssistantDefaultFullTextResults
 )
 
-func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, currentEpisodeIndex string, readerPosition int, message string, history []map[string]string, streamSink StreamSink) (map[string]any, error) {
+func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, currentEpisodeIndex string, spoilerBoundaryEpisodeIndex string, readerPosition int, message string, history []map[string]string, streamSink StreamSink) (map[string]any, error) {
 	runID := "go-reader-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	startedAt := ai.NowISO()
 	novelTitle := ""
@@ -222,18 +243,20 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 	profileID := stringPtrOrNil(config.ProfileID)
 	profileLabel := stringPtrOrNil(config.ProfileLabel)
 	assistantContext := readerAssistantContext{
-		NovelID:                    novelID,
-		NovelTitle:                 novelTitle,
-		CurrentEpisodeIndex:        currentEpisodeIndex,
-		CurrentEpisodeNumber:       episodeNumberByIndex(tocEpisodes, currentEpisodeIndex),
-		CurrentEpisodeRef:          currentEpisodeRef,
-		CurrentExcerpt:             excerpt,
-		CurrentPosition:            readerPosition,
-		Message:                    strings.TrimSpace(message),
-		History:                    history,
-		TocEpisodes:                tocEpisodes,
-		RecentPreviousEpisodeCount: readerAssistantRecentPreviousEpisodeCount(message),
-		HitRegistry:                newReaderAssistantHitRegistry(),
+		NovelID:                      novelID,
+		NovelTitle:                   novelTitle,
+		CurrentEpisodeIndex:          currentEpisodeIndex,
+		CurrentEpisodeNumber:         episodeNumberByIndex(tocEpisodes, currentEpisodeIndex),
+		SpoilerBoundaryEpisodeIndex:  spoilerBoundaryEpisodeIndex,
+		SpoilerBoundaryEpisodeNumber: episodeNumberByIndex(tocEpisodes, spoilerBoundaryEpisodeIndex),
+		CurrentEpisodeRef:            currentEpisodeRef,
+		CurrentExcerpt:               excerpt,
+		CurrentPosition:              readerPosition,
+		Message:                      strings.TrimSpace(message),
+		History:                      history,
+		TocEpisodes:                  tocEpisodes,
+		RecentPreviousEpisodeCount:   readerAssistantRecentPreviousEpisodeCount(message),
+		HitRegistry:                  newReaderAssistantHitRegistry(),
 	}
 	openRouterConfig := ai.OpenRouterConfig{
 		APIKey:            config.APIKey,
@@ -250,26 +273,28 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 	result, toolRequests, toolResults, err := s.runReaderAssistantAgentLoop(ctx, assistantContext, openRouterConfig, streamSink)
 	if err != nil {
 		_ = s.recordReaderAssistantUsage(readerAssistantUsageInput{
-			RunID:                      runID,
-			Status:                     "failed",
-			StartedAt:                  startedAt,
-			NovelID:                    novelID,
-			NovelTitle:                 novelTitle,
-			CurrentEpisodeIndex:        currentEpisodeIndex,
-			CurrentEpisodeNumber:       assistantContext.CurrentEpisodeNumber,
-			CurrentPosition:            assistantContext.CurrentPosition,
-			Answer:                     "",
-			Message:                    message,
-			History:                    history,
-			GenerationMode:             "remote",
-			ModelID:                    modelID,
-			ProfileID:                  profileID,
-			ProfileLabel:               profileLabel,
-			Reasoning:                  &reasoningRequest,
-			ToolRequests:               toolRequests,
-			ToolResults:                toolResults,
-			RecentPreviousEpisodeCount: assistantContext.RecentPreviousEpisodeCount,
-			ErrorMessage:               err.Error(),
+			RunID:                        runID,
+			Status:                       "failed",
+			StartedAt:                    startedAt,
+			NovelID:                      novelID,
+			NovelTitle:                   novelTitle,
+			CurrentEpisodeIndex:          currentEpisodeIndex,
+			CurrentEpisodeNumber:         assistantContext.CurrentEpisodeNumber,
+			SpoilerBoundaryEpisodeIndex:  spoilerBoundaryEpisodeIndex,
+			SpoilerBoundaryEpisodeNumber: assistantContext.SpoilerBoundaryEpisodeNumber,
+			CurrentPosition:              assistantContext.CurrentPosition,
+			Answer:                       "",
+			Message:                      message,
+			History:                      history,
+			GenerationMode:               "remote",
+			ModelID:                      modelID,
+			ProfileID:                    profileID,
+			ProfileLabel:                 profileLabel,
+			Reasoning:                    &reasoningRequest,
+			ToolRequests:                 toolRequests,
+			ToolResults:                  toolResults,
+			RecentPreviousEpisodeCount:   assistantContext.RecentPreviousEpisodeCount,
+			ErrorMessage:                 err.Error(),
 		})
 		return nil, err
 	}
@@ -283,27 +308,29 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		outputTokens = estimateTokenCount(answer)
 	}
 	if err := s.recordReaderAssistantUsage(readerAssistantUsageInput{
-		RunID:                      runID,
-		Status:                     "completed",
-		StartedAt:                  startedAt,
-		NovelID:                    novelID,
-		NovelTitle:                 novelTitle,
-		CurrentEpisodeIndex:        currentEpisodeIndex,
-		CurrentEpisodeNumber:       assistantContext.CurrentEpisodeNumber,
-		CurrentPosition:            assistantContext.CurrentPosition,
-		Answer:                     answer,
-		Message:                    message,
-		History:                    history,
-		GenerationMode:             "remote",
-		ModelID:                    modelID,
-		ProfileID:                  profileID,
-		ProfileLabel:               profileLabel,
-		Reasoning:                  &reasoningRequest,
-		InputTokens:                inputTokens,
-		OutputTokens:               outputTokens,
-		ToolRequests:               toolRequests,
-		ToolResults:                toolResults,
-		RecentPreviousEpisodeCount: assistantContext.RecentPreviousEpisodeCount,
+		RunID:                        runID,
+		Status:                       "completed",
+		StartedAt:                    startedAt,
+		NovelID:                      novelID,
+		NovelTitle:                   novelTitle,
+		CurrentEpisodeIndex:          currentEpisodeIndex,
+		CurrentEpisodeNumber:         assistantContext.CurrentEpisodeNumber,
+		SpoilerBoundaryEpisodeIndex:  spoilerBoundaryEpisodeIndex,
+		SpoilerBoundaryEpisodeNumber: assistantContext.SpoilerBoundaryEpisodeNumber,
+		CurrentPosition:              assistantContext.CurrentPosition,
+		Answer:                       answer,
+		Message:                      message,
+		History:                      history,
+		GenerationMode:               "remote",
+		ModelID:                      modelID,
+		ProfileID:                    profileID,
+		ProfileLabel:                 profileLabel,
+		Reasoning:                    &reasoningRequest,
+		InputTokens:                  inputTokens,
+		OutputTokens:                 outputTokens,
+		ToolRequests:                 toolRequests,
+		ToolResults:                  toolResults,
+		RecentPreviousEpisodeCount:   assistantContext.RecentPreviousEpisodeCount,
 	}); err != nil {
 		runID = ""
 	}
@@ -312,40 +339,43 @@ func (s *Service) readerAssistantResponse(ctx context.Context, novelID string, c
 		runIDValue = nil
 	}
 	return map[string]any{
-		"answer":          answer,
-		"novelId":         novelID,
-		"maxEpisodeIndex": currentEpisodeIndex,
-		"runId":           runIDValue,
-		"toolRequests":    toolRequests,
-		"toolResults":     toolResults,
-		"generationMode":  "remote",
-		"reasoning":       reasoningRequest,
+		"answer":              answer,
+		"novelId":             novelID,
+		"currentEpisodeIndex": currentEpisodeIndex,
+		"maxEpisodeIndex":     spoilerBoundaryEpisodeIndex,
+		"runId":               runIDValue,
+		"toolRequests":        toolRequests,
+		"toolResults":         toolResults,
+		"generationMode":      "remote",
+		"reasoning":           reasoningRequest,
 	}, nil
 }
 
 type readerAssistantUsageInput struct {
-	RunID                      string
-	Status                     string
-	StartedAt                  string
-	NovelID                    string
-	NovelTitle                 string
-	CurrentEpisodeIndex        string
-	CurrentEpisodeNumber       int
-	CurrentPosition            int
-	Answer                     string
-	Message                    string
-	History                    []map[string]string
-	GenerationMode             string
-	ModelID                    *string
-	ProfileID                  *string
-	ProfileLabel               *string
-	Reasoning                  *ai.OpenRouterReasoningRequest
-	InputTokens                int
-	OutputTokens               int
-	ToolRequests               []map[string]any
-	ToolResults                []map[string]any
-	RecentPreviousEpisodeCount int
-	ErrorMessage               string
+	RunID                        string
+	Status                       string
+	StartedAt                    string
+	NovelID                      string
+	NovelTitle                   string
+	CurrentEpisodeIndex          string
+	CurrentEpisodeNumber         int
+	SpoilerBoundaryEpisodeIndex  string
+	SpoilerBoundaryEpisodeNumber int
+	CurrentPosition              int
+	Answer                       string
+	Message                      string
+	History                      []map[string]string
+	GenerationMode               string
+	ModelID                      *string
+	ProfileID                    *string
+	ProfileLabel                 *string
+	Reasoning                    *ai.OpenRouterReasoningRequest
+	InputTokens                  int
+	OutputTokens                 int
+	ToolRequests                 []map[string]any
+	ToolResults                  []map[string]any
+	RecentPreviousEpisodeCount   int
+	ErrorMessage                 string
 }
 
 func (s *Service) recordReaderAssistantUsage(input readerAssistantUsageInput) error {
@@ -394,16 +424,22 @@ func (s *Service) recordReaderAssistantUsage(input readerAssistantUsageInput) er
 }
 
 func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai.UsageRequest) map[string]any {
+	recentRangeEndNumber := input.SpoilerBoundaryEpisodeNumber
+	if recentRangeEndNumber == 0 {
+		recentRangeEndNumber = input.CurrentEpisodeNumber
+	}
 	return map[string]any{
 		"readingContext": map[string]any{
-			"novelId":                    input.NovelID,
-			"novelTitle":                 input.NovelTitle,
-			"currentEpisodeIndex":        input.CurrentEpisodeIndex,
-			"currentEpisodeNumber":       input.CurrentEpisodeNumber,
-			"currentPosition":            input.CurrentPosition,
-			"maxEpisodeIndex":            input.CurrentEpisodeIndex,
-			"recentPreviousEpisodeCount": input.RecentPreviousEpisodeCount,
-			"recentPreviousRange":        readerAssistantUsageRecentPreviousRange(input.CurrentEpisodeNumber, input.RecentPreviousEpisodeCount),
+			"novelId":                      input.NovelID,
+			"novelTitle":                   input.NovelTitle,
+			"currentEpisodeIndex":          input.CurrentEpisodeIndex,
+			"currentEpisodeNumber":         input.CurrentEpisodeNumber,
+			"spoilerBoundaryEpisodeIndex":  input.SpoilerBoundaryEpisodeIndex,
+			"spoilerBoundaryEpisodeNumber": input.SpoilerBoundaryEpisodeNumber,
+			"currentPosition":              input.CurrentPosition,
+			"maxEpisodeIndex":              input.SpoilerBoundaryEpisodeIndex,
+			"recentPreviousEpisodeCount":   input.RecentPreviousEpisodeCount,
+			"recentPreviousRange":          readerAssistantUsageRecentPreviousRange(recentRangeEndNumber, input.RecentPreviousEpisodeCount),
 		},
 		"conversation": map[string]any{
 			"historyCount": len(input.History),
@@ -419,11 +455,10 @@ func readerAssistantUsageSnapshot(input readerAssistantUsageInput, requests []ai
 	}
 }
 
-func readerAssistantUsageRecentPreviousRange(currentNumber int, count int) map[string]any {
-	if currentNumber <= 1 || count <= 0 {
+func readerAssistantUsageRecentPreviousRange(endNumber int, count int) map[string]any {
+	if endNumber < 1 || count <= 0 {
 		return nil
 	}
-	endNumber := currentNumber - 1
 	startNumber := endNumber - count + 1
 	if startNumber < 1 {
 		startNumber = 1
@@ -574,16 +609,20 @@ func buildReaderAssistantInstructions(context readerAssistantContext) string {
 	if currentNumber == 0 {
 		currentNumber = 1
 	}
+	boundaryNumber := context.spoilerBoundaryEpisodeNumber()
+	if boundaryNumber == 0 {
+		boundaryNumber = currentNumber
+	}
 	return strings.Join([]string{
 		"あなたは長編小説を読むユーザーを助ける「読書AI」です。",
 		"必ず日本語で、簡潔かつ根拠に忠実に答えてください。",
 		"読める範囲は現在のネタバレ境界までです。境界より先の話、未読話のタイトル、未読話の内容を推測・言及してはいけません。",
 		"必要な情報はツールで確認してください。手元にない本文・人物・用語情報を記憶や推測で補わないでください。",
-		"現在地の確認だけなら get_current_episode を使ってください。",
+		"現在地の確認には get_current_episode を使ってください。現在話がネタバレ境界外なら話の参照情報だけが返り、本文抜粋は返りません。",
 		"前話を尋ねられた場合は get_previous_episode を使ってください。",
 		"複数話の流れ、1〜5話のような範囲指定、ここまでの状況、読書再開用の確認では load_episode_range を使ってください。",
 		"load_episode_range の startEpisodeNumber/endEpisodeNumber は1始まりです。一度に20話を超える範囲は指定せず、20話以下に分割してください。",
-		"ユーザーが『直近N話』と尋ねた場合、現在話は含めず、前話から遡ってN話分として扱ってください。",
+		"ユーザーが『直近N話』と尋ねた場合、ネタバレ境界を終端としてN話分を扱ってください。",
 		"具体的な人物名・用語・地名・出来事の初出や過去の言及箇所など、長編全体から探す必要がある場合は search_full_text を使ってください。",
 		"search_full_text は score 上位の topMatches と、既読範囲を横断する coverageMatches を返します。人物像や関係性の全体像では topMatches だけで結論を出さず、coverageMatches も確認してください。",
 		"search_full_text の結果で重要そうな hitId を選び、根拠を深く読む必要がある場合は load_passages を使ってください。",
@@ -596,15 +635,16 @@ func buildReaderAssistantInstructions(context readerAssistantContext) string {
 		"回答では Markdown の見出し記法（# や ##）と水平線（---）を使ってはいけません。節を分ける場合は普通の短い行や箇条書きにしてください。",
 		"ツール結果で分からないことは分からないと明示し、断定しないでください。",
 		"現在の作品: " + context.NovelTitle,
-		"現在位置: 第" + strconv.Itoa(currentNumber) + "話まで",
-		"ネタバレ境界 episodeIndex: " + context.CurrentEpisodeIndex,
+		"実際に開いている現在話: 第" + strconv.Itoa(currentNumber) + "話 (episodeIndex: " + context.CurrentEpisodeIndex + ")",
+		"参照可能なネタバレ境界: 第" + strconv.Itoa(boundaryNumber) + "話まで (episodeIndex: " + context.spoilerBoundaryEpisodeIndex() + ")",
 	}, "\n")
 }
 
 func buildReaderAssistantInput(context readerAssistantContext) string {
 	parts := []string{
 		"ユーザーの質問: " + context.Message,
-		"現在の episodeIndex: " + context.CurrentEpisodeIndex,
+		"実際に開いている現在話の episodeIndex: " + context.CurrentEpisodeIndex,
+		"参照可能なネタバレ境界の episodeIndex: " + context.spoilerBoundaryEpisodeIndex(),
 		"現在位置の文字オフセット: " + strconv.Itoa(context.CurrentPosition),
 	}
 	if note := readerAssistantRecentPreviousScopeNote(context); note != "" {
@@ -632,26 +672,26 @@ func readerAssistantRecentPreviousScopeNote(context readerAssistantContext) stri
 	if currentNumber == 0 {
 		currentNumber = episodeNumberByIndex(context.TocEpisodes, context.CurrentEpisodeIndex)
 	}
-	if currentNumber <= 1 {
-		return "今回の質問は『直近N話』です。現在話は含めないため、要約対象にできる前話はありません。現在話の本文を要約対象に含めないでください。"
+	endNumber := context.spoilerBoundaryEpisodeNumber()
+	if currentNumber == 0 || endNumber == 0 {
+		return ""
 	}
-	endNumber := currentNumber - 1
 	startNumber := endNumber - context.RecentPreviousEpisodeCount + 1
 	if startNumber < 1 {
 		startNumber = 1
 	}
-	return "今回の質問は『直近N話』です。現在話は含めないため、要約対象範囲は第" + strconv.Itoa(startNumber) + "話〜第" + strconv.Itoa(endNumber) + "話です。load_episode_range を使う場合はこの範囲を指定し、現在話の第" + strconv.Itoa(currentNumber) + "話は要約対象に含めないでください。"
+	return "今回の質問は『直近N話』です。要約対象範囲はネタバレ境界を終端とする第" + strconv.Itoa(startNumber) + "話〜第" + strconv.Itoa(endNumber) + "話です。load_episode_range を使う場合はこの範囲を指定し、第" + strconv.Itoa(endNumber) + "話より先は要約対象に含めないでください。"
 }
 
 func readerAssistantToolDefinitions() []ai.ToolDefinition {
 	return []ai.ToolDefinition{
-		readerAssistantTool("get_current_episode", "現在開いている話の本文抜粋を取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
+		readerAssistantTool("get_current_episode", "現在開いている話の参照情報を取得する。現在話がネタバレ境界内の場合だけ本文抜粋も返す。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
 		readerAssistantTool("get_previous_episode", "現在話のひとつ前の話の本文抜粋を取得する。", map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}}),
-		readerAssistantTool("load_episode_range", "既読範囲内の指定話数範囲をまとめて取得する。startEpisodeNumber/endEpisodeNumber は1始まり。未指定なら現在話までの最大20話。", map[string]any{
+		readerAssistantTool("load_episode_range", "既読範囲内の指定話数範囲をまとめて取得する。startEpisodeNumber/endEpisodeNumber は1始まり。未指定ならネタバレ境界までの最大20話。", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"startEpisodeNumber": map[string]any{"type": "number", "description": "読み込み開始話数。1始まり。"},
-				"endEpisodeNumber":   map[string]any{"type": "number", "description": "読み込み終了話数。1始まり。現在話より先は指定しない。"},
+				"endEpisodeNumber":   map[string]any{"type": "number", "description": "読み込み終了話数。1始まり。ネタバレ境界より先は指定しない。"},
 				"output":             map[string]any{"type": "string", "enum": []string{"excerpt", "summary"}},
 				"summaryPurpose":     map[string]any{"type": "string", "enum": []string{"plot", "character_relationships", "reader_resume", "custom"}},
 				"summaryFocus":       map[string]any{"type": "string"},
@@ -703,18 +743,23 @@ func (s *Service) executeReaderAssistantTool(ctx context.Context, contextInfo re
 	args := decodeToolArguments(rawArguments)
 	switch name {
 	case "get_current_episode":
+		currentEpisodeVisible := readerAssistantEpisodeVisible(contextInfo, contextInfo.CurrentEpisodeIndex)
 		result := map[string]any{
 			"novelTitle":     contextInfo.NovelTitle,
 			"currentEpisode": contextInfo.CurrentEpisodeRef,
-			"excerpt":        truncateRunes(contextInfo.CurrentExcerpt, 700),
-			"scopeNote":      "現在話より先の本文は参照していません。",
+			"excerpt":        "",
+			"scopeNote":      "現在話はネタバレ境界外のため、話の参照情報だけを返し、本文抜粋は返していません。",
 		}
-		if contextInfo.RecentPreviousEpisodeCount > 0 {
-			result["excerpt"] = ""
-			result["scopeNote"] = "この質問の『直近N話』は現在話を含めないため、現在話の本文抜粋は返していません。"
+		if currentEpisodeVisible {
+			result["excerpt"] = truncateRunes(contextInfo.CurrentExcerpt, 700)
+			result["scopeNote"] = "現在話より先の本文は参照していません。"
 		}
 		return readerAssistantToolResult{Name: name, Result: result}
 	case "get_previous_episode":
+		previousNumber := contextInfo.CurrentEpisodeNumber - 1
+		if previousNumber < 1 || previousNumber > contextInfo.spoilerBoundaryEpisodeNumber() {
+			return readerAssistantToolResult{Name: name, Result: map[string]any{"status": "not_available", "reason": "参照可能な前話がありません。"}}
+		}
 		return readerAssistantToolResult{Name: name, Result: s.previousEpisodeResult(ctx, contextInfo.NovelID, contextInfo.NovelTitle, contextInfo.CurrentEpisodeIndex, contextInfo.TocEpisodes)}
 	case "load_episode_range":
 		startNumber, endNumber, err := resolveReaderAssistantEpisodeRange(contextInfo, args)
@@ -765,16 +810,16 @@ func (s *Service) executeReaderAssistantTool(ctx context.Context, contextInfo re
 	case "load_episode":
 		episodeIndex, _ := args["episodeIndex"].(string)
 		if strings.TrimSpace(episodeIndex) == "" {
-			episodeIndex = contextInfo.CurrentEpisodeIndex
+			episodeIndex = contextInfo.spoilerBoundaryEpisodeIndex()
 		}
 		if !readerAssistantEpisodeVisible(contextInfo, episodeIndex) {
 			return readerAssistantToolRecovery(name, errors.New("episodeIndex is outside the spoiler boundary."))
 		}
 		return readerAssistantToolResult{Name: name, Result: s.loadEpisodeResult(ctx, contextInfo.NovelID, episodeIndex)}
 	case "get_character_snapshot":
-		return readerAssistantToolResult{Name: name, Result: s.characterSnapshotResult(contextInfo.NovelID, contextInfo.CurrentEpisodeIndex, contextInfo.TocEpisodes)}
+		return readerAssistantToolResult{Name: name, Result: s.characterSnapshotResult(contextInfo.NovelID, contextInfo.spoilerBoundaryEpisodeIndex(), contextInfo.TocEpisodes)}
 	case "get_term_snapshot":
-		return readerAssistantToolResult{Name: name, Result: s.termSnapshotResult(contextInfo.NovelID, contextInfo.CurrentEpisodeIndex, contextInfo.TocEpisodes)}
+		return readerAssistantToolResult{Name: name, Result: s.termSnapshotResult(contextInfo.NovelID, contextInfo.spoilerBoundaryEpisodeIndex(), contextInfo.TocEpisodes)}
 	default:
 		return readerAssistantToolRecovery(name, errors.New("unsupported reader assistant tool: "+name))
 	}
@@ -1169,7 +1214,7 @@ func (s *Service) searchFullTextResult(ctx context.Context, contextInfo readerAs
 		hitID := fmt.Sprintf("s%d_h%03d", searchOrdinal, index+1)
 		registry.Hits[hitID] = readerAssistantSearchHit{
 			NovelID:         contextInfo.NovelID,
-			MaxEpisodeIndex: contextInfo.CurrentEpisodeIndex,
+			MaxEpisodeIndex: contextInfo.spoilerBoundaryEpisodeIndex(),
 			EpisodeIndex:    candidate.Episode.EpisodeIndex,
 			EpisodeNumber:   candidate.Number,
 			Title:           candidate.Episode.Title,
@@ -1218,7 +1263,7 @@ func (s *Service) searchFullTextResult(ctx context.Context, contextInfo readerAs
 	}
 	return map[string]any{
 		"query":                     query,
-		"maxEpisodeIndex":           contextInfo.CurrentEpisodeIndex,
+		"maxEpisodeIndex":           contextInfo.spoilerBoundaryEpisodeIndex(),
 		"startEpisodeNumber":        startNumber,
 		"endEpisodeNumber":          endNumber,
 		"searchedEpisodeCount":      maxInt(0, endNumber-startNumber+1),
@@ -1367,7 +1412,7 @@ func (s *Service) loadPassagesResult(ctx context.Context, contextInfo readerAssi
 		if !ok {
 			return readerAssistantToolRecovery("load_passages", errors.New("hitId was not found in this reader-assistant run. Run search_full_text again and use the returned hitId."))
 		}
-		if hit.NovelID != contextInfo.NovelID || hit.MaxEpisodeIndex != contextInfo.CurrentEpisodeIndex || !readerAssistantEpisodeVisible(contextInfo, hit.EpisodeIndex) {
+		if hit.NovelID != contextInfo.NovelID || hit.MaxEpisodeIndex != contextInfo.spoilerBoundaryEpisodeIndex() || !readerAssistantEpisodeVisible(contextInfo, hit.EpisodeIndex) {
 			return readerAssistantToolRecovery("load_passages", errors.New("hitId is outside the current reader context or spoiler boundary."))
 		}
 		episodeText := s.readerAssistantEpisodeText(ctx, contextInfo.NovelID, hit.EpisodeIndex, contextInfo.HitRegistry)
@@ -1705,10 +1750,7 @@ func readerAssistantEpisodeFromTocSummary(novelID string, summary library.TocEpi
 }
 
 func resolveReaderAssistantFullTextSearchRange(contextInfo readerAssistantContext, args map[string]any) (int, int, error) {
-	maxNumber := contextInfo.CurrentEpisodeNumber
-	if maxNumber == 0 {
-		maxNumber = episodeNumberByIndex(contextInfo.TocEpisodes, contextInfo.CurrentEpisodeIndex)
-	}
+	maxNumber := contextInfo.spoilerBoundaryEpisodeNumber()
 	if maxNumber == 0 {
 		return 1, 1, errors.New("current episode was not found in the table of contents.")
 	}
@@ -2039,10 +2081,14 @@ func resolveReaderAssistantEpisodeRange(contextInfo readerAssistantContext, args
 	if currentNumber == 0 {
 		return 1, 1, errors.New("current episode was not found in the table of contents.")
 	}
+	maxNumber := contextInfo.spoilerBoundaryEpisodeNumber()
+	if maxNumber == 0 {
+		return 1, 1, errors.New("spoiler boundary episode was not found in the table of contents.")
+	}
 	hasStart := args["startEpisodeNumber"] != nil
 	hasEnd := args["endEpisodeNumber"] != nil
-	if contextInfo.RecentPreviousEpisodeCount > 0 && currentNumber > 1 && !hasStart && !hasEnd {
-		endNumber := currentNumber - 1
+	if contextInfo.RecentPreviousEpisodeCount > 0 && !hasStart && !hasEnd {
+		endNumber := maxNumber
 		startNumber := endNumber - contextInfo.RecentPreviousEpisodeCount + 1
 		if startNumber < 1 {
 			startNumber = 1
@@ -2053,18 +2099,18 @@ func resolveReaderAssistantEpisodeRange(contextInfo readerAssistantContext, args
 		return startNumber, endNumber, nil
 	}
 
-	defaultStart := currentNumber - readerAssistantMaxEpisodeRangeCount + 1
+	defaultStart := maxNumber - readerAssistantMaxEpisodeRangeCount + 1
 	if defaultStart < 1 {
 		defaultStart = 1
 	}
 	if hasStart || hasEnd {
 		defaultStart = 1
 	}
-	startNumber, err := readerAssistantEpisodeNumberArg(args["startEpisodeNumber"], defaultStart, currentNumber)
+	startNumber, err := readerAssistantEpisodeNumberArg(args["startEpisodeNumber"], defaultStart, maxNumber)
 	if err != nil {
 		return 0, 0, err
 	}
-	endNumber, err := readerAssistantEpisodeNumberArg(args["endEpisodeNumber"], currentNumber, currentNumber)
+	endNumber, err := readerAssistantEpisodeNumberArg(args["endEpisodeNumber"], maxNumber, maxNumber)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -2078,10 +2124,7 @@ func resolveReaderAssistantEpisodeRange(contextInfo readerAssistantContext, args
 }
 
 func resolveReaderAssistantSearchRange(contextInfo readerAssistantContext, args map[string]any) (int, int, error) {
-	maxNumber := contextInfo.CurrentEpisodeNumber
-	if maxNumber == 0 {
-		maxNumber = episodeNumberByIndex(contextInfo.TocEpisodes, contextInfo.CurrentEpisodeIndex)
-	}
+	maxNumber := contextInfo.spoilerBoundaryEpisodeNumber()
 	if maxNumber == 0 {
 		return 1, 1, errors.New("current episode was not found in the table of contents.")
 	}
@@ -2134,7 +2177,7 @@ func readerAssistantEpisodeNumberArg(value any, fallback int, maxNumber int) (in
 		return 0, errors.New("episode number must be an integer.")
 	}
 	if number < 1 || number > maxNumber {
-		return 0, errors.New("episode number must be between 1 and the current episode number.")
+		return 0, errors.New("episode number must be between 1 and the spoiler boundary episode number.")
 	}
 	return number, nil
 }
@@ -2148,11 +2191,8 @@ func readerAssistantEpisodeVisible(contextInfo readerAssistantContext, episodeIn
 	if targetNumber == 0 {
 		return false
 	}
-	currentNumber := contextInfo.CurrentEpisodeNumber
-	if currentNumber == 0 {
-		currentNumber = episodeNumberByIndex(contextInfo.TocEpisodes, contextInfo.CurrentEpisodeIndex)
-	}
-	return currentNumber > 0 && targetNumber <= currentNumber
+	maxNumber := contextInfo.spoilerBoundaryEpisodeNumber()
+	return maxNumber > 0 && targetNumber <= maxNumber
 }
 
 var readerAssistantRecentPattern = regexp.MustCompile(`直近\s*([0-9０-９]+)\s*話`)
