@@ -102,11 +102,39 @@ func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T
 	}
 }
 
+func TestExtractionWorkflowPortsGenerateParallelIdentityCompletesEmptyInput(t *testing.T) {
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	generated, state, usage, err := runtime.GenerateParallelIdentity(
+		context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1",
+		nil, nil, nil, nil, nil, nil, &appextraction.ParallelCheckpointSession{},
+	)
+	if err != nil {
+		t.Fatalf("GenerateParallelIdentity returned error: %v", err)
+	}
+	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
+		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
+	}
+}
+
 func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
+	}
+	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
+		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
+	}
+}
+
+func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionCompletesEmptyInput(t *testing.T) {
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(
+		context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1",
+		nil, nil, nil, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("GenerateDiscoveryParallelCorrection returned error: %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
 		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
@@ -147,7 +175,15 @@ func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T)
 		delta := core.Delta{NewCharacters: []characters.GeneratedCharacter{{
 			CanonicalName: fmt.Sprintf("人物%d", index+1), CanonicalEpisodeIndex: batch.EpisodeIndexes[0],
 			FirstAppearanceEpisodeIndex: batch.EpisodeIndexes[0],
-		}}}
+		}},
+			MergeProposals: []core.MergeProposal{{
+				SourceCharacterID: "source", TargetCharacterID: "target", Confidence: 0.8, Reason: "合成理由",
+			}},
+			UnresolvedMentions: []core.UnresolvedMention{{
+				Mention: "謎の人物", EpisodeIndex: batch.EpisodeIndexes[0], Reason: "合成理由",
+			}},
+			Terms: []terms.GeneratedTerm{{Term: fmt.Sprintf("用語%d", index+1)}},
+		}
 		results = append(results, checkpointstore.ParallelBatchResult{
 			Stage: "parallel_entities", BatchIndex: batch.BatchIndex,
 			BatchFingerprint: parallelCheckpointBatchFingerprint(batch),
@@ -159,7 +195,7 @@ func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T)
 		t.Run(fmt.Sprintf("concurrency_%d", concurrency), func(t *testing.T) {
 			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 			session := &appextraction.ParallelCheckpointSession{Results: results}
-			candidates, _, _, usage, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+			candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
 				context.Background(), &store.ResolvedAIGenerationConfig{ExtractionParallelConcurrency: concurrency},
 				"novel-1", "2", nil, nil, batches, nil, nil, session,
 			)
@@ -168,6 +204,9 @@ func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T)
 			}
 			if len(usage) != 0 {
 				t.Fatalf("resumed batches must not record provider usage: %+v", usage)
+			}
+			if len(rawTerms) != 2 || len(proposals) != 2 || len(unresolved) != 2 {
+				t.Fatalf("resumed delta was not restored: terms=%+v proposals=%+v unresolved=%+v", rawTerms, proposals, unresolved)
 			}
 			if got := []string{candidates[0].Character.CanonicalName, candidates[1].Character.CanonicalName}; !reflect.DeepEqual(got, []string{"人物1", "人物2"}) {
 				t.Fatalf("candidate order = %v", got)
@@ -223,17 +262,24 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 			Chunks:         []extractionChunk{{EpisodeIndex: "2", Title: "第二話", Text: "ボブが庭にいた。"}},
 		},
 	}
-	candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidates(
+	savedResults := []checkpointstore.ParallelBatchResult{}
+	checkpoint := &appextraction.ParallelCheckpointSession{OnBatchComplete: func(result checkpointstore.ParallelBatchResult) error {
+		savedResults = append(savedResults, result)
+		return nil
+	}}
+	candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
 		context.Background(),
 		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true, ExtractionParallelConcurrency: 1},
 		"novel-1",
 		"2",
+		nil,
 		nil,
 		batches,
 		func(progress appextraction.BatchProgress) {
 			progressEvents = append(progressEvents, progress)
 		},
 		nil,
+		checkpoint,
 	)
 	if err != nil {
 		t.Fatalf("extractParallelIdentityCandidates returned error: %v", err)
@@ -243,6 +289,9 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 	if len(proposals) != 0 {
 		t.Fatalf("merge proposals = %+v, want none", proposals)
+	}
+	if len(savedResults) != 2 || savedResults[0].BatchIndex != 1 || savedResults[1].BatchIndex != 2 {
+		t.Fatalf("checkpoint results = %+v", savedResults)
 	}
 	if len(usage) != 2 || usage[0].RequestIndex != 0 || usage[1].RequestIndex != 1 {
 		t.Fatalf("usage = %+v", usage)
@@ -590,6 +639,26 @@ func TestRunParallelIdentityLLMJobsContinuesAfterBatchError(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&started); got != 3 {
 		t.Fatalf("started jobs = %d, want 3", got)
+	}
+}
+
+func TestRunParallelIdentityLLMJobsPropagatesParentCancellationBeforeStarting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runParallelIdentityLLMJobs(ctx, 2, 1, func(requestCtx context.Context, _ int) error {
+		return requestCtx.Err()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled run = %v", err)
+	}
+}
+
+func TestRunParallelIdentityLLMJobsNormalizesConcurrency(t *testing.T) {
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+	for _, concurrency := range []int{0, maxParallelIdentityLLMConcurrency + 1} {
+		if err := runParallelIdentityLLMJobs(context.Background(), 1, concurrency, func(context.Context, int) error { return nil }); err != nil {
+			t.Fatalf("concurrency %d returned error: %v", concurrency, err)
+		}
 	}
 }
 

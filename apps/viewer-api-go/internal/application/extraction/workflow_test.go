@@ -47,6 +47,7 @@ type workflowFakePorts struct {
 	generateErrAfter       int
 	parallelCalls          int
 	parallelBatchCalls     []int
+	parallelIncompatible   string
 	planErr                error
 	allocatorErr           error
 	generateCalls          int
@@ -59,6 +60,7 @@ type workflowFakePorts struct {
 	checkpointQuarantined  bool
 	checkpointReason       string
 	savedCheckpoint        bool
+	saveCheckpointErr      error
 	savedCharacters        []characters.GeneratedCharacter
 	savedSummaryOptions    characters.SaveGeneratedSummaryOptions
 }
@@ -172,6 +174,9 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 
 func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention, checkpoint *ParallelCheckpointSession) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
+	if p.parallelIncompatible != "" && checkpoint != nil && checkpoint.OnIncompatible != nil {
+		return nil, core.GenerationState{}, nil, checkpoint.OnIncompatible(p.parallelIncompatible)
+	}
 	if p.generateErr != nil && p.generateErrAfter == 0 {
 		return nil, core.GenerationState{}, nil, p.generateErr
 	}
@@ -227,6 +232,9 @@ func (p *workflowFakePorts) QuarantineCheckpoint(_ string, _ string, reason stri
 }
 
 func (p *workflowFakePorts) SaveCheckpoint(_ string, _ string, checkpoint checkpointstore.Checkpoint) error {
+	if p.saveCheckpointErr != nil {
+		return p.saveCheckpointErr
+	}
 	p.savedCheckpoint = true
 	p.checkpoint = checkpoint
 	return nil

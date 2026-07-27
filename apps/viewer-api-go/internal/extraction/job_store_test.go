@@ -2,6 +2,7 @@ package extraction
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,8 +155,8 @@ func TestPruneNovelStateDeletesProfilesJobsIndexesAndCheckpoints(t *testing.T) {
 	if err := SaveJob(stateDir, "novel-2", Job{JobID: "job-other", RequestedUpToEpisodeIndex: "1", GenerationMode: "heuristic", Status: "completed", CreatedAt: "2026-01-02T00:00:00Z"}); err != nil {
 		t.Fatalf("SaveJob other returned error: %v", err)
 	}
-	writeFile(t, filepath.Join(checkpointDir, "target.json"), `{"schemaVersion":4,"novelId":"novel-1"}`)
-	writeFile(t, filepath.Join(checkpointDir, "other.json"), `{"schemaVersion":4,"novelId":"novel-2"}`)
+	writeFile(t, filepath.Join(checkpointDir, "target.json"), fmt.Sprintf(`{"schemaVersion":%d,"novelId":"novel-1"}`, checkpointstore.SchemaVersion))
+	writeFile(t, filepath.Join(checkpointDir, "other.json"), fmt.Sprintf(`{"schemaVersion":%d,"novelId":"novel-2"}`, checkpointstore.SchemaVersion))
 
 	result, err := PruneNovelState(stateDir, "novel-1")
 	if err != nil {

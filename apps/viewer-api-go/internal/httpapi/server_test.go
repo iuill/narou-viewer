@@ -2354,7 +2354,7 @@ func TestExtractionClearEndpointDeletesGeneratedState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(checkpointPath), 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint dir: %v", err)
 	}
-	if err := os.WriteFile(checkpointPath, []byte(`{"schemaVersion":4,"novelId":"`+novelID+`","upToEpisodeIndex":"`+episodeIndex+`","characters":[]}`), 0o644); err != nil {
+	if err := os.WriteFile(checkpointPath, []byte(fmt.Sprintf(`{"schemaVersion":%d,"novelId":"%s","upToEpisodeIndex":"%s","characters":[]}`, checkpointstore.SchemaVersion, novelID, episodeIndex)), 0o644); err != nil {
 		t.Fatalf("write checkpoint: %v", err)
 	}
 

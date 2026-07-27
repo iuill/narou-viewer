@@ -79,6 +79,56 @@ func TestParallelGenerationRunnerQuarantinesFingerprintMismatchBeforeProviderCal
 	}
 }
 
+func TestParallelGenerationRunnerReturnsCheckpointSaveError(t *testing.T) {
+	expected := errors.New("checkpoint write failed")
+	ports := &workflowFakePorts{saveCheckpointErr: expected}
+	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(
+		context.Background(), &store.ResolvedAIGenerationConfig{ModelID: "model-a"},
+		"novel-a", "1", nil, nil, nil, runnerBatches("1"), nil, nil,
+	)
+	if !errors.Is(err, expected) || !reflect.DeepEqual(ports.parallelBatchCalls, []int{1}) {
+		t.Fatalf("checkpoint save failure = %v, calls=%v", err, ports.parallelBatchCalls)
+	}
+}
+
+func TestParallelGenerationRunnerQuarantinesStrategyMismatch(t *testing.T) {
+	config := &store.ResolvedAIGenerationConfig{ModelID: "model-a"}
+	batches := runnerBatches("1")
+	ports := &workflowFakePorts{checkpoint: checkpointstore.Checkpoint{
+		SchemaVersion: CheckpointSchemaVersion, NovelID: "novel-a", UpToEpisodeIndex: "1",
+		GenerationFingerprint: parallelRunnerCheckpointFingerprint(config, "novel-a", nil, batches),
+		ParallelStrategy:      GenerationStrategyDiscoveryParallelCorrection,
+	}}
+	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(
+		context.Background(), config, "novel-a", "1", nil, nil, nil, batches, nil, nil,
+	)
+	if !checkpointstore.IsIncompatible(err) || !ports.checkpointQuarantined || ports.checkpointReason != "parallel strategy mismatch" {
+		t.Fatalf("strategy mismatch = %v, quarantined=%v reason=%q", err, ports.checkpointQuarantined, ports.checkpointReason)
+	}
+}
+
+func TestParallelGenerationRunnerQuarantinesRuntimeBatchMismatch(t *testing.T) {
+	ports := &workflowFakePorts{parallelIncompatible: "parallel batch fingerprint mismatch"}
+	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(
+		context.Background(), &store.ResolvedAIGenerationConfig{ModelID: "model-a"},
+		"novel-a", "1", nil, nil, nil, runnerBatches("1"), nil, nil,
+	)
+	if !checkpointstore.IsIncompatible(err) || !ports.checkpointQuarantined || ports.checkpointReason != ports.parallelIncompatible {
+		t.Fatalf("runtime mismatch = %v, quarantined=%v reason=%q", err, ports.checkpointQuarantined, ports.checkpointReason)
+	}
+}
+
+func TestParallelGenerationRunnerReturnsAllocatorError(t *testing.T) {
+	expected := errors.New("allocator failed")
+	ports := &workflowFakePorts{allocatorErr: expected}
+	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(
+		context.Background(), nil, "novel-a", "1", nil, nil, nil, nil, nil, nil,
+	)
+	if !errors.Is(err, expected) || ports.parallelCalls != 0 {
+		t.Fatalf("allocator failure = %v, parallel calls=%d", err, ports.parallelCalls)
+	}
+}
+
 func TestGenerationRunnerResumesOnlyUnprocessedBatchesFromCheckpoint(t *testing.T) {
 	config := &store.ResolvedAIGenerationConfig{ProfileID: "profile-a", ModelID: "model-a"}
 	batches := runnerBatches("1", "2")

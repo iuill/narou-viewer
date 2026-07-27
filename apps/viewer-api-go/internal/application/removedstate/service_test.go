@@ -3,6 +3,7 @@ package removedstate
 import (
 	"bytes"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
@@ -97,7 +99,7 @@ func TestServicePrunesReaderBookmarksAndUsage(t *testing.T) {
 	if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
 		t.Fatalf("mkdir checkpoint fixture: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(checkpointDir, "checkpoint-remove.json"), []byte(`{"schemaVersion":4,"novelId":"`+novelID+`"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(checkpointDir, "checkpoint-remove.json"), []byte(fmt.Sprintf(`{"schemaVersion":%d,"novelId":"%s"}`, checkpointstore.SchemaVersion, novelID)), 0o644); err != nil {
 		t.Fatalf("write checkpoint fixture: %v", err)
 	}
 	if _, err := publications.NewRepository(stateDir).PutEntry(novelID, publications.Entry{
