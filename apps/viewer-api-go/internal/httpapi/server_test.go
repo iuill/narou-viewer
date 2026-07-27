@@ -1100,6 +1100,9 @@ func TestServerAddsCORSHeadersAndHandlesPreflight(t *testing.T) {
 	if isAllowedCORSOrigin(nil, "://bad-origin") {
 		t.Fatal("malformed CORS origins should be rejected")
 	}
+	if normalized, allowed := (&Server{allowedOrigins: originSet(nil)}).allowedCORSOrigin(nil, "https://blocked.example.test"); allowed || normalized != "" {
+		t.Fatalf("disallowed CORS origin should return an empty value: origin=%q allowed=%v", normalized, allowed)
+	}
 	sameOriginRequest := httptest.NewRequest(http.MethodPut, "/api/reader/state", nil)
 	sameOriginRequest.Host = "viewer.example.test"
 	if !isAllowedCORSOrigin(sameOriginRequest, "https://viewer.example.test") {

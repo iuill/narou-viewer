@@ -31,7 +31,7 @@ func main() {
 	if _, err := ai.ResolveOpenRouterReasoningRequest(ai.OpenRouterConfig{}); err != nil {
 		log.Fatalf("validate OPENROUTER_REASONING_EFFORT: %v", err)
 	}
-	handlerResult := runtime.NewHandler(cfg.DataDir, cfg.AllowedOrigins...)
+	handlerResult := runtime.NewHandler(cfg.DataDir, cfg.AllowedOrigins)
 	if handlerResult.InitErr != nil {
 		log.Fatalf("initialize viewer-api-go state: %v", handlerResult.InitErr)
 	}

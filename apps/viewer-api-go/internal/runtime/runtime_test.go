@@ -19,7 +19,7 @@ import (
 
 func TestNewHandlerInitializesRuntime(t *testing.T) {
 	dataDir := t.TempDir()
-	result := NewHandler(dataDir)
+	result := NewHandler(dataDir, nil)
 	if result.InitErr != nil {
 		t.Fatalf("NewHandler returned init error: %v", result.InitErr)
 	}
@@ -48,7 +48,7 @@ func TestNewHandlerReportsStateInitializationError(t *testing.T) {
 	if err := os.WriteFile(blockedParent, []byte("not a dir"), 0o644); err != nil {
 		t.Fatalf("write blocked parent: %v", err)
 	}
-	result := NewHandler(blockedParent)
+	result := NewHandler(blockedParent, nil)
 	if result.InitErr == nil {
 		t.Fatal("NewHandler should report state initialization errors")
 	}
@@ -99,7 +99,7 @@ func TestNewHandlerRejectsFutureUsageSchemaDuringStartup(t *testing.T) {
 		t.Fatalf("close usage fixture: %v", err)
 	}
 
-	result := NewHandler(dataDir)
+	result := NewHandler(dataDir, nil)
 	if result.InitErr == nil {
 		t.Fatal("NewHandler should reject a future AI usage schema during startup")
 	}
@@ -124,7 +124,7 @@ func TestHandlerResultStartsBackgroundAfterInitialization(t *testing.T) {
 		t.Fatalf("SaveJob returned error: %v", err)
 	}
 
-	result := NewHandler(dataDir)
+	result := NewHandler(dataDir, nil)
 	if result.InitErr != nil {
 		t.Fatalf("NewHandler returned init error: %v", result.InitErr)
 	}

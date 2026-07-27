@@ -340,13 +340,13 @@ func (s *Server) allowedCORSOrigin(r *http.Request, origin string) (string, bool
 		return "", false
 	}
 	host := parsed.Hostname()
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", false
-	}
 	if r != nil && originMatchesRequestHost(parsed, r) {
 		return normalizedOrigin, true
 	}
-	return normalizedOrigin, isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host)
+	if isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host) {
+		return normalizedOrigin, true
+	}
+	return "", false
 }
 
 func originSet(origins []string) map[string]struct{} {
