@@ -861,19 +861,34 @@ func TestReaderAssistantToolContextUsesBoundaryTools(t *testing.T) {
 		{EpisodeIndex: "6", Title: "Episode 6"},
 	}
 	recentStart, recentEnd, err := resolveReaderAssistantEpisodeRange(readerAssistantContext{
-		CurrentEpisodeIndex:        "6",
-		CurrentEpisodeNumber:       6,
-		TocEpisodes:                fakeSixEpisodeToc,
-		RecentPreviousEpisodeCount: readerAssistantRecentPreviousEpisodeCount("直近5話の流れを要約して"),
+		CurrentEpisodeIndex:          "6",
+		CurrentEpisodeNumber:         6,
+		SpoilerBoundaryEpisodeIndex:  "5",
+		SpoilerBoundaryEpisodeNumber: 5,
+		TocEpisodes:                  fakeSixEpisodeToc,
+		RecentPreviousEpisodeCount:   readerAssistantRecentPreviousEpisodeCount("直近5話の流れを要約して"),
 	}, map[string]any{})
 	if err != nil || recentStart != 1 || recentEnd != 5 {
 		t.Fatalf("recent previous range should exclude current episode: start=%d end=%d err=%v", recentStart, recentEnd, err)
 	}
+	inclusiveStart, inclusiveEnd, err := resolveReaderAssistantEpisodeRange(readerAssistantContext{
+		CurrentEpisodeIndex:          "6",
+		CurrentEpisodeNumber:         6,
+		SpoilerBoundaryEpisodeIndex:  "6",
+		SpoilerBoundaryEpisodeNumber: 6,
+		TocEpisodes:                  fakeSixEpisodeToc,
+		RecentPreviousEpisodeCount:   readerAssistantRecentPreviousEpisodeCount("直近5話の流れを要約して"),
+	}, map[string]any{})
+	if err != nil || inclusiveStart != 2 || inclusiveEnd != 6 {
+		t.Fatalf("current-inclusive recent range should end at current episode: start=%d end=%d err=%v", inclusiveStart, inclusiveEnd, err)
+	}
 	explicitStart, explicitEnd, err := resolveReaderAssistantEpisodeRange(readerAssistantContext{
-		CurrentEpisodeIndex:        "6",
-		CurrentEpisodeNumber:       6,
-		TocEpisodes:                fakeSixEpisodeToc,
-		RecentPreviousEpisodeCount: readerAssistantRecentPreviousEpisodeCount("直近5話の流れを要約して"),
+		CurrentEpisodeIndex:          "6",
+		CurrentEpisodeNumber:         6,
+		SpoilerBoundaryEpisodeIndex:  "6",
+		SpoilerBoundaryEpisodeNumber: 6,
+		TocEpisodes:                  fakeSixEpisodeToc,
+		RecentPreviousEpisodeCount:   readerAssistantRecentPreviousEpisodeCount("直近5話の流れを要約して"),
 	}, map[string]any{"startEpisodeNumber": 1, "endEpisodeNumber": 6})
 	if err != nil || explicitStart != 1 || explicitEnd != 6 {
 		t.Fatalf("explicit tool range should not be overridden by recent previous intent: start=%d end=%d err=%v", explicitStart, explicitEnd, err)
@@ -892,6 +907,16 @@ func TestReaderAssistantToolContextUsesBoundaryTools(t *testing.T) {
 	if !readerAssistantEpisodeVisible(readerAssistantContext{CurrentEpisodeIndex: "6", TocEpisodes: fakeSixEpisodeToc}, "5") {
 		t.Fatal("episode before current index should be visible")
 	}
+	boundedContext := readerAssistantContext{
+		CurrentEpisodeIndex:          "6",
+		CurrentEpisodeNumber:         6,
+		SpoilerBoundaryEpisodeIndex:  "5",
+		SpoilerBoundaryEpisodeNumber: 5,
+		TocEpisodes:                  fakeSixEpisodeToc,
+	}
+	if readerAssistantEpisodeVisible(boundedContext, "6") || !readerAssistantEpisodeVisible(boundedContext, "5") {
+		t.Fatal("visibility should use the spoiler boundary independently from the current episode")
+	}
 	if readerAssistantEpisodeVisible(readerAssistantContext{CurrentEpisodeIndex: "6", TocEpisodes: fakeSixEpisodeToc}, "missing") {
 		t.Fatal("missing episode should not be visible")
 	}
@@ -899,11 +924,13 @@ func TestReaderAssistantToolContextUsesBoundaryTools(t *testing.T) {
 		t.Fatalf("tool result message should be formal completion text: %s", message)
 	}
 	if note := readerAssistantRecentPreviousScopeNote(readerAssistantContext{
-		CurrentEpisodeIndex:        "6",
-		CurrentEpisodeNumber:       6,
-		TocEpisodes:                fakeSixEpisodeToc,
-		RecentPreviousEpisodeCount: 5,
-	}); !strings.Contains(note, "第1話〜第5話") || !strings.Contains(note, "第6話は要約対象に含めない") {
+		CurrentEpisodeIndex:          "6",
+		CurrentEpisodeNumber:         6,
+		SpoilerBoundaryEpisodeIndex:  "5",
+		SpoilerBoundaryEpisodeNumber: 5,
+		TocEpisodes:                  fakeSixEpisodeToc,
+		RecentPreviousEpisodeCount:   5,
+	}); !strings.Contains(note, "第1話〜第5話") || !strings.Contains(note, "第5話より先は要約対象に含めない") {
 		t.Fatalf("recent previous scope note should give concrete boundaries: %s", note)
 	}
 
@@ -1936,14 +1963,28 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 		"position":            0,
 	}, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
-		"message":             "hello",
-		"currentEpisodeIndex": "1",
-		"position":            -1,
+		"message":                     "hello",
+		"currentEpisodeIndex":         "1",
+		"spoilerBoundaryEpisodeIndex": 1,
+		"position":                    0,
+	}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
+		"message":                     "hello",
+		"currentEpisodeIndex":         "1",
+		"spoilerBoundaryEpisodeIndex": "999",
+		"position":                    0,
+	}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
+		"message":                     "hello",
+		"currentEpisodeIndex":         "1",
+		"spoilerBoundaryEpisodeIndex": "1",
+		"position":                    -1,
 	}, http.StatusBadRequest)
 	assistant := requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
-		"message":             "hello",
-		"currentEpisodeIndex": "1",
-		"position":            0,
+		"message":                     "hello",
+		"currentEpisodeIndex":         "1",
+		"spoilerBoundaryEpisodeIndex": "1",
+		"position":                    0,
 	}, http.StatusServiceUnavailable)
 	if !strings.Contains(assistant["error"].(string), "読書AIはLLM連携が未設定") {
 		t.Fatalf("reader assistant should reject missing LLM settings: %+v", assistant)
@@ -2622,8 +2663,8 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	}
 
 	currentResult := server.executeReaderAssistantTool(context.Background(), contextInfo, "get_current_episode", `{}`)
-	if currentResult.Result["excerpt"] != "" {
-		t.Fatalf("recent previous requests should hide current excerpt: %+v", currentResult)
+	if currentResult.Result["excerpt"] == "" {
+		t.Fatalf("current-inclusive requests should expose the current excerpt: %+v", currentResult)
 	}
 	rangeResult := server.executeReaderAssistantTool(context.Background(), contextInfo, "load_episode_range", `{"startEpisodeNumber":1,"endEpisodeNumber":1}`)
 	if rangeResult.Name != "load_episode_range" || rangeResult.Result["episodeCount"].(int) == 0 {
@@ -2727,7 +2768,7 @@ func TestReaderAssistantToolExecutionBranches(t *testing.T) {
 	}
 	contextInfo.CurrentEpisodeNumber = 0
 	instructions := buildReaderAssistantInstructions(contextInfo)
-	if !strings.Contains(instructions, "現在位置: 第1話まで") {
+	if !strings.Contains(instructions, "実際に開いている現在話: 第1話") {
 		t.Fatalf("instructions should fall back to episode 1 label: %s", instructions)
 	}
 	if !strings.Contains(instructions, "get_character_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "get_term_snapshot が未生成または情報不足なら") || !strings.Contains(instructions, "search_full_text") {

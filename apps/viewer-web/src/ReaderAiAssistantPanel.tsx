@@ -54,6 +54,16 @@ type Props = {
 
 const SUGGESTED_PROMPTS = ["直近5話の流れを要約して", "前話で何があった？"];
 
+function createReaderAiAssistantId(
+  currentCrypto: Crypto | undefined = typeof crypto === "undefined" ? undefined : crypto
+): string {
+  if (currentCrypto && typeof currentCrypto.randomUUID === "function") {
+    return currentCrypto.randomUUID();
+  }
+
+  return `reader-ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function createEmptyReaderAiAssistantState(includeCurrentEpisode = false): ReaderAiAssistantState {
   return {
     draft: "",
@@ -173,7 +183,16 @@ export function ReaderAiAssistantPanel({
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
-    if (disabledReason || boundaryUnavailableReason || !novelId || !spoilerBoundaryEpisodeIndex || trimmed.length === 0 || activeRequestRef.current || isSubmitting) {
+    if (
+      disabledReason ||
+      boundaryUnavailableReason ||
+      !novelId ||
+      !currentEpisodeIndex ||
+      !spoilerBoundaryEpisodeIndex ||
+      trimmed.length === 0 ||
+      activeRequestRef.current ||
+      isSubmitting
+    ) {
       return;
     }
 
@@ -187,7 +206,7 @@ export function ReaderAiAssistantPanel({
       }
     }
 
-    const requestId = crypto.randomUUID();
+    const requestId = createReaderAiAssistantId();
     const controller = new AbortController();
     activeRequestRef.current = {
       controller,
@@ -195,7 +214,7 @@ export function ReaderAiAssistantPanel({
     };
     const userMessage: ReaderAiAssistantMessage = {
       createdAt: new Date().toISOString(),
-      id: crypto.randomUUID(),
+      id: createReaderAiAssistantId(),
       role: "user",
       spoilerBoundaryEpisodeIndex,
       text: trimmed,
@@ -224,7 +243,8 @@ export function ReaderAiAssistantPanel({
         novelId,
         {
           message: trimmed,
-          currentEpisodeIndex: spoilerBoundaryEpisodeIndex,
+          currentEpisodeIndex,
+          spoilerBoundaryEpisodeIndex,
           position: currentPosition,
           history
         },
