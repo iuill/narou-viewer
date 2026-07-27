@@ -211,7 +211,7 @@ describe("ReaderCharacterSummaryPanel", () => {
     expect(container.textContent).toContain("人物・用語一覧を生成中");
     expect(container.textContent).toContain("全体62%");
     expect(container.textContent).toContain("batch2 of 4完了");
-    expect(container.textContent).toContain("人物5反映済");
+    expect(container.textContent).toContain("人物5一時集計");
     expect(container.textContent).toContain("worker 1batch 3第9〜10話 人物・用語を抽出中…");
     expect(container.textContent).toContain("worker 2batch 4第11話 人物候補を探索中…");
     expect(container.textContent).toContain("過去の生成履歴");

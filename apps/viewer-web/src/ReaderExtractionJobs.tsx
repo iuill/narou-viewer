@@ -125,14 +125,20 @@ function ExtractionJobProgress({
         : null;
 
   const activeWorkers = job.activeWorkers ?? [];
+  const generatedCountDetail =
+    job.status === "completed"
+      ? "反映済"
+      : job.status === "failed" || job.status === "paused" || job.status === "interrupted"
+        ? "再開用保存済"
+        : "一時集計";
   const progressStats = [
     progress !== null ? { label: "全体", value: `${progress}%`, detail: "" } : null,
     batchStat ? { label: "batch", ...batchStat } : null,
     typeof job.generatedCharacterCount === "number"
-      ? { label: "人物", value: String(job.generatedCharacterCount), detail: "反映済" }
+      ? { label: "人物", value: String(job.generatedCharacterCount), detail: generatedCountDetail }
       : null,
     typeof job.generatedTermCount === "number"
-      ? { label: "用語", value: String(job.generatedTermCount), detail: "反映済" }
+      ? { label: "用語", value: String(job.generatedTermCount), detail: generatedCountDetail }
       : null
   ].filter((value): value is { label: string; value: string; detail: string } => value !== null);
 

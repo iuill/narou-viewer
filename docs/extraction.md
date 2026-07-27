@@ -55,7 +55,8 @@ malformed job file は対象作品を安全に特定できないため、一覧�
 - `cancel` は再開可能なjobを`canceled`へ確定してから実行contextをcancelする。以後は自動実行せず、resumeも受け付けない。
 - viewer-api起動時に残っている`running` / `pausing`は自動再実行せず`interrupted`へ確定し、利用者の明示resumeを待つ。
 - processorはcontext cancellation時にjobを`failed`へ上書きしない。pause/cancel APIが先に永続化した状態を正本とする。
-- serialはbatch完了checkpointから再開する。parallel方式は未commitの並列結果を公開せず、保存済みcheckpointがなければ当該生成単位を再実行する。人物event/profile、term historyへの適用は従来のcharacter frontier commit後だけ公開する。
+- serialはbatch完了checkpointから再開する。`parallel_identity` は成功した runtime batch の正規化済み delta を直ちにcheckpointへ保存し、同じgeneration fingerprintでの再開時は保存済みbatchをproviderへ再送せず、batch index順に決定的にreduceする。未commitの並列結果は人物event/profile、term historyへ公開せず、従来どおりcharacter frontier commit後だけ公開する。`discovery_parallel_correction` は現時点では生成単位で再実行する。
+- jobの人物・用語件数は、completedなら「反映済」、failed / paused / interruptedならcheckpointに保持された「再開用保存済」、実行中なら「一時集計」として表示し、canonical stateへの反映と混同しない。
 - providerへ送信済みでusageを取得できたrequestは中断時もusage runへ記録する。送信前にcontext cancellationで開始されなかったrequestは記録しない。
 
 ## API
