@@ -1965,7 +1965,7 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
 		"message":                     "hello",
 		"currentEpisodeIndex":         "1",
-		"spoilerBoundaryEpisodeIndex": 1,
+		"spoilerBoundaryEpisodeIndex": 1.5,
 		"position":                    0,
 	}, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodPost, "/api/library/novels/"+novelID+"/reader-assistant/chat", map[string]any{
