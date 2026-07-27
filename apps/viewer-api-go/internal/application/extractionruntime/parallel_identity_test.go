@@ -20,6 +20,7 @@ import (
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
@@ -92,7 +93,7 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 
 func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
+	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
 	}
@@ -132,6 +133,46 @@ func TestParallelIdentityRuntimeAndExtractionEmptyInput(t *testing.T) {
 	}
 	if len(candidates) != 0 || len(rawTerms) != 0 || len(proposals) != 0 || len(usage) != 0 || len(unresolved) != 1 || unresolved[0].Mention != "謎の男" {
 		t.Fatalf("candidates=%+v usage=%+v unresolved=%+v", candidates, usage, unresolved)
+	}
+}
+
+func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T) {
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文1"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "合成本文2"}}},
+	}
+	results := make([]checkpointstore.ParallelBatchResult, 0, len(batches))
+	for index, batch := range batches {
+		delta := core.Delta{NewCharacters: []characters.GeneratedCharacter{{
+			CanonicalName: fmt.Sprintf("人物%d", index+1), CanonicalEpisodeIndex: batch.EpisodeIndexes[0],
+			FirstAppearanceEpisodeIndex: batch.EpisodeIndexes[0],
+		}}}
+		results = append(results, checkpointstore.ParallelBatchResult{
+			Stage: "parallel_entities", BatchIndex: batch.BatchIndex,
+			BatchFingerprint: parallelCheckpointBatchFingerprint(batch),
+			EpisodeIndexes:   batch.EpisodeIndexes, Delta: parallelCheckpointDeltaFromCore(delta),
+		})
+	}
+
+	for _, concurrency := range []int{1, 3, maxParallelIdentityLLMConcurrency} {
+		t.Run(fmt.Sprintf("concurrency_%d", concurrency), func(t *testing.T) {
+			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+			session := &appextraction.ParallelCheckpointSession{Results: results}
+			candidates, _, _, usage, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+				context.Background(), &store.ResolvedAIGenerationConfig{ExtractionParallelConcurrency: concurrency},
+				"novel-1", "2", nil, nil, batches, nil, nil, session,
+			)
+			if err != nil {
+				t.Fatalf("resume returned error: %v", err)
+			}
+			if len(usage) != 0 {
+				t.Fatalf("resumed batches must not record provider usage: %+v", usage)
+			}
+			if got := []string{candidates[0].Character.CanonicalName, candidates[1].Character.CanonicalName}; !reflect.DeepEqual(got, []string{"人物1", "人物2"}) {
+				t.Fatalf("candidate order = %v", got)
+			}
+		})
 	}
 }
 
@@ -532,7 +573,7 @@ func TestParallelIdentityLLMStartLimiterStopsWaitingOnContextCancel(t *testing.T
 	}
 }
 
-func TestRunParallelIdentityLLMJobsCancelsAfterFirstError(t *testing.T) {
+func TestRunParallelIdentityLLMJobsContinuesAfterBatchError(t *testing.T) {
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	expected := errors.New("first request failed")
@@ -547,8 +588,8 @@ func TestRunParallelIdentityLLMJobsCancelsAfterFirstError(t *testing.T) {
 	if !errors.Is(err, expected) {
 		t.Fatalf("err = %v, want %v", err, expected)
 	}
-	if got := atomic.LoadInt32(&started); got != 1 {
-		t.Fatalf("started jobs = %d, want 1", got)
+	if got := atomic.LoadInt32(&started); got != 3 {
+		t.Fatalf("started jobs = %d, want 3", got)
 	}
 }
 

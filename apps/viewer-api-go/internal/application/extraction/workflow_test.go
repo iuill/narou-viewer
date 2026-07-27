@@ -46,6 +46,7 @@ type workflowFakePorts struct {
 	saveTermsErr           error
 	generateErrAfter       int
 	parallelCalls          int
+	parallelBatchCalls     []int
 	planErr                error
 	allocatorErr           error
 	generateCalls          int
@@ -169,10 +170,33 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 	}, nil
 }
 
-func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention, checkpoint *ParallelCheckpointSession) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
-	if p.generateErr != nil {
+	if p.generateErr != nil && p.generateErrAfter == 0 {
 		return nil, core.GenerationState{}, nil, p.generateErr
+	}
+	resumed := map[int]bool{}
+	if checkpoint != nil {
+		for _, result := range checkpoint.Results {
+			resumed[result.BatchIndex] = true
+		}
+	}
+	for _, batch := range batches {
+		if resumed[batch.BatchIndex] {
+			continue
+		}
+		if p.generateErr != nil && len(p.parallelBatchCalls) >= p.generateErrAfter {
+			return nil, core.GenerationState{}, nil, p.generateErr
+		}
+		p.parallelBatchCalls = append(p.parallelBatchCalls, batch.BatchIndex)
+		if checkpoint != nil && checkpoint.OnBatchComplete != nil {
+			if err := checkpoint.OnBatchComplete(checkpointstore.ParallelBatchResult{
+				Stage: "parallel_entities", BatchIndex: batch.BatchIndex, BatchFingerprint: "test",
+				EpisodeIndexes: batch.EpisodeIndexes, CompletedAt: ai.NowISO(),
+			}); err != nil {
+				return nil, core.GenerationState{}, nil, err
+			}
+		}
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_parallel", CanonicalName: "Parallel", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
