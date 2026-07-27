@@ -25,6 +25,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerview"
+	"narou-viewer/apps/viewer-api-go/internal/config"
 	"narou-viewer/apps/viewer-api-go/internal/fetcher"
 	"narou-viewer/apps/viewer-api-go/internal/library"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
@@ -72,6 +73,7 @@ type Server struct {
 	extractionJobs     *appextraction.JobCoordinator
 	storageProgress    *storageUsageProgressStore
 	backgroundOnce     sync.Once
+	allowedOrigins     map[string]struct{}
 }
 
 type ServerDependencies struct {
@@ -89,6 +91,7 @@ type ServerDependencies struct {
 	ExtractionJobCoordinator        *appextraction.JobCoordinator
 	ExtractionJobCoordinatorFactory func(extractionruntime.Workflow, string, extractionruntime.Logger) *appextraction.JobCoordinator
 	StateInitErr                    error
+	AllowedOrigins                  []string
 }
 
 func NewServerWithDependencies(deps ServerDependencies) http.Handler {
@@ -149,6 +152,7 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 		extractionJobQueue: extractionJobQueue,
 		stateInitErr:       deps.StateInitErr,
 		storageProgress:    newStorageUsageProgressStore(),
+		allowedOrigins:     originSet(deps.AllowedOrigins),
 	}
 	s.extractionJobs = deps.ExtractionJobCoordinator
 	if s.extractionJobs == nil && deps.ExtractionJobCoordinatorFactory != nil {
@@ -202,7 +206,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isAPIRequest(r) {
 		ensureAPIRequestID(w, r)
 	}
-	if handleCORS(w, r) {
+	if s.handleCORS(w, r) {
 		return
 	}
 	if requiresCurrentAPIContract(r) && !hasCurrentAPIContract(r) {
@@ -222,12 +226,13 @@ func nonStreamingLLMContext(parent context.Context) (context.Context, context.Ca
 	return context.WithTimeout(parent, nonStreamingLLMTimeout)
 }
 
-func handleCORS(w http.ResponseWriter, r *http.Request) bool {
+func (s *Server) handleCORS(w http.ResponseWriter, r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return false
 	}
-	if !isAllowedCORSOrigin(r, origin) {
+	allowedOrigin, allowed := s.allowedCORSOrigin(r, origin)
+	if !allowed {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return true
@@ -238,7 +243,7 @@ func handleCORS(w http.ResponseWriter, r *http.Request) bool {
 		}
 		return false
 	}
-	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 	w.Header().Add("Vary", "Origin")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", strings.Join([]string{
@@ -322,26 +327,34 @@ func generateAPIRequestID() string {
 	return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
 }
 
-func isAllowedCORSOrigin(r *http.Request, origin string) bool {
-	if configured := strings.TrimSpace(os.Getenv("VIEWER_API_ALLOWED_ORIGINS")); configured != "" {
-		for _, item := range strings.Split(configured, ",") {
-			if strings.TrimSpace(item) == origin {
-				return true
-			}
-		}
-	}
-	parsed, err := url.Parse(origin)
+func (s *Server) allowedCORSOrigin(r *http.Request, origin string) (string, bool) {
+	normalizedOrigin, err := config.NormalizeOrigin(origin)
 	if err != nil {
-		return false
+		return "", false
+	}
+	if _, ok := s.allowedOrigins[normalizedOrigin]; ok {
+		return normalizedOrigin, true
+	}
+	parsed, err := url.Parse(normalizedOrigin)
+	if err != nil {
+		return "", false
 	}
 	host := parsed.Hostname()
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return false
-	}
 	if r != nil && originMatchesRequestHost(parsed, r) {
-		return true
+		return normalizedOrigin, true
 	}
-	return isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host)
+	if isDevelopmentCORSFallbackEnabled() && isDevelopmentCORSHost(host) {
+		return normalizedOrigin, true
+	}
+	return "", false
+}
+
+func originSet(origins []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		result[origin] = struct{}{}
+	}
+	return result
 }
 
 func isDevelopmentCORSFallbackEnabled() bool {

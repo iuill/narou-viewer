@@ -87,6 +87,13 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 
 - 開発時は `viewer-web` と `viewer-api` を `viewer-dev` コンテナ内のプロセスとして動かし、`novel-fetcher` と E2E 用常駐サービスは sidecar コンテナとして動かします。
 - `bun run dev` は `VIEWER_API_DEV_CORS=1` を付けて `viewer-api` を起動し、LAN / モバイル端末から Vite dev server へアクセスする開発フローを許可します。本番ではこの fallback を有効にせず、同一 Host または `VIEWER_API_ALLOWED_ORIGINS` の明示 allowlist だけを CORS 許可にします。
+- プライベートVPNの共有IPや内部DNS名からアクセスする場合は、ブラウザの開発者ツールで `location.origin` を確認し、root の `.env.local` に完全一致するoriginを指定して `bun run dev` を再起動します。VPNのアドレス帯やDNS suffixは暗黙許可しません。
+
+  ```env
+  VIEWER_API_ALLOWED_ORIGINS=http://viewer-dev.example.test:5173
+  ```
+
+  値は `http` または `https` のscheme、host、必要なportだけで構成します。末尾の `/`、path、query、fragment、userinfoを含む場合、viewer-apiは修正理由を示して起動を中止します。国際化ドメイン名はブラウザの `location.origin` と同じpunycodeで指定してください。複数指定する場合はカンマで区切ります。診断メッセージには設定値そのものを表示せず、何件目の指定に問題があるかだけを表示します。シェル、Dev Container、CIなどで明示した同名の環境変数は `.env.local` より優先されます。
 - 取得 sidecar は `novel-fetcher` です。作品一覧・目次・本文は sidecar の内部 API 経由で読み、保存済み asset 配信時だけ `VIEWER_DATA_DIR/novel-fetcher` 配下の共有ファイルを検証して返します。`novel-fetcher` は小説家になろうとカクヨムの基本取得に対応します。
 - `novel-fetcher` への操作は `viewer-web` -> `viewer-api` -> `/api/fetcher/*` を正規経路とし、sidecar API には compose 外部から直接アクセスしません。旧 `/api/narou/*` 互換 API は廃止済みです。
 - `.agents/skills` は Dev Container / Codespaces のコンテナ起動時に `.github/skills` として symlink 連携されるため、`GitHub Copilot CLI` など `.github/skills` を参照する環境から同じ skill 群を project skills として再利用できます。

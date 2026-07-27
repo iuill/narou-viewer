@@ -1100,6 +1100,9 @@ func TestServerAddsCORSHeadersAndHandlesPreflight(t *testing.T) {
 	if isAllowedCORSOrigin(nil, "://bad-origin") {
 		t.Fatal("malformed CORS origins should be rejected")
 	}
+	if normalized, allowed := (&Server{allowedOrigins: originSet(nil)}).allowedCORSOrigin(nil, "https://blocked.example.test"); allowed || normalized != "" {
+		t.Fatalf("disallowed CORS origin should return an empty value: origin=%q allowed=%v", normalized, allowed)
+	}
 	sameOriginRequest := httptest.NewRequest(http.MethodPut, "/api/reader/state", nil)
 	sameOriginRequest.Host = "viewer.example.test"
 	if !isAllowedCORSOrigin(sameOriginRequest, "https://viewer.example.test") {
@@ -1126,13 +1129,27 @@ func TestServerAddsCORSHeadersAndHandlesPreflight(t *testing.T) {
 	}
 
 	t.Setenv("VIEWER_API_ALLOWED_ORIGINS", "https://viewer.example.test")
-	allowlistHandler := newTestServerWithStore(store.New(t.TempDir()))
+	allowlistHandler := newTestServerWithAllowedOrigins(store.New(t.TempDir()), []string{"https://viewer.example.test"})
 	allowlistResponse := httptest.NewRecorder()
 	allowlistRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	allowlistRequest.Header.Set("Origin", "https://viewer.example.test")
 	allowlistHandler.ServeHTTP(allowlistResponse, allowlistRequest)
 	if allowlistResponse.Code != http.StatusOK || allowlistResponse.Header().Get("Access-Control-Allow-Origin") != "https://viewer.example.test" {
 		t.Fatalf("configured CORS origin should be allowed: code=%d headers=%v", allowlistResponse.Code, allowlistResponse.Header())
+	}
+	normalizedResponse := httptest.NewRecorder()
+	normalizedRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	normalizedRequest.Header.Set("Origin", "HTTPS://Viewer.Example.Test")
+	allowlistHandler.ServeHTTP(normalizedResponse, normalizedRequest)
+	if normalizedResponse.Code != http.StatusOK || normalizedResponse.Header().Get("Access-Control-Allow-Origin") != "https://viewer.example.test" {
+		t.Fatalf("configured CORS origin should use its normalized value: code=%d headers=%v", normalizedResponse.Code, normalizedResponse.Header())
+	}
+	duplicateResponse := httptest.NewRecorder()
+	duplicateRequest := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	duplicateRequest.Header.Set("Origin", "https://viewer.example.test,https://viewer.example.test")
+	allowlistHandler.ServeHTTP(duplicateResponse, duplicateRequest)
+	if duplicateResponse.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("a list-shaped Origin header must not be reflected: headers=%v", duplicateResponse.Header())
 	}
 	if !isAllowedCORSOrigin(nil, "http://localhost:5173") {
 		t.Fatal("configured CORS allowlist should preserve implicit localhost origins")

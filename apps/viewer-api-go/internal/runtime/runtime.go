@@ -43,7 +43,7 @@ func (r HandlerResult) StartBackground(ctx context.Context) error {
 	return nil
 }
 
-func NewHandler(dataDir string) HandlerResult {
+func NewHandler(dataDir string, allowedOrigins []string) HandlerResult {
 	stateDir := filepath.Join(dataDir, "state")
 	usageDBPath := filepath.Join(stateDir, "ai_usage.sqlite")
 	stateStore := store.New(dataDir)
@@ -94,6 +94,7 @@ func NewHandler(dataDir string) HandlerResult {
 		ExtractionQueue:          extractionJobsService,
 		ExtractionJobCoordinator: characterJobCoordinator,
 		StateInitErr:             joinedInitErr,
+		AllowedOrigins:           allowedOrigins,
 	})
 
 	result := HandlerResult{
