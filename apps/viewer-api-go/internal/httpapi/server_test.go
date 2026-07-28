@@ -174,6 +174,14 @@ func TestNovelSearchReturnsPreviewWithoutChangingReaderState(t *testing.T) {
 	if match["episodeIndex"] != "1" || match["position"] != float64(0) || !strings.Contains(match["snippet"].(string), "本文です") {
 		t.Fatalf("search match = %+v", match)
 	}
+	for _, internalField := range []string{"hitId", "score", "selectionReason", "topMatches", "coverageMatches", "metadata"} {
+		if _, exists := result[internalField]; exists {
+			t.Fatalf("search response exposed internal field %q: %+v", internalField, result)
+		}
+		if _, exists := match[internalField]; exists {
+			t.Fatalf("search match exposed internal field %q: %+v", internalField, match)
+		}
+	}
 	after := requestJSON(t, handler, http.MethodGet, "/api/reader/state?novelId="+url.QueryEscape(novelID), nil, http.StatusOK)
 	if fmt.Sprint(after) != fmt.Sprint(before) {
 		t.Fatalf("search changed reader state: before=%+v after=%+v", before, after)
@@ -210,6 +218,43 @@ func TestNovelSearchReturnsPreviewWithoutChangingReaderState(t *testing.T) {
 		nil,
 		http.StatusBadRequest,
 	)
+}
+
+func TestBuildNovelSearchResponseSortsLimitsAndHidesToolFields(t *testing.T) {
+	rawMatches := make([]map[string]any, 0, 22)
+	for number := 22; number >= 1; number-- {
+		rawMatches = append(rawMatches, map[string]any{
+			"episodeIndex":    strconv.Itoa(number),
+			"episodeNumber":   number,
+			"title":           fmt.Sprintf("Episode %d", number),
+			"position":        number * 10,
+			"snippet":         "synthetic snippet",
+			"hitId":           fmt.Sprintf("internal-%d", number),
+			"score":           1.0,
+			"selectionReason": "top_score",
+		})
+	}
+	response := buildNovelSearchResponse("synthetic", map[string]any{
+		"candidateCount":      22,
+		"matchedEpisodeCount": float64(22),
+		"matches":             rawMatches,
+		"metadata":            map[string]any{"cacheHitCount": 22},
+	})
+	if len(response.Matches) != novelSearchMaxResults || response.Matches[0].EpisodeNumber != 1 || response.Matches[19].EpisodeNumber != 20 {
+		t.Fatalf("sorted limited matches = %+v", response.Matches)
+	}
+	if response.Query != "synthetic" || response.CandidateCount != 22 || response.MatchedEpisodeCount != 22 || !response.Truncated {
+		t.Fatalf("search response summary = %+v", response)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	for _, internalField := range []string{"hitId", "score", "selectionReason", "metadata"} {
+		if strings.Contains(string(encoded), internalField) {
+			t.Fatalf("encoded response exposed %q: %s", internalField, encoded)
+		}
+	}
 }
 
 func TestExtractionUsageTokenHelpers(t *testing.T) {

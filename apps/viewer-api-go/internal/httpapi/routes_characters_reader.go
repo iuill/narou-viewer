@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,24 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
+
+const novelSearchMaxResults = 20
+
+type novelSearchMatchResponse struct {
+	EpisodeIndex  string `json:"episodeIndex"`
+	EpisodeNumber int    `json:"episodeNumber"`
+	Title         string `json:"title"`
+	Position      int    `json:"position"`
+	Snippet       string `json:"snippet"`
+}
+
+type novelSearchResponse struct {
+	Query               string                     `json:"query"`
+	CandidateCount      int                        `json:"candidateCount"`
+	MatchedEpisodeCount int                        `json:"matchedEpisodeCount"`
+	Truncated           bool                       `json:"truncated"`
+	Matches             []novelSearchMatchResponse `json:"matches"`
+}
 
 func (s *Server) handleNovelSubroute(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/library/novels/")
@@ -92,7 +111,7 @@ func (s *Server) handleNovelSearch(w http.ResponseWriter, r *http.Request, novel
 		return
 	}
 	if s.readerAssistant == nil || s.library == nil {
-		writeError(w, http.StatusNotFound, "Novel not found.")
+		writeError(w, http.StatusInternalServerError, "Novel search is not available.")
 		return
 	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -114,10 +133,10 @@ func (s *Server) handleNovelSearch(w http.ResponseWriter, r *http.Request, novel
 		lastEpisodeIndex = toc.Episodes[len(toc.Episodes)-1].EpisodeIndex
 	}
 	arguments, _ := json.Marshal(map[string]any{
-		"query":       query,
-		"startNumber": 1,
-		"endNumber":   len(toc.Episodes),
-		"maxResults":  20,
+		"query":              query,
+		"startEpisodeNumber": 1,
+		"endEpisodeNumber":   len(toc.Episodes),
+		"maxResults":         novelSearchMaxResults,
 	})
 	result := s.readerAssistant.ExecuteTool(r.Context(), readerassistant.Context{
 		NovelID:                      novelID,
@@ -136,7 +155,56 @@ func (s *Server) handleNovelSearch(w http.ResponseWriter, r *http.Request, novel
 		writeError(w, http.StatusBadRequest, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, result.Result)
+	writeJSON(w, http.StatusOK, buildNovelSearchResponse(query, result.Result))
+}
+
+func buildNovelSearchResponse(query string, result map[string]any) novelSearchResponse {
+	response := novelSearchResponse{
+		Query:               query,
+		CandidateCount:      searchResultInt(result["candidateCount"]),
+		MatchedEpisodeCount: searchResultInt(result["matchedEpisodeCount"]),
+		Matches:             []novelSearchMatchResponse{},
+	}
+	rawMatches, _ := result["matches"].([]map[string]any)
+	for _, rawMatch := range rawMatches {
+		episodeIndex, episodeIndexOK := rawMatch["episodeIndex"].(string)
+		title, titleOK := rawMatch["title"].(string)
+		snippet, snippetOK := rawMatch["snippet"].(string)
+		episodeNumber := searchResultInt(rawMatch["episodeNumber"])
+		position := searchResultInt(rawMatch["position"])
+		if !episodeIndexOK || !titleOK || !snippetOK || episodeNumber < 1 || position < 0 {
+			continue
+		}
+		response.Matches = append(response.Matches, novelSearchMatchResponse{
+			EpisodeIndex:  episodeIndex,
+			EpisodeNumber: episodeNumber,
+			Title:         title,
+			Position:      position,
+			Snippet:       snippet,
+		})
+	}
+	sort.SliceStable(response.Matches, func(i, j int) bool {
+		if response.Matches[i].EpisodeNumber == response.Matches[j].EpisodeNumber {
+			return response.Matches[i].Position < response.Matches[j].Position
+		}
+		return response.Matches[i].EpisodeNumber < response.Matches[j].EpisodeNumber
+	})
+	if len(response.Matches) > novelSearchMaxResults {
+		response.Matches = response.Matches[:novelSearchMaxResults]
+	}
+	response.Truncated = response.CandidateCount > len(response.Matches)
+	return response
+}
+
+func searchResultInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 func (s *Server) handleNovels(w http.ResponseWriter, r *http.Request) {
