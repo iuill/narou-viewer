@@ -47,6 +47,7 @@ import type {
   TocEpisode,
   TocResponse
 } from "./types";
+import { ReaderNovelSearch } from "./ReaderNovelSearch";
 import type { ReaderSessionCommands as ReaderSelectionCommands } from "./useReaderSessionCommands";
 import type { ReaderSessionCommands as ReaderStateCommands } from "./useReaderSession";
 
@@ -413,7 +414,6 @@ export function ReaderScreen(props: ReaderScreenProps) {
     visibleBookmarks,
     visibleTocEpisodes,
   } = flatProps;
-
   const selectedTocEpisodePosition = toc?.episodes.findIndex(
     (tocEpisode) => tocEpisode.episodeIndex === selectedEpisodeIndex
   ) ?? -1;
@@ -449,9 +449,21 @@ export function ReaderScreen(props: ReaderScreenProps) {
             ref={readerPanelRef}
             title="目次"
           >
-            {toc ? (
-              <>
-                <ListPaginationControls
+            {selectedNovelId ? (
+              <ReaderNovelSearch
+                formatEpisodeLabel={(episodeIndex) =>
+                  formatEpisodeIndexLabel(episodeIndex, episodeDisplayLookup, preferFriendlyEpisodeLabels)
+                }
+                key={selectedNovelId}
+                novelId={selectedNovelId}
+                onRead={(match) => {
+                  closeReaderPanel();
+                  readerCommands.openEpisode(match.episodeIndex, match.position);
+                }}
+              >
+                {toc ? (
+                  <>
+                    <ListPaginationControls
                   currentPage={tocPagination.currentPage}
                   endItemNumber={tocPagination.endItemNumber}
                   label="本文画面の話一覧"
@@ -459,11 +471,11 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   startItemNumber={tocPagination.startItemNumber}
                   totalItems={tocPagination.totalItems}
                   totalPages={tocPagination.totalPages}
-                />
-                {tocPagination.totalItems === 0 ? (
-                  <p className="message">話データがありません。</p>
-                ) : (
-                  <div className="toc-list reader-toc-list">
+                    />
+                    {tocPagination.totalItems === 0 ? (
+                      <p className="message">話データがありません。</p>
+                    ) : (
+                      <div className="toc-list reader-toc-list">
                     {visibleTocEpisodes.map((tocEpisode: (typeof visibleTocEpisodes)[number]) => {
                       const isFetched = !tocEpisode.bodyStatus || tocEpisode.bodyStatus === "complete";
                       const statusLabel = isFetched ? (tocEpisode.updatedAt ? formatDate(tocEpisode.updatedAt) : "更新日未取得") : "未取得";
@@ -491,12 +503,14 @@ export function ReaderScreen(props: ReaderScreenProps) {
                         </button>
                       );
                     })}
-                  </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="message">目次を読み込み中...</p>
                 )}
-              </>
-            ) : (
-              <p className="message">目次を読み込み中...</p>
-            )}
+              </ReaderNovelSearch>
+            ) : null}
           </ReaderFloatingPanel>
         ) : null}
         {isReaderBookmarksOpen ? (

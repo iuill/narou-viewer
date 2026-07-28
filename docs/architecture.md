@@ -238,6 +238,10 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `GET /api/library/novels/{novelId}/episodes/{episodeIndex}`
   - 選択中 backend の本文を HTML と reader 向け構造化 document に変換して返却
   - レスポンスに `sourceUrl`, `html`, `readerDocument`, `plainTextLength`, `updatedAt`, `contentEtag` を含める
+- `GET /api/library/novels/{novelId}/search?q=...`
+  - 現在作品の本文をローカル検索し、話情報、本文位置、短いsnippetを話順・出現順で最大20件返す
+  - `reader_search.sqlite` を再利用し、未index話はcanonical reader documentからlazyに補完する。検索語と本文を外部providerへ送信しない
+  - viewer-webは結果を軽量プレビューし、明示的な「この位置から読む」操作までreader DOM、pagination、最終既読位置を変更しない
 
 - `PUT /api/reader/state`
   - リクエスト body は `novelId`, `lastReadEpisodeIndex`, `position`, `expectedStateVersion` と、任意の `clientId`, `scroll` を受け取り、作品ごとの最終既読話（`episode_index`）と本文位置を CAS で更新する
@@ -294,7 +298,14 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 10. `viewer-web` -> `viewer-api`: `PUT /api/reader/state`（最終既読話・本文内位置保存）
 11. `viewer-web` -> `viewer-api`: `PUT /api/reader/preferences`（組み方向、フォント種別、テーマ保存）
 
-### 7.3 オフライン事前取得（将来設計・未実装）
+### 7.3 非AI作品内検索
+
+1. `viewer-web` -> `viewer-api`: `GET /api/library/novels/{novelId}/search?q=...`
+2. `viewer-api`: `reader_search.sqlite` と未index話のcanonical reader documentを使ってローカル検索し、短いsnippetを返す
+3. `viewer-web`: 検索結果とsnippetを目次panel内でプレビューする。この段階ではreaderの選択状態と最終既読位置を変更しない
+4. 利用者が「この位置から読む」を選んだ場合だけ既存のepisode表示へ遷移し、layout完了後は通常の既読位置autosaveを行う
+
+### 7.4 オフライン事前取得（将来設計・未実装）
 
 話本文の事前取得、容量上限、episode metadata の browser 永続化は現行未実装である。実装する場合は次の sequence を基準にし、採用する browser storage schema を [`state-schema-policy.md`](state-schema-policy.md) へ追加する。
 
@@ -307,7 +318,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 7. `viewer-web`: `IndexedDB` に `contentEtag`, `bytes`, `lastAccessedAt` を保存する
 8. `viewer-web`: 容量超過時は「中心から遠い」かつ「最終アクセスが古い」順で削除する
 
-### 7.4 読書AIチャット
+### 7.5 読書AIチャット
 
 1. `viewer-web`: 本文画面の FAB「読書AI」からパネルを開く
 2. `viewer-web` -> `viewer-api`: `POST /api/library/novels/{novelId}/reader-assistant/chat/stream`。追質問ではクライアント側に保持している直近会話履歴も送る
@@ -332,7 +343,7 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 
 - 起動時に designated singleton state がなければ `viewer-api` が初期ファイルを生成する。per-novel state の欠落、既存 file の parse error、未知 schema version は別に扱う。
 - core singleton YAML は `FileStateStore` facade と各 repository の mutex 内で更新する。その他は schema ごとに lock または workflow の調停境界が異なり、いずれも共通 atomic file helper で更新する。現行差異は [`state-schema-policy.md`](state-schema-policy.md) を参照する。
-- `state/ai_usage.sqlite` は現在値の正本ではないが、再生成不能な監査・利用履歴として扱う。`state/reader_search.sqlite` は読書AI検索用の再生成可能 cache とする。
+- `state/ai_usage.sqlite` は現在値の正本ではないが、再生成不能な監査・利用履歴として扱う。`state/reader_search.sqlite` は非AI作品内検索と読書AI検索で共有する再生成可能 cache とする。
 - 各 runtime repository は parse error と未知 schema version を fail-closed で拒否する。派生 profile、index、cache の破損は対応する runtime 経路で quarantine または再構築する。
 - viewer-api と novel-fetcher は process-lifetime の OS writer lock を保持し、同じ owner の二重起動を拒否する。
 - backup は両 writer を停止し、`novel-fetcher/library.sqlite`、`novel-fetcher/works/**`、viewer-api state を含む data root 全体を一度に copy する。専用 archive と自動 restore は提供しない。詳細は [`state-schema-policy.md`](state-schema-policy.md) を参照する。

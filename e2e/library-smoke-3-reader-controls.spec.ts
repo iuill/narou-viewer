@@ -5,6 +5,7 @@ import {
   clickReaderBackToLibrary,
   clearReaderViewportTextSelection,
   clickReaderActionButton,
+  enableReaderStateSave,
   expectReaderFullscreenState,
   findNovelIdByTitle,
   getLongNarouEpisodeIndex,
@@ -23,6 +24,46 @@ import {
 } from "./library-smoke.helpers";
 
 setupLibrarySmokeSuite(test);
+
+test("作品内検索のプレビューは既読位置を変えず、明示操作で本文を開く", async ({ page, request }, testInfo) => {
+  await enableReaderStateSave(page);
+  await gotoLibrary(page);
+  await openNovelByTitle(page, request, readerControlsNarouTitle);
+  if (testInfo.project.use.hasTouch !== true) {
+    await openEpisodeByIndex(page, "1");
+  }
+  const episodeTwoStateWrites: string[] = [];
+  page.on("request", (stateRequest) => {
+    if (stateRequest.method() !== "PUT" || !stateRequest.url().endsWith("/api/reader/state")) {
+      return;
+    }
+    if (stateRequest.postDataJSON().lastReadEpisodeIndex === "2") {
+      episodeTwoStateWrites.push(stateRequest.url());
+    }
+  });
+
+  await clickReaderActionButton(page, "目次・検索");
+  const panel = page.getByLabel("本文画面の目次");
+  await panel.getByRole("searchbox", { name: "作品内検索" }).fill("case-d-40");
+  await panel.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(panel.getByText("1件の検索結果")).toBeVisible();
+  const stateWriteCountBeforePreview = episodeTwoStateWrites.length;
+  await panel.getByRole("button", { name: /第二話.*case-d-40/s }).click();
+  await expect(panel.getByText("プレビュー", { exact: true })).toBeVisible();
+  await expect(panel.getByText("プレビューでは最終既読位置を変更しません。")).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(episodeTwoStateWrites).toHaveLength(stateWriteCountBeforePreview);
+
+  const savedEpisode = page.waitForRequest(
+    (request) =>
+      request.method() === "PUT" &&
+      request.url().endsWith("/api/reader/state") &&
+      request.postDataJSON().lastReadEpisodeIndex === "2"
+  );
+  await panel.getByRole("button", { name: "この位置から読む" }).click();
+  await expect(page.getByRole("heading", { name: "第二話" })).toBeVisible();
+  await savedEpisode;
+});
 
 test("本文ページでページ移動と各アイコンの機能が動作する", async ({ page, request }, testInfo) => {
   testInfo.setTimeout(60_000);
@@ -63,7 +104,7 @@ test("本文ページでページ移動と各アイコンの機能が動作す�
   await expect(page.locator(".reader-info-panel")).toContainText("現在の話");
   await expect(page.locator(".reader-info-panel")).toContainText("閲覧ページ");
 
-  await clickReaderActionButton(page, "目次");
+  await clickReaderActionButton(page, "目次・検索");
   await expect(page.locator(".reader-info-panel")).toHaveCount(0);
   const readerTocPanel = page.getByLabel("本文画面の目次");
   const readerTocEpisodes = readerTocPanel.locator('[data-reader-panel-item="toc-episode"]');

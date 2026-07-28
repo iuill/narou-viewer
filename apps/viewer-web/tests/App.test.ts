@@ -2599,7 +2599,7 @@ describe("App", () => {
       "次のページへ進む",
       "前のページへ戻る",
       "前の話へ戻る",
-      "目次",
+      "目次・検索",
       "栞を追加",
       "読書設定",
       "実験フォント",
@@ -2625,7 +2625,7 @@ describe("App", () => {
     expect(container.querySelector(".reader-info-panel")?.textContent).toContain("ページ");
     expect(container.querySelector(".reader-info-panel")?.textContent).toContain("https://example.com/n1/1/");
 
-    await click(container.querySelector('button[aria-label="目次"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="目次・検索"]') as Element, dom);
     await waitFor(() => Boolean(container.querySelector(".reader-toc-panel")));
     expect(container.querySelector(".reader-settings-panel")).toBeNull();
     expect(container.querySelector(".reader-info-panel")).toBeNull();
@@ -2639,7 +2639,7 @@ describe("App", () => {
     await pointerDown(dom.window.document.body, dom);
     await waitFor(() => container.querySelector(".reader-toc-panel") === null);
 
-    await click(container.querySelector('button[aria-label="目次"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="目次・検索"]') as Element, dom);
     await waitFor(() => Boolean(container.querySelector(".reader-toc-panel")));
 
     const image = container.querySelector(".reader-prose-paged img");
@@ -2705,7 +2705,7 @@ describe("App", () => {
     const scrollIntoView = vi.spyOn(dom.window.HTMLElement.prototype, "scrollIntoView");
     scrollIntoView.mockClear();
 
-    await click(getButtonByLabel(container, "目次"), dom);
+    await click(getButtonByLabel(container, "目次・検索"), dom);
     await waitFor(() => container.querySelector(".reader-toc-panel .list-pagination-summary")?.textContent?.includes("51-75 / 75 件") === true);
     const currentTocButton = container.querySelector(
       '.reader-toc-panel button[data-reader-panel-item="toc-episode"][data-episode-index="75"]'
@@ -2724,7 +2724,7 @@ describe("App", () => {
     await click(getButtonByLabel(container, "目次を閉じる"), dom);
     await waitFor(() => container.querySelector(".reader-toc-panel") === null);
 
-    await click(getButtonByLabel(container, "目次"), dom);
+    await click(getButtonByLabel(container, "目次・検索"), dom);
     await waitFor(() => container.querySelector(".reader-toc-panel .list-pagination-summary")?.textContent?.includes("51-75 / 75 件") === true);
     const reopenedCurrentTocButton = container.querySelector(
       '.reader-toc-panel button[data-reader-panel-item="toc-episode"][data-episode-index="75"]'
