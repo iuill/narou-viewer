@@ -337,6 +337,9 @@ func TestValidateLibraryExportDocumentRejectsMalformedEntries(t *testing.T) {
 		{name: "bookmark", mutate: func(doc *libraryExportDocument) {
 			doc.Novels[0].Bookmarks = []libraryExportBookmark{{ID: "id", NovelID: "other", EpisodeIndex: "1", CreatedAt: "now"}}
 		}},
+		{name: "bookmark timestamp", mutate: func(doc *libraryExportDocument) {
+			doc.Novels[0].Bookmarks = []libraryExportBookmark{{ID: "id", NovelID: "novel", EpisodeIndex: "1", CreatedAt: "now"}}
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

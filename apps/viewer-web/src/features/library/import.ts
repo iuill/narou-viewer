@@ -2,7 +2,7 @@ import { parseDocument } from "yaml";
 import { mutateJson } from "../../api/http";
 import type { LibraryExportDocument } from "./export";
 
-const MAX_LIBRARY_IMPORT_BYTES = 1 << 20;
+export const MAX_LIBRARY_IMPORT_BYTES = 1 << 20;
 
 export type LibraryImportResult = {
   dryRun: boolean;

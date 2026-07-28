@@ -11,6 +11,8 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
 
+const maxLibraryImportJSONBodyBytes int64 = 2 << 20
+
 type libraryImportRequest struct {
 	DryRun   bool                  `json:"dryRun"`
 	Document libraryExportDocument `json:"document"`
@@ -92,7 +94,7 @@ func (s *Server) handleLibraryImport(w http.ResponseWriter, r *http.Request) {
 		}
 		if !exists {
 			response.NovelsSkipped++
-			response.Warnings = append(response.Warnings, fmt.Sprintf("%s: 未取得作品のためスキップしました。", novel.Title))
+			response.Warnings = append(response.Warnings, fmt.Sprintf("%s (%s): 未取得作品のためスキップしました。", novel.Title, novel.NovelID))
 			continue
 		}
 
@@ -110,7 +112,7 @@ func (s *Server) handleLibraryImport(w http.ResponseWriter, r *http.Request) {
 					Position:             novel.ReadingState.Position,
 				}
 			} else {
-				response.Warnings = append(response.Warnings, fmt.Sprintf("%s: 既読話が存在しないため既読位置をスキップしました。", novel.Title))
+				response.Warnings = append(response.Warnings, fmt.Sprintf("%s (%s): 既読話が存在しないため既読位置をスキップしました。", novel.Title, novel.NovelID))
 			}
 		}
 		for _, bookmark := range novel.Bookmarks {
@@ -120,7 +122,7 @@ func (s *Server) handleLibraryImport(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !episodeExists {
-				response.Warnings = append(response.Warnings, fmt.Sprintf("%s: 存在しない話の栞をスキップしました。", novel.Title))
+				response.Warnings = append(response.Warnings, fmt.Sprintf("%s (%s): 存在しない話の栞をスキップしました。", novel.Title, novel.NovelID))
 				continue
 			}
 			importNovel.Bookmarks = append(importNovel.Bookmarks, store.Bookmark{
@@ -149,7 +151,7 @@ func decodeStrictLibraryImportRequest(w http.ResponseWriter, r *http.Request) (l
 		return libraryImportRequest{}, false
 	}
 	defer r.Body.Close()
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBodyBytes))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxLibraryImportJSONBodyBytes))
 	decoder.DisallowUnknownFields()
 	var request libraryImportRequest
 	if err := decoder.Decode(&request); err != nil {
@@ -201,6 +203,9 @@ func validateLibraryExportDocument(document libraryExportDocument) error {
 				!store.IsEpisodeIndex(bookmark.EpisodeIndex) || bookmark.Position < 0 ||
 				strings.TrimSpace(bookmark.CreatedAt) == "" {
 				return fmt.Errorf("bookmarks contains an invalid entry.")
+			}
+			if _, err := time.Parse(time.RFC3339, bookmark.CreatedAt); err != nil {
+				return fmt.Errorf("bookmark createdAt must be an RFC3339 timestamp.")
 			}
 		}
 	}

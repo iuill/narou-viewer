@@ -26,6 +26,7 @@ import {
 import {
   formatLibraryImportSummary,
   importLibraryDocument,
+  MAX_LIBRARY_IMPORT_BYTES,
   parseLibraryImportYaml
 } from "../../features/library/import";
 import type { NovelSummary } from "../../features/library/types";
@@ -337,6 +338,10 @@ export function useFetcherLibraryModel({
 
   async function handleImportLibrary(file: File) {
     if (isLibraryImporting) {
+      return;
+    }
+    if (file.size > MAX_LIBRARY_IMPORT_BYTES) {
+      onError("インポートファイルは1MB以下にしてください。");
       return;
     }
     setIsLibraryImporting(true);
