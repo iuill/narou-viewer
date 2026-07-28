@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClientUpdateRequiredEventDetail } from "../../api/contract";
 import type { NovelSummary } from "../../features/library/types";
 import { useReaderSession } from "../../features/reader/useReaderSession";
@@ -249,11 +249,14 @@ export function useReaderWorkspaceModel({
   const isWebKitEngine = useMemo(() => detectWebKitEngine(), []);
   const isTouchDevice = useTouchDevice();
   const {
+    clearVerticalPageVisibility,
     getCurrentPageIndexFromViewport,
     getCurrentReaderViewportPosition,
     getPagingMetrics,
     measureVerticalPages,
+    prepareVerticalPageSnapshot,
     scrollToPage,
+    syncVerticalPageVisibility,
     verticalPagingCacheRef
   } = useReaderPagingHelpers({
     currentPageIndex,
@@ -267,6 +270,17 @@ export function useReaderWorkspaceModel({
     readingMode,
     verticalLastPageReservePx
   });
+  const movePageWithCachedScroll = useCallback(
+    (direction: -1 | 1) => {
+      const viewport = readerViewportRef.current;
+      if (viewport) {
+        const nextPageIndex = Math.min(Math.max(currentPageIndex + direction, 0), totalPages - 1);
+        scrollToPage(viewport, nextPageIndex, readingMode);
+      }
+      movePage(direction);
+    },
+    [currentPageIndex, movePage, readerViewportRef, readingMode, scrollToPage, totalPages]
+  );
   const isReaderKeyboardPagingBlocked =
     imageViewer !== null || activeReaderPanel !== null || isReaderOverflowOpen || readerSyncConflict !== null;
   const [isShowingAllBookmarks, setIsShowingAllBookmarks] = useState(false);
@@ -518,6 +532,7 @@ export function useReaderWorkspaceModel({
 
   useReaderEffects({
     appliedReaderStateAutoSaveGuardRef,
+    clearVerticalPageVisibility,
     currentPageIndex,
     debugPageOverflow,
     episode,
@@ -534,6 +549,7 @@ export function useReaderWorkspaceModel({
     measureVerticalPages,
     openImageViewer,
     pendingReadingStateKeyRef,
+    prepareVerticalPageSnapshot,
     readerArticleFontFamilyCss,
     readerArticleFontWeight,
     readerExperimentalFontLayoutVersion,
@@ -560,6 +576,7 @@ export function useReaderWorkspaceModel({
     setTotalPages,
     setVerticalLastPageReservePx,
     shouldCapturePageAnchorRef,
+    syncVerticalPageVisibility,
     totalPages,
     verticalLastPageReservePx,
     verticalPagingCacheRef
@@ -613,7 +630,7 @@ export function useReaderWorkspaceModel({
     isReaderSpeechPlaying,
     isReaderTocOpen,
     isTouchDevice,
-    movePage,
+    movePage: movePageWithCachedScroll,
     nextEpisode,
     nextEpisodeConfirmPrimaryButtonRef,
     nextEpisodeConfirmReturnFocusRef,

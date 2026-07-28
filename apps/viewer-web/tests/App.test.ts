@@ -3242,7 +3242,19 @@ describe("App", () => {
 
     await waitFor(() => getButtonByLabel(container, "次のページへ進む").disabled === false);
 
+    const viewport = container.querySelector(".reader-page-viewport");
+    if (!(viewport instanceof dom.window.HTMLElement)) {
+      throw new Error("reader viewport not found");
+    }
+    const getClientRectsSpy = vi.spyOn(dom.window.Element.prototype, "getClientRects");
+    const getBoundingClientRectSpy = vi.spyOn(dom.window.Element.prototype, "getBoundingClientRect");
+
     await keyDown(dom.window, "ArrowLeft");
+    expect(getClientRectsSpy).not.toHaveBeenCalled();
+    expect(getBoundingClientRectSpy).not.toHaveBeenCalled();
+    getClientRectsSpy.mockRestore();
+    getBoundingClientRectSpy.mockRestore();
+
     await keyDown(dom.window, "ArrowLeft");
 
     await waitFor(() => container.textContent?.includes("次の話へ進みますか？") === true);
