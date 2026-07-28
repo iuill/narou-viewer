@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   formatFetcherTaskProgress,
   formatFetcherTaskStepProgress,
@@ -90,6 +90,7 @@ type Props = {
   downloadForce: boolean;
   isDownloadSubmitting: boolean;
   isLibraryExporting?: boolean;
+  isLibraryImporting?: boolean;
   libraryNotice: string | null;
   activeFetcherTasksCount: number;
   activeFetcherTaskEntries: ActiveTaskEntry[];
@@ -114,6 +115,7 @@ type Props = {
   onCloseDownloadComposer: () => void;
   onDownloadSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onExportLibrary?: () => void | Promise<void>;
+  onImportLibrary?: (file: File) => void | Promise<void>;
   onDownloadDragEnter: (event: DragEvent<HTMLDivElement>) => void;
   onDownloadDragLeave: (event: DragEvent<HTMLDivElement>) => void;
   onDownloadDragOver: (event: DragEvent<HTMLDivElement>) => void;
@@ -141,6 +143,7 @@ export function LibraryPanel({
   downloadForce,
   isDownloadSubmitting,
   isLibraryExporting = false,
+  isLibraryImporting = false,
   libraryNotice,
   activeFetcherTasksCount,
   activeFetcherTaskEntries,
@@ -165,6 +168,7 @@ export function LibraryPanel({
   onCloseDownloadComposer,
   onDownloadSubmit,
   onExportLibrary = () => {},
+  onImportLibrary = () => {},
   onDownloadDragEnter,
   onDownloadDragLeave,
   onDownloadDragOver,
@@ -182,12 +186,21 @@ export function LibraryPanel({
 }: Props) {
   const [openStoryNovelId, setOpenStoryNovelId] = useState<string | null>(null);
   const [expandedStoryNovelId, setExpandedStoryNovelId] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const isMobileDownloadTab = mobileHomeTab === "download";
   const shouldShowDownloadComposer = isDownloadComposerOpen || isMobileDownloadTab;
   const shouldShowQueueSection = fetcherTaskEntries.length > 0 || fetcherStatusError || isMobileDownloadTab;
   const shouldShowLibraryList = !isMobileDownloadTab;
   const hasResumableNovels = resumableNovels.length > 0;
   const hasUpdatableNovels = updatableNovels.length > 0;
+
+  function handleImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) {
+      void onImportLibrary(file);
+    }
+  }
   const googleBooksCoverNovels = visibleLibraryNovels.filter(isGoogleBooksCover);
   const googleBooksCoverCredit =
     googleBooksCoverNovels.length > 0 ? (
@@ -249,6 +262,22 @@ export function LibraryPanel({
               >
                 {isLibraryExporting ? "出力中..." : "エクスポート"}
               </button>
+              <button
+                className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
+                disabled={isLibraryImporting}
+                onClick={() => importInputRef.current?.click()}
+                type="button"
+              >
+                {isLibraryImporting ? "読込中..." : "インポート"}
+              </button>
+              <input
+                accept=".yaml,.yml,application/x-yaml,text/yaml"
+                aria-label="ライブラリexportを選択"
+                hidden
+                onChange={handleImportFileChange}
+                ref={importInputRef}
+                type="file"
+              />
               <button
                 aria-expanded={isDownloadComposerOpen}
                 aria-label="小説を追加"

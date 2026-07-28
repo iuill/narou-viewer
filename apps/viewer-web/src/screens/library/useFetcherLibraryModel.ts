@@ -23,6 +23,11 @@ import {
   downloadTextFile,
   serializeLibraryExportToYaml
 } from "../../features/library/export";
+import {
+  formatLibraryImportSummary,
+  importLibraryDocument,
+  parseLibraryImportYaml
+} from "../../features/library/import";
 import type { NovelSummary } from "../../features/library/types";
 import type { RuntimeStatusService } from "../../features/runtime/types";
 import { useFetcherStatus } from "../../hooks/useFetcherStatus";
@@ -151,6 +156,7 @@ export function useFetcherLibraryModel({
   const [downloadForce, setDownloadForce] = useState(false);
   const [isDownloadSubmitting, setIsDownloadSubmitting] = useState(false);
   const [isLibraryExporting, setIsLibraryExporting] = useState(false);
+  const [isLibraryImporting, setIsLibraryImporting] = useState(false);
   const [isDownloadComposerOpen, setIsDownloadComposerOpen] = useState(false);
   const [isDownloadDropActive, setIsDownloadDropActive] = useState(false);
   const [isNovelActionSubmitting, setIsNovelActionSubmitting] = useState(false);
@@ -326,6 +332,36 @@ export function useFetcherLibraryModel({
       onError(exportError instanceof Error ? exportError.message : "Unknown error");
     } finally {
       setIsLibraryExporting(false);
+    }
+  }
+
+  async function handleImportLibrary(file: File) {
+    if (isLibraryImporting) {
+      return;
+    }
+    setIsLibraryImporting(true);
+    onError(null);
+    setLibraryNotice(null);
+    try {
+      const document = parseLibraryImportYaml(await file.text());
+      const preview = await importLibraryDocument(document, true);
+      const summary = formatLibraryImportSummary(preview);
+      const warningPreview = preview.warnings.slice(0, 3).join("\n");
+      const confirmed = window.confirm(
+        `${summary}\n\n既存の既読位置と同じ位置の栞は保持し、不足分だけ追加します。${warningPreview ? `\n\n${warningPreview}` : ""}\n\n適用しますか？`
+      );
+      if (!confirmed) {
+        setLibraryNotice(`インポートを取り消しました。${summary}`);
+        return;
+      }
+      const result = await importLibraryDocument(document, false);
+      setLibraryNotice(`インポートしました。${formatLibraryImportSummary(result)}`);
+      readerCommands.clearSelection({ clearNovel: false });
+      requestLibraryReload();
+    } catch (importError) {
+      onError(importError instanceof Error ? importError.message : "Unknown error");
+    } finally {
+      setIsLibraryImporting(false);
     }
   }
 
@@ -644,6 +680,7 @@ export function useFetcherLibraryModel({
     handleDownloadDrop,
     handleDownloadSubmit,
     handleExportLibrary,
+    handleImportLibrary,
     handleRemoveCurrentNovel,
     handleResumeNovel,
     handleUpdateCurrentNovel,
@@ -656,6 +693,7 @@ export function useFetcherLibraryModel({
     isDownloadDropActive,
     isDownloadSubmitting,
     isLibraryExporting,
+    isLibraryImporting,
     isNovelActionSubmitting,
     queuedTaskPreviewEntries,
     queueStatusLabel,
