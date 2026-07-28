@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
 	"narou-viewer/apps/viewer-api-go/internal/state/aisettings"
 	"narou-viewer/apps/viewer-api-go/internal/state/bookmarks"
 	"narou-viewer/apps/viewer-api-go/internal/state/novelsettings"
@@ -59,6 +60,19 @@ type NovelReaderCorrectionPatch = novelsettings.Patch
 type ReadingStatePutInput struct {
 	ReadingState
 	ExpectedStateVersion *int
+}
+
+type LibraryImportNovel struct {
+	NovelID      string
+	ReadingState *ReadingState
+	Bookmarks    []Bookmark
+}
+
+type LibraryImportResult struct {
+	ReadingStatesApplied int `json:"readingStatesApplied"`
+	ReadingStatesSkipped int `json:"readingStatesSkipped"`
+	BookmarksApplied     int `json:"bookmarksApplied"`
+	BookmarksSkipped     int `json:"bookmarksSkipped"`
 }
 
 func New(dataDir string) *Store {
@@ -183,6 +197,117 @@ func (s *Store) DeleteBookmark(bookmarkID string) error {
 	defer s.mu.Unlock()
 
 	return s.bookmarks.Delete(bookmarkID)
+}
+
+func (s *Store) ImportLibrary(novels []LibraryImportNovel, dryRun bool) (LibraryImportResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := LibraryImportResult{}
+	readingStates := make([]ReadingState, 0, len(novels))
+	bookmarksToCreate := make([]Bookmark, 0)
+	existingBookmarks, err := s.bookmarks.List("")
+	if err != nil {
+		return result, err
+	}
+	bookmarkKeys := make(map[string]struct{}, len(existingBookmarks))
+	for _, bookmark := range existingBookmarks {
+		bookmarkKeys[libraryImportBookmarkKey(bookmark)] = struct{}{}
+	}
+
+	for _, novel := range novels {
+		if novel.ReadingState != nil {
+			current, err := s.readingState.Get(novel.NovelID)
+			if err != nil {
+				return result, err
+			}
+			if current.LastReadEpisodeIndex != nil {
+				result.ReadingStatesSkipped++
+			} else {
+				readingStates = append(readingStates, *novel.ReadingState)
+				result.ReadingStatesApplied++
+			}
+		}
+		for _, bookmark := range novel.Bookmarks {
+			key := libraryImportBookmarkKey(bookmark)
+			if _, exists := bookmarkKeys[key]; exists {
+				result.BookmarksSkipped++
+				continue
+			}
+			bookmarkKeys[key] = struct{}{}
+			bookmarksToCreate = append(bookmarksToCreate, bookmark)
+			result.BookmarksApplied++
+		}
+	}
+	if dryRun || (len(readingStates) == 0 && len(bookmarksToCreate) == 0) {
+		return result, nil
+	}
+
+	readingSnapshot, err := snapshotStateFile(filepath.Join(s.stateDir, readingStateFile))
+	if err != nil {
+		return LibraryImportResult{}, err
+	}
+	bookmarkSnapshot, err := snapshotStateFile(filepath.Join(s.stateDir, bookmarksFile))
+	if err != nil {
+		return LibraryImportResult{}, err
+	}
+	rollback := func(applyErr error) (LibraryImportResult, error) {
+		readingErr := restoreStateFile(readingSnapshot)
+		bookmarkErr := restoreStateFile(bookmarkSnapshot)
+		return LibraryImportResult{}, errors.Join(applyErr, readingErr, bookmarkErr)
+	}
+
+	for _, state := range readingStates {
+		if _, err := s.readingState.Put(readingstate.PutInput{State: state}); err != nil {
+			return rollback(err)
+		}
+	}
+	for _, bookmark := range bookmarksToCreate {
+		if _, err := s.bookmarks.Create(bookmark); err != nil {
+			return rollback(err)
+		}
+	}
+	return result, nil
+}
+
+func libraryImportBookmarkKey(bookmark Bookmark) string {
+	label := ""
+	if bookmark.Label != nil {
+		label = strings.TrimSpace(*bookmark.Label)
+	}
+	return bookmark.NovelID + "\x00" + bookmark.EpisodeIndex + "\x00" + strconv.Itoa(bookmark.Position) + "\x00" + label
+}
+
+type stateFileSnapshot struct {
+	path   string
+	data   []byte
+	exists bool
+	mode   os.FileMode
+}
+
+func snapshotStateFile(path string) (stateFileSnapshot, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return stateFileSnapshot{path: path}, nil
+	}
+	if err != nil {
+		return stateFileSnapshot{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return stateFileSnapshot{}, err
+	}
+	return stateFileSnapshot{path: path, data: data, exists: true, mode: info.Mode().Perm()}, nil
+}
+
+func restoreStateFile(snapshot stateFileSnapshot) error {
+	if !snapshot.exists {
+		if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	return fsatomic.WriteFile(snapshot.path, snapshot.data, snapshot.mode)
 }
 
 func (s *Store) PruneNovelState(novelID string) (NovelStatePruneResult, error) {

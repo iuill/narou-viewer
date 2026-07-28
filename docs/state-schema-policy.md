@@ -279,7 +279,9 @@ novels:
 
 現行 `formatVersion: 1` export は export timestamp、件数、warning、作品識別・metadata、reading state、bookmarks を含む。本文、asset、AI 生成 state、AI settings、AI usage、server cache は含まないため、server backup / restore と呼ばない。
 
-Issue #17 の importer は strict shape / version validation、unknown field 拒否、dry-run、作品照合、位置正規化、bookmark conflict policy、zero-mutation failure、途中 failure の rollback、semantic round-trip test を満たす。
+`formatVersion: 1` importer は viewer-api の `POST /api/library/import` が所有する。strict shape / version validation と unknown field 拒否をmutation前に行い、dry-runとapplyで同じ判定を使う。作品はexport時の `novelId` で既存libraryへ照合し、未取得作品と存在しない話はwarning付きでskipする。
+
+競合方針は個人利用向けの安全な既定として「既存優先」に固定する。既読位置は既存値がない場合だけ復元し、栞は作品・話・位置・labelが同じものを重複追加しない。apply中はviewer-apiのstate facadeで更新を直列化し、`reading_state.yaml` と `bookmarks.yaml` の更新前snapshotを保持して、途中失敗時は両fileをatomic writeで復元する。本文、asset、未取得作品の自動取得は行わない。
 
 ## 5. prune と reconciliation
 
