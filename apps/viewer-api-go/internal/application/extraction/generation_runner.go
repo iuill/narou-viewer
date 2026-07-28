@@ -42,7 +42,11 @@ func (r generationRunner) GenerateParallelIdentityWithCheckpoint(ctx context.Con
 		return nil, core.GenerationState{}, nil, err
 	}
 	if checkpoint.ParallelStrategy != "" && checkpoint.ParallelStrategy != GenerationStrategyParallelIdentity {
-		return nil, core.GenerationState{}, nil, r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, "parallel strategy mismatch", nil)
+		quarantineErr := r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, "parallel strategy mismatch", nil)
+		if quarantineErr == nil {
+			quarantineErr = errors.New("parallel checkpoint is incompatible: parallel strategy mismatch")
+		}
+		return nil, core.GenerationState{}, nil, quarantineErr
 	}
 	var saveMu sync.Mutex
 	session := &ParallelCheckpointSession{

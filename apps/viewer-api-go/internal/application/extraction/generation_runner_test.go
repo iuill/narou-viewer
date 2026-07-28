@@ -107,6 +107,25 @@ func TestParallelGenerationRunnerQuarantinesStrategyMismatch(t *testing.T) {
 	}
 }
 
+func TestParallelGenerationRunnerReturnsErrorWhenStrategyMismatchQuarantineReturnsNil(t *testing.T) {
+	config := &store.ResolvedAIGenerationConfig{ModelID: "model-a"}
+	batches := runnerBatches("1")
+	ports := &workflowFakePorts{
+		checkpoint: checkpointstore.Checkpoint{
+			SchemaVersion: CheckpointSchemaVersion, NovelID: "novel-a", UpToEpisodeIndex: "1",
+			GenerationFingerprint: parallelRunnerCheckpointFingerprint(config, "novel-a", nil, batches),
+			ParallelStrategy:      GenerationStrategyDiscoveryParallelCorrection,
+		},
+		quarantineReturnsNil: true,
+	}
+	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(
+		context.Background(), config, "novel-a", "1", nil, nil, nil, batches, nil, nil,
+	)
+	if err == nil || !ports.checkpointQuarantined || len(ports.parallelBatchCalls) != 0 {
+		t.Fatalf("nil quarantine error must fail closed: err=%v quarantined=%v calls=%v", err, ports.checkpointQuarantined, ports.parallelBatchCalls)
+	}
+}
+
 func TestParallelGenerationRunnerQuarantinesRuntimeBatchMismatch(t *testing.T) {
 	ports := &workflowFakePorts{parallelIncompatible: "parallel batch fingerprint mismatch"}
 	_, _, _, err := (generationRunner{ports: ports}).GenerateParallelIdentityWithCheckpoint(

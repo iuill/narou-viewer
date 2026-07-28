@@ -59,6 +59,7 @@ type workflowFakePorts struct {
 	checkpoint             checkpointstore.Checkpoint
 	checkpointQuarantined  bool
 	checkpointReason       string
+	quarantineReturnsNil   bool
 	savedCheckpoint        bool
 	saveCheckpointErr      error
 	savedCharacters        []characters.GeneratedCharacter
@@ -228,6 +229,9 @@ func (p *workflowFakePorts) LoadCheckpoint(string, string) (checkpointstore.Chec
 func (p *workflowFakePorts) QuarantineCheckpoint(_ string, _ string, reason string, cause error) error {
 	p.checkpointQuarantined = true
 	p.checkpointReason = reason
+	if p.quarantineReturnsNil {
+		return nil
+	}
 	return &checkpointstore.IncompatibleError{Path: "checkpoint", QuarantinedPath: "checkpoint.unsupported", Reason: reason, Err: cause}
 }
 
