@@ -3,6 +3,7 @@ import type { EpisodeResponse } from "../../features/reader/types";
 import {
   buildVerticalColumnBoundaries,
   buildVerticalPages,
+  findVerticalPageIndexesForContentMidpoint,
   resolveVerticalPagingContentMetrics,
   toViewportContentOffset
 } from "../../features/reader/verticalPagination";
@@ -60,8 +61,9 @@ export function useReaderPagingHelpers({
   }>({ key: "", pages: [{ start: 0, end: 0, offset: 0, blankLeft: 0, blankRight: 0, shiftX: 0 }] });
   const verticalPageRuntimeCacheRef = useRef<{
     activePageIndex: number | null;
+    allVisibilityTargets: readonly HTMLElement[];
     pages: VerticalPage[] | null;
-  }>({ activePageIndex: null, pages: null });
+  }>({ activePageIndex: null, allVisibilityTargets: [], pages: null });
 
   const measureVerticalPages = useCallback(
     (
@@ -166,7 +168,7 @@ export function useReaderPagingHelpers({
         key: cacheKey,
         pages: measured.pages
       };
-      verticalPageRuntimeCacheRef.current = { activePageIndex: null, pages: null };
+      verticalPageRuntimeCacheRef.current = { activePageIndex: null, allVisibilityTargets: [], pages: null };
 
       return measured;
     },
@@ -243,6 +245,9 @@ export function useReaderPagingHelpers({
   const scrollToPage = useCallback(
     (viewport: HTMLDivElement, pageIndex: number, mode: ReadingMode) => {
       if (mode === "vertical") {
+        if (viewport.clientWidth <= 0) {
+          return;
+        }
         const pages = verticalPagingCacheRef.current.pages;
         const clampedIndex = Math.min(Math.max(pageIndex, 0), Math.max(pages.length - 1, 0));
         viewport.scrollLeft = pages[clampedIndex]?.offset ?? 0;
@@ -273,9 +278,16 @@ export function useReaderPagingHelpers({
     const viewportRect = viewport.getBoundingClientRect();
     const targetSets = pages.map(() => new Set<HTMLElement>());
     const readingPositions = pages.map<number | null>(() => null);
-    const findPageIndex = (rect: Pick<DOMRect, "left" | "right" | "width" | "height">): number | null => {
-      if (rect.width <= 0 || rect.height <= 0) {
-        return null;
+    const findPageIndexes = (rect: Pick<DOMRect, "left" | "right" | "width" | "height">): number[] => {
+      if (
+        !Number.isFinite(rect.left) ||
+        !Number.isFinite(rect.right) ||
+        !Number.isFinite(rect.width) ||
+        !Number.isFinite(rect.height) ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        return [];
       }
       const midpoint = toViewportContentOffset(
         (Math.min(rect.left, rect.right) + Math.max(rect.left, rect.right)) / 2,
@@ -283,25 +295,7 @@ export function useReaderPagingHelpers({
         viewport.scrollLeft,
         viewport.clientLeft
       );
-
-      let low = 0;
-      let high = pages.length - 1;
-      while (low <= high) {
-        const index = Math.floor((low + high) / 2);
-        const page = pages[index];
-        if (!page) {
-          return null;
-        }
-        const adjustedMidpoint = midpoint - page.shiftX;
-        if (adjustedMidpoint > page.end + 0.5) {
-          high = index - 1;
-        } else if (adjustedMidpoint < page.start - 0.5) {
-          low = index + 1;
-        } else {
-          return index;
-        }
-      }
-      return null;
+      return findVerticalPageIndexesForContentMidpoint(pages, midpoint);
     };
 
     const fragmentPositions = new Map<HTMLElement, number>();
@@ -330,8 +324,7 @@ export function useReaderPagingHelpers({
     );
     for (const target of visibilityTargets) {
       for (const rect of Array.from(target.getClientRects())) {
-        const pageIndex = findPageIndex(rect);
-        if (pageIndex !== null) {
+        for (const pageIndex of findPageIndexes(rect)) {
           targetSets[pageIndex]?.add(target);
           const position = fragmentPositions.get(target);
           if (position !== undefined) {
@@ -358,13 +351,11 @@ export function useReaderPagingHelpers({
         if (!rect) {
           continue;
         }
-        const pageIndex = findPageIndex(rect);
-        if (pageIndex === null) {
-          continue;
+        for (const pageIndex of findPageIndexes(rect)) {
+          const position = start + Math.floor(((end - start) * rectIndex) / Math.max(rects.length, 1));
+          const current = readingPositions[pageIndex];
+          readingPositions[pageIndex] = current === null ? position : Math.min(current, position);
         }
-        const position = start + Math.floor(((end - start) * rectIndex) / Math.max(rects.length, 1));
-        const current = readingPositions[pageIndex];
-        readingPositions[pageIndex] = current === null ? position : Math.min(current, position);
       }
     }
 
@@ -391,7 +382,11 @@ export function useReaderPagingHelpers({
       visibilityTargets: Array.from(targetSets[index] ?? [])
     }));
     verticalPagingCacheRef.current.pages = snapshotPages;
-    verticalPageRuntimeCacheRef.current = { activePageIndex: null, pages: snapshotPages };
+    verticalPageRuntimeCacheRef.current = {
+      activePageIndex: null,
+      allVisibilityTargets: visibilityTargets,
+      pages: snapshotPages
+    };
     return snapshotPages;
   }, []);
 
@@ -404,7 +399,7 @@ export function useReaderPagingHelpers({
 
     const previousTargets =
       runtime.activePageIndex === null
-        ? pages.flatMap((page) => page.visibilityTargets ?? [])
+        ? runtime.allVisibilityTargets
         : pages[runtime.activePageIndex]?.visibilityTargets ?? [];
     const currentTargets = pages[pageIndex]?.visibilityTargets ?? [];
     const targets = new Set([...previousTargets, ...currentTargets]);
@@ -419,12 +414,18 @@ export function useReaderPagingHelpers({
 
   const clearVerticalPageVisibility = useCallback(() => {
     const runtime = verticalPageRuntimeCacheRef.current;
-    for (const page of runtime.pages ?? []) {
-      for (const target of page.visibilityTargets ?? []) {
-        target.classList.remove("reader-page-overflow-hidden", "reader-page-overflow-debug");
-      }
+    for (const target of runtime.allVisibilityTargets) {
+      target.classList.remove("reader-page-overflow-hidden", "reader-page-overflow-debug");
     }
     runtime.activePageIndex = null;
+  }, []);
+
+  const invalidateVerticalPageSnapshot = useCallback(() => {
+    verticalPageRuntimeCacheRef.current = {
+      activePageIndex: null,
+      allVisibilityTargets: [],
+      pages: null
+    };
   }, []);
 
   const getCurrentReaderViewportPosition = useCallback((): number | null => {
@@ -458,6 +459,7 @@ export function useReaderPagingHelpers({
     getCurrentPageIndexFromViewport,
     getCurrentReaderViewportPosition,
     getPagingMetrics,
+    invalidateVerticalPageSnapshot,
     measureVerticalPages,
     prepareVerticalPageSnapshot,
     scrollToPage,

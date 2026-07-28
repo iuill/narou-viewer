@@ -3255,6 +3255,24 @@ describe("App", () => {
     getClientRectsSpy.mockRestore();
     getBoundingClientRectSpy.mockRestore();
 
+    const article = container.querySelector(".reader-prose-paged");
+    if (!(article instanceof dom.window.HTMLElement)) {
+      throw new Error("reader article not found");
+    }
+    const mutationTarget = dom.window.document.createElement("span");
+    mutationTarget.dataset.readerVisibilityFragment = "test";
+    mutationTarget.getClientRects = () =>
+      [
+        {
+          width: Number.NaN,
+          height: 24,
+          left: 0,
+          right: 24
+        }
+      ] as unknown as DOMRectList;
+    article.append(mutationTarget);
+    await waitFor(() => mutationTarget.classList.contains("reader-page-overflow-hidden"));
+
     await keyDown(dom.window, "ArrowLeft");
 
     await waitFor(() => container.textContent?.includes("次の話へ進みますか？") === true);

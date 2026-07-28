@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
 import { ReaderStateConflictError } from "../../features/reader/api";
 import { isReaderEdgeClick } from "../../features/reader/gestureNavigation";
 import { extractImageViewerState, type ImageViewerState } from "../../features/reader/imageViewer";
@@ -57,6 +57,7 @@ type UseReaderEffectsOptions = ReturnType<typeof useReaderPagingHelpers> & {
   selectedEpisodeIndexRef: MutableRefObject<EpisodeIndex | null>;
   selectedNovelId: string | null;
   selectedPosition: number | null;
+  selectedPositionRef: MutableRefObject<number | null>;
   setCurrentPageIndex: Dispatch<SetStateAction<number>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setIsEpisodeLayoutReady: Dispatch<SetStateAction<boolean>>;
@@ -81,6 +82,7 @@ export function useReaderEffects({
   isEpisodeLoading,
   isReaderFullscreen,
   isReaderSpeechProgressAutoScrollSuppressed,
+  invalidateVerticalPageSnapshot,
   layoutAnchorPositionRef,
   logReaderSpeechDebugEvent,
   measureVerticalPages,
@@ -107,6 +109,7 @@ export function useReaderEffects({
   selectedEpisodeIndexRef,
   selectedNovelId,
   selectedPosition,
+  selectedPositionRef,
   setCurrentPageIndex,
   setError,
   setIsEpisodeLayoutReady,
@@ -118,6 +121,9 @@ export function useReaderEffects({
   verticalLastPageReservePx,
   verticalPagingCacheRef
 }: UseReaderEffectsOptions) {
+  const latestPageVisibilityRef = useRef({ currentPageIndex, debugPageOverflow });
+  latestPageVisibilityRef.current = { currentPageIndex, debugPageOverflow };
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: pending reading keys are mutable guards, not render dependencies.
   useEffect(() => {
     if (pendingReadingStateKeyRef.current === savedReadingStateKey) {
@@ -213,7 +219,10 @@ export function useReaderEffects({
       if (readingMode === "vertical" && pendingImageCount === 0) {
         prepareVerticalPageSnapshot(viewport);
       }
-      const anchoredPosition = layoutAnchorPositionRef.current;
+      const currentSelectedPosition = selectedPositionRef.current;
+      const isSpeechProgressPosition =
+        currentSelectedPosition !== null && isReaderSpeechProgressAutoScrollSuppressed(currentSelectedPosition);
+      const anchoredPosition = isSpeechProgressPosition ? null : layoutAnchorPositionRef.current;
       if (anchoredPosition !== null) {
         const scrollBefore = {
           left: viewport.scrollLeft,
@@ -290,6 +299,7 @@ export function useReaderEffects({
     readerExperimentalFontLayoutVersion,
     readerFontSizePx,
     readerLetterSpacingEm,
+    isReaderSpeechProgressAutoScrollSuppressed,
     verticalLastPageReservePx
   ]);
 
@@ -407,8 +417,9 @@ export function useReaderEffects({
 
       overflowRafId = window.requestAnimationFrame(() => {
         overflowRafId = 0;
+        const latest = latestPageVisibilityRef.current;
         prepareVerticalPageSnapshot(viewport);
-        syncVerticalPageVisibility(currentPageIndex, debugPageOverflow);
+        syncVerticalPageVisibility(latest.currentPageIndex, latest.debugPageOverflow);
       });
     };
 
@@ -426,6 +437,8 @@ export function useReaderEffects({
     }
 
     const mutationObserver = new MutationObserverConstructor(() => {
+      clearVerticalPageVisibility();
+      invalidateVerticalPageSnapshot();
       scheduleOverflowState();
     });
     mutationObserver.observe(article, { childList: true, subtree: true });

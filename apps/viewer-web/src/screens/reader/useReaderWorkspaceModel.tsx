@@ -253,6 +253,7 @@ export function useReaderWorkspaceModel({
     getCurrentPageIndexFromViewport,
     getCurrentReaderViewportPosition,
     getPagingMetrics,
+    invalidateVerticalPageSnapshot,
     measureVerticalPages,
     prepareVerticalPageSnapshot,
     scrollToPage,
@@ -270,16 +271,19 @@ export function useReaderWorkspaceModel({
     readingMode,
     verticalLastPageReservePx
   });
+  const currentPageIndexRef = useRef(currentPageIndex);
+  currentPageIndexRef.current = currentPageIndex;
   const movePageWithCachedScroll = useCallback(
     (direction: -1 | 1) => {
+      const nextPageIndex = Math.min(Math.max(currentPageIndexRef.current + direction, 0), totalPages - 1);
+      currentPageIndexRef.current = nextPageIndex;
       const viewport = readerViewportRef.current;
       if (viewport) {
-        const nextPageIndex = Math.min(Math.max(currentPageIndex + direction, 0), totalPages - 1);
         scrollToPage(viewport, nextPageIndex, readingMode);
       }
       movePage(direction);
     },
-    [currentPageIndex, movePage, readerViewportRef, readingMode, scrollToPage, totalPages]
+    [movePage, readerViewportRef, readingMode, scrollToPage, totalPages]
   );
   const isReaderKeyboardPagingBlocked =
     imageViewer !== null || activeReaderPanel !== null || isReaderOverflowOpen || readerSyncConflict !== null;
@@ -544,6 +548,7 @@ export function useReaderWorkspaceModel({
     isEpisodeLoading,
     isReaderFullscreen,
     isReaderSpeechProgressAutoScrollSuppressed,
+    invalidateVerticalPageSnapshot,
     layoutAnchorPositionRef,
     logReaderSpeechDebugEvent,
     measureVerticalPages,
@@ -570,6 +575,7 @@ export function useReaderWorkspaceModel({
     selectedEpisodeIndexRef,
     selectedNovelId,
     selectedPosition,
+    selectedPositionRef,
     setCurrentPageIndex,
     setError,
     setIsEpisodeLayoutReady,
