@@ -382,30 +382,43 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx co
 	completedCandidateCount := 0
 	completedTermNames := map[string]bool{}
 	resumed := map[int]bool{}
+	pendingIndexes := make([]int, 0, len(batches))
 	if checkpoint != nil {
 		for _, saved := range checkpoint.Results {
-			if saved.Stage != "parallel_entities" || saved.BatchIndex < 1 || saved.BatchIndex > len(batches) {
-				continue
+			if saved.Stage != "parallel_entities" {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("unexpected parallel checkpoint stage: %q", saved.Stage))
+			}
+			if saved.BatchIndex < 1 || saved.BatchIndex > len(batches) {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("parallel checkpoint batch index out of range: %d", saved.BatchIndex))
 			}
 			index := saved.BatchIndex - 1
+			if resumed[index] {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("duplicate parallel checkpoint batch index: %d", saved.BatchIndex))
+			}
 			batch := batches[index]
 			if saved.BatchFingerprint != parallelCheckpointBatchFingerprint(batch) {
-				if checkpoint.OnIncompatible != nil {
-					return nil, nil, nil, nil, initialUnresolved, checkpoint.OnIncompatible(fmt.Sprintf("parallel batch fingerprint mismatch: batch %d", saved.BatchIndex))
-				}
-				return nil, nil, nil, nil, initialUnresolved, fmt.Errorf("parallel checkpoint batch fingerprint mismatch: batch %d", saved.BatchIndex)
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("parallel batch fingerprint mismatch: batch %d", saved.BatchIndex))
 			}
 			results[index] = parallelIdentityExtractionResultFromDelta(index, batch, parallelCheckpointDeltaToCore(saved.Delta), knownCharacters)
 			resumed[index] = true
 			completedCount++
+			completedCandidateCount += len(results[index].Candidates)
+			for _, term := range results[index].Terms {
+				if name := strings.TrimSpace(term.Term); name != "" {
+					completedTermNames[name] = true
+				}
+			}
+		}
+	}
+	for index := range batches {
+		if !resumed[index] {
+			pendingIndexes = append(pendingIndexes, index)
 		}
 	}
 	concurrency := parallelIdentityLLMConcurrency(config)
 	workerSlots := newParallelWorkerSlots(concurrency)
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), concurrency, func(requestCtx context.Context, index int) error {
-		if resumed[index] {
-			return nil
-		}
+	runErr := runParallelIdentityLLMJobs(ctx, len(pendingIndexes), concurrency, func(requestCtx context.Context, pendingIndex int) error {
+		index := pendingIndexes[pendingIndex]
 		workerIndex := <-workerSlots
 		defer func() { workerSlots <- workerIndex }()
 		batch := batches[index]
@@ -434,15 +447,17 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx co
 			}
 			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
 			if checkpoint != nil && checkpoint.OnBatchComplete != nil {
-				err = checkpoint.OnBatchComplete(checkpointstore.ParallelBatchResult{
+				if saveErr := checkpoint.OnBatchComplete(checkpointstore.ParallelBatchResult{
 					Stage:            "parallel_entities",
 					BatchIndex:       batch.BatchIndex,
 					BatchFingerprint: parallelCheckpointBatchFingerprint(batch),
 					EpisodeIndexes:   append([]string{}, batch.EpisodeIndexes...),
 					Delta:            parallelCheckpointDeltaFromCore(result.Delta),
 					CompletedAt:      ai.NowISO(),
-				})
-				extraction.Err = err
+				}); saveErr != nil {
+					err = saveErr
+					extraction.Err = saveErr
+				}
 			}
 		}
 		results[index] = extraction
@@ -496,6 +511,15 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx co
 		return nil, nil, nil, usageRequests, unresolved, runErr
 	}
 	return candidates, rawTerms, mergeProposals, usageRequests, unresolved, nil
+}
+
+func parallelCheckpointIncompatibleError(checkpoint *appextraction.ParallelCheckpointSession, reason string) error {
+	if checkpoint != nil && checkpoint.OnIncompatible != nil {
+		if err := checkpoint.OnIncompatible(reason); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("parallel checkpoint is incompatible: %s", reason)
 }
 
 func extractionBatchBoundary(batch extractionBatch) string {

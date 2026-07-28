@@ -370,6 +370,29 @@ func TestGenerateOpenRouterChatRetriesBodyReadTimeoutWhileParentContextIsAlive(t
 	}
 }
 
+func TestGenerateOpenRouterChatDoesNotRetryBodyReadFailureForNonRetryableStatus(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("content-length", "100")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+
+	_, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+		APIKey:  "sk-test",
+		ModelID: "openrouter/auto",
+	}, []ChatMessage{{Role: "user", Content: "hello"}})
+	if err == nil {
+		t.Fatal("truncated unauthorized response should fail")
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("non-retryable status body failure should not retry, calls=%d", calls)
+	}
+}
+
 func TestGenerateOpenRouterChatDoesNotRetryParentDeadline(t *testing.T) {
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -215,6 +215,71 @@ func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T)
 	}
 }
 
+func TestParallelIdentityCheckpointResumeIncludesRestoredCountsInProgress(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"2","newCharacters":[{"canonicalName":{"text":"人物2","episodeIndex":"2"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"2","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"合成人物。","episodeIndex":"2"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"用語2","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"合成用語。","episodeIndex":"2"}]}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文1"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "合成本文2"}}},
+	}
+	savedDelta := core.Delta{
+		NewCharacters: []characters.GeneratedCharacter{{
+			CanonicalName: "人物1", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1",
+		}},
+		Terms: []terms.GeneratedTerm{{Term: "用語1"}},
+	}
+	checkpoint := &appextraction.ParallelCheckpointSession{Results: []checkpointstore.ParallelBatchResult{{
+		Stage: "parallel_entities", BatchIndex: 1, BatchFingerprint: parallelCheckpointBatchFingerprint(batches[0]),
+		Delta: parallelCheckpointDeltaFromCore(savedDelta),
+	}}}
+	progressEvents := []appextraction.BatchProgress{}
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+		context.Background(),
+		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openrouter/auto", ExtractionParallelConcurrency: 1},
+		"novel-1", "2", nil, nil, batches,
+		func(progress appextraction.BatchProgress) { progressEvents = append(progressEvents, progress) },
+		nil, checkpoint,
+	)
+	if err != nil {
+		t.Fatalf("resume returned error: %v", err)
+	}
+	last := progressEvents[len(progressEvents)-1]
+	if last.Phase != "complete" || last.CompletedBatchCount != 2 || last.MergedCharacterCount != 2 || last.MergedTermCount != 2 {
+		t.Fatalf("resumed progress counts = %+v", last)
+	}
+}
+
+func TestParallelIdentityCheckpointRejectsMalformedSavedBatchMetadata(t *testing.T) {
+	batch := extractionBatch{
+		BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"1"},
+		Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文"}},
+	}
+	tests := []checkpointstore.ParallelBatchResult{
+		{Stage: "unexpected", BatchIndex: 1},
+		{Stage: "parallel_entities", BatchIndex: 2},
+	}
+	for _, saved := range tests {
+		t.Run(fmt.Sprintf("%s_%d", saved.Stage, saved.BatchIndex), func(t *testing.T) {
+			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+			_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+				context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-1", "1",
+				nil, nil, []extractionBatch{batch}, nil, nil,
+				&appextraction.ParallelCheckpointSession{Results: []checkpointstore.ParallelBatchResult{saved}},
+			)
+			if err == nil || !strings.Contains(err.Error(), "parallel checkpoint is incompatible") {
+				t.Fatalf("malformed checkpoint error = %v", err)
+			}
+		})
+	}
+}
+
 func TestExtractParallelIdentityCandidatesReturnsFirstBatchError(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
 	progress := []string{}

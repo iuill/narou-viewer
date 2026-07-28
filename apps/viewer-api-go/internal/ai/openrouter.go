@@ -361,7 +361,8 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	defer response.Body.Close()
 	responseBody, err := readLimitedOpenRouterResponseBody(response)
 	if err != nil {
-		return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode) || isRetryableOpenRouterTransportError(ctx, err), err
+		retryableReadError := response.StatusCode >= 200 && response.StatusCode < 300 && isRetryableOpenRouterTransportError(ctx, err)
+		return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode) || retryableReadError, err
 	}
 	var decoded struct {
 		Choices []struct {

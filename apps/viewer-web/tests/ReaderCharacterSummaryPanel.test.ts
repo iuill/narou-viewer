@@ -4,8 +4,40 @@ import { createRoot, type Root } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
 import { ReaderCharacterSummaryPanel } from "../src/ReaderCharacterSummaryPanel";
+import { extractionJobGeneratedCountDetail } from "../src/ReaderExtractionJobs";
 
 type PanelProps = ComponentProps<typeof ReaderCharacterSummaryPanel>;
+
+describe("extractionJobGeneratedCountDetail", () => {
+  const job = {
+    jobId: "synthetic-job",
+    requestedUpToEpisodeIndex: "1",
+    generationMode: "openrouter" as const,
+    modelId: "synthetic-model",
+    createdAt: "2026-01-01T00:00:00Z",
+    startedAt: null,
+    finishedAt: null,
+    errorMessage: null
+  };
+
+  it("strategy と終端状態に応じて件数の意味を区別する", () => {
+    expect(extractionJobGeneratedCountDetail({ ...job, status: "completed" })).toBe("反映済");
+    expect(
+      extractionJobGeneratedCountDetail({ ...job, status: "failed", generationStrategy: "parallel_identity" })
+    ).toBe("再開用保存済");
+    expect(
+      extractionJobGeneratedCountDetail({
+        ...job,
+        status: "failed",
+        generationStrategy: "discovery_parallel_correction"
+      })
+    ).toBe("未反映");
+    expect(extractionJobGeneratedCountDetail({ ...job, status: "canceled", generationStrategy: "serial" })).toBe(
+      "未反映"
+    );
+    expect(extractionJobGeneratedCountDetail({ ...job, status: "running" })).toBe("一時集計");
+  });
+});
 
 function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
   return {
