@@ -182,8 +182,8 @@ export function useReaderControlActions({
     },
     {
       id: "toc",
-      label: "目次",
-      title: "目次",
+      label: "目次・検索",
+      title: "目次・検索",
       className: "reader-toc-button",
       ariaExpanded: isReaderTocOpen,
       onClick: () => toggleReaderPanel("toc"),

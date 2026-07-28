@@ -42,7 +42,7 @@ test("作品内検索のプレビューは既読位置を変えず、明示操�
     }
   });
 
-  await clickReaderActionButton(page, "目次");
+  await clickReaderActionButton(page, "目次・検索");
   const panel = page.getByLabel("本文画面の目次");
   await panel.getByRole("searchbox", { name: "作品内検索" }).fill("case-d-40");
   await panel.getByRole("button", { name: "検索", exact: true }).click();
@@ -104,7 +104,7 @@ test("本文ページでページ移動と各アイコンの機能が動作す�
   await expect(page.locator(".reader-info-panel")).toContainText("現在の話");
   await expect(page.locator(".reader-info-panel")).toContainText("閲覧ページ");
 
-  await clickReaderActionButton(page, "目次");
+  await clickReaderActionButton(page, "目次・検索");
   await expect(page.locator(".reader-info-panel")).toHaveCount(0);
   const readerTocPanel = page.getByLabel("本文画面の目次");
   const readerTocEpisodes = readerTocPanel.locator('[data-reader-panel-item="toc-episode"]');

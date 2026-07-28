@@ -344,7 +344,7 @@ export async function openNovelDetailsByTitle(page: Page, request: APIRequestCon
 
 export async function openEpisodeByIndex(page: Page, episodeIndex: EpisodeIndex) {
   if (await page.locator(".reader-shell").isVisible()) {
-    await clickReaderActionButton(page, "目次");
+    await clickReaderActionButton(page, "目次・検索");
     const readerTocPanel = page.getByLabel("本文画面の目次");
     await expect(readerTocPanel).toBeVisible();
 
