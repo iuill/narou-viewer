@@ -5,11 +5,13 @@ import {
   createBookmark,
   exportNarouTitle,
   findNovelIdByTitle,
+  getReadingState,
   gotoLibrary,
   illustratedNarouTitle,
   kakuyomuTitle,
   libraryPageSize,
   loadLibrary,
+  listBookmarks,
   normalizeStoryText,
   novelStoryPreviewLength,
   openNovelDetailsByTitle,
@@ -79,6 +81,60 @@ test.describe("pc-xga 代表の catalog checks", () => {
       expect(exportedYaml).toContain("episodeIndex: \"1\"");
       expect(exportedYaml).toContain("label: E2E export bookmark");
       expect(exportedYaml).toContain("position: 12");
+
+      await clearBookmarks(request, novelId);
+      await putReadingState(request, novelId, null);
+      const importNovel = library.novels.find((novel) => novel.novelId === novelId);
+      if (!importNovel) {
+        throw new Error("export fixture novel was not found");
+      }
+      const importDocument = {
+        formatVersion: 1,
+        exportedAt: "2026-07-28T12:00:00Z",
+        novelsCount: 1,
+        exportWarnings: [],
+        novels: [{
+          novelId,
+          fetcherWorkId: importNovel.fetcherWorkId,
+          title: importNovel.title,
+          author: importNovel.author,
+          siteName: importNovel.siteName,
+          tocUrl: importNovel.tocUrl,
+          updatedAt: importNovel.updatedAt,
+          lastActivityAt: importNovel.lastActivityAt ?? null,
+          totalEpisodes: importNovel.totalEpisodes,
+          savedEpisodes: importNovel.savedEpisodes ?? null,
+          fetchStatus: importNovel.fetchStatus ?? null,
+          readingState: {
+            lastReadEpisodeIndex: "1",
+            position: 0,
+            updatedAt: "2026-07-28T12:00:00Z"
+          },
+          bookmarks: [{
+            id: "e2e-import-bookmark",
+            novelId,
+            episodeIndex: "1",
+            position: 12,
+            label: "E2E export bookmark",
+            createdAt: "2026-07-28T12:00:00Z"
+          }]
+        }]
+      };
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.getByLabel("ライブラリexportを選択").setInputFiles({
+        name: "library-export.yaml",
+        mimeType: "application/x-yaml",
+        buffer: Buffer.from(JSON.stringify(importDocument))
+      });
+      await expect(page.locator(".message")).toContainText("インポートしました。");
+      const restoredState = await getReadingState(request, novelId);
+      expect(restoredState.lastReadEpisodeIndex).toBe("1");
+      const restoredBookmarks = await listBookmarks(request, novelId);
+      expect(restoredBookmarks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ episodeIndex: "1", position: 12, label: "E2E export bookmark" })
+        ])
+      );
     } finally {
       await clearBookmarks(request, novelId);
       await putReadingState(request, novelId, null);

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -192,6 +193,198 @@ func TestExtractionPlaygroundParallelStartEmitsBatchStatus(t *testing.T) {
 	}
 	if event := extractionPlaygroundProgressEvent(extractionBatchProgress{Phase: "error"}); event != nil {
 		t.Fatalf("error phase should not emit playground progress event: %+v", event)
+	}
+}
+
+func TestLibraryImportDryRunApplyAndStrictValidation(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+	novelID := library.NovelID(library.Work{ID: 1, Site: "syosetu", SiteWorkID: "n1234"})
+	document := map[string]any{
+		"formatVersion":  1,
+		"exportedAt":     "2026-07-28T12:00:00Z",
+		"novelsCount":    1,
+		"exportWarnings": []any{},
+		"novels": []any{map[string]any{
+			"novelId":        novelID,
+			"fetcherWorkId":  "1",
+			"title":          "Fixture Novel",
+			"author":         "Author",
+			"siteName":       "小説家になろう",
+			"tocUrl":         nil,
+			"updatedAt":      nil,
+			"lastActivityAt": nil,
+			"totalEpisodes":  1,
+			"savedEpisodes":  1,
+			"fetchStatus":    "complete",
+			"readingState": map[string]any{
+				"lastReadEpisodeIndex": "1",
+				"position":             12,
+				"updatedAt":            "2026-07-28T12:00:00Z",
+			},
+			"bookmarks": []any{map[string]any{
+				"id":           "exported-bookmark",
+				"novelId":      novelID,
+				"episodeIndex": "1",
+				"position":     12,
+				"label":        "復元",
+				"createdAt":    "2026-07-28T12:00:00Z",
+			}},
+		}},
+	}
+
+	preview := requestJSON(t, handler, http.MethodPost, "/api/library/import", map[string]any{
+		"dryRun":   true,
+		"document": document,
+	}, http.StatusOK)
+	if preview["readingStatesApplied"] != float64(1) || preview["bookmarksApplied"] != float64(1) {
+		t.Fatalf("unexpected import preview: %+v", preview)
+	}
+	if state, err := stateStore.GetReadingState(novelID); err != nil || state.LastReadEpisodeIndex != nil {
+		t.Fatalf("dry-run should not change reading state: state=%+v err=%v", state, err)
+	}
+	if bookmarks, err := stateStore.ListBookmarks(novelID); err != nil || len(bookmarks) != 0 {
+		t.Fatalf("dry-run should not change bookmarks: bookmarks=%+v err=%v", bookmarks, err)
+	}
+
+	applied := requestJSON(t, handler, http.MethodPost, "/api/library/import", map[string]any{
+		"dryRun":   false,
+		"document": document,
+	}, http.StatusOK)
+	if applied["readingStatesApplied"] != float64(1) || applied["bookmarksApplied"] != float64(1) {
+		t.Fatalf("unexpected import result: %+v", applied)
+	}
+	if state, err := stateStore.GetReadingState(novelID); err != nil || state.LastReadEpisodeIndex == nil || *state.LastReadEpisodeIndex != "1" || state.Position != 12 {
+		t.Fatalf("import should restore reading state: state=%+v err=%v", state, err)
+	}
+	if bookmarks, err := stateStore.ListBookmarks(novelID); err != nil || len(bookmarks) != 1 || bookmarks[0].Label == nil || *bookmarks[0].Label != "復元" {
+		t.Fatalf("import should restore bookmark: bookmarks=%+v err=%v", bookmarks, err)
+	}
+
+	requestJSON(t, handler, http.MethodPost, "/api/library/import", map[string]any{
+		"dryRun":   true,
+		"document": document,
+		"unknown":  true,
+	}, http.StatusBadRequest)
+	unknownVersion := maps.Clone(document)
+	unknownVersion["formatVersion"] = 2
+	requestJSON(t, handler, http.MethodPost, "/api/library/import", map[string]any{
+		"dryRun":   true,
+		"document": unknownVersion,
+	}, http.StatusBadRequest)
+
+	skippedDocument := maps.Clone(document)
+	skippedDocument["novelsCount"] = 2
+	validNovel := maps.Clone(document["novels"].([]any)[0].(map[string]any))
+	validNovel["readingState"] = map[string]any{
+		"lastReadEpisodeIndex": "999",
+		"position":             1,
+		"updatedAt":            nil,
+	}
+	validNovel["bookmarks"] = []any{map[string]any{
+		"id": "missing-episode", "novelId": novelID, "episodeIndex": "999",
+		"position": 1, "label": nil, "createdAt": "2026-07-28T12:00:00Z",
+	}}
+	missingNovel := maps.Clone(validNovel)
+	missingNovel["novelId"] = "missing"
+	missingNovel["title"] = "Missing Novel"
+	missingNovel["bookmarks"] = []any{}
+	skippedDocument["novels"] = []any{validNovel, missingNovel}
+	skipped := requestJSON(t, handler, http.MethodPost, "/api/library/import", map[string]any{
+		"dryRun":   true,
+		"document": skippedDocument,
+	}, http.StatusOK)
+	if skipped["novelsSkipped"] != float64(1) || len(skipped["warnings"].([]any)) != 3 {
+		t.Fatalf("missing novels and episodes should be reported as skipped: %+v", skipped)
+	}
+}
+
+func TestValidateLibraryExportDocumentRejectsMalformedEntries(t *testing.T) {
+	base := libraryExportDocument{
+		FormatVersion: 1,
+		ExportedAt:    "2026-07-28T12:00:00Z",
+		NovelsCount:   1,
+		Novels: []libraryExportNovel{{
+			NovelID: "novel", FetcherWorkID: "1", Title: "Title", Author: "Author", SiteName: "Site",
+			TotalEpisodes: 1, Bookmarks: []libraryExportBookmark{},
+		}},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*libraryExportDocument)
+	}{
+		{name: "timestamp", mutate: func(doc *libraryExportDocument) { doc.ExportedAt = "invalid" }},
+		{name: "count", mutate: func(doc *libraryExportDocument) { doc.NovelsCount = 2 }},
+		{name: "warning", mutate: func(doc *libraryExportDocument) {
+			doc.ExportWarnings = []libraryExportWarning{{NovelID: "novel", Field: "unknown", Message: "warning"}}
+		}},
+		{name: "novel", mutate: func(doc *libraryExportDocument) { doc.Novels[0].Title = "" }},
+		{name: "duplicate", mutate: func(doc *libraryExportDocument) {
+			doc.Novels = append(doc.Novels, doc.Novels[0])
+			doc.NovelsCount = 2
+		}},
+		{name: "reading", mutate: func(doc *libraryExportDocument) {
+			doc.Novels[0].ReadingState = &libraryExportReadingState{Position: -1}
+		}},
+		{name: "reading episode", mutate: func(doc *libraryExportDocument) {
+			episodeIndex := "invalid"
+			doc.Novels[0].ReadingState = &libraryExportReadingState{LastReadEpisodeIndex: &episodeIndex}
+		}},
+		{name: "bookmark", mutate: func(doc *libraryExportDocument) {
+			doc.Novels[0].Bookmarks = []libraryExportBookmark{{ID: "id", NovelID: "other", EpisodeIndex: "1", CreatedAt: "now"}}
+		}},
+		{name: "bookmark timestamp", mutate: func(doc *libraryExportDocument) {
+			doc.Novels[0].Bookmarks = []libraryExportBookmark{{ID: "id", NovelID: "novel", EpisodeIndex: "1", CreatedAt: "now"}}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			doc := base
+			doc.Novels = append([]libraryExportNovel(nil), base.Novels...)
+			test.mutate(&doc)
+			if err := validateLibraryExportDocument(doc); err == nil {
+				t.Fatal("malformed export should be rejected")
+			}
+		})
+	}
+}
+
+func TestLibraryImportRejectsInvalidHTTPRequests(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	stateStore := store.New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	handler := newTestServerWithLibraryAndStore(dataDir, library.NewService(filepath.Join(dataDir, "novel-fetcher")), stateStore)
+
+	requestJSON(t, handler, http.MethodGet, "/api/library/import", nil, http.StatusMethodNotAllowed)
+
+	for _, test := range []struct {
+		name        string
+		contentType string
+		body        string
+		status      int
+	}{
+		{name: "missing content type", body: `{}`, status: http.StatusUnsupportedMediaType},
+		{name: "malformed", contentType: "application/json", body: `{`, status: http.StatusBadRequest},
+		{name: "trailing", contentType: "application/json", body: `{} {}`, status: http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/library/import", strings.NewReader(test.body))
+			if test.contentType != "" {
+				request.Header.Set("Content-Type", test.contentType)
+			}
+			setTestAPIContractHeaders(request)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
 	}
 }
 

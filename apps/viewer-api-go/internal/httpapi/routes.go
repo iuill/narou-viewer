@@ -47,6 +47,7 @@ func (s *Server) registerFetcherRoutes() {
 }
 
 func (s *Server) registerLibraryRoutes() {
+	s.mux.HandleFunc("/api/library/import", s.handleLibraryImport)
 	s.mux.HandleFunc("/api/library/novels/", s.handleNovelSubroute)
 	s.mux.HandleFunc("/api/library/novels", s.handleNovels)
 }

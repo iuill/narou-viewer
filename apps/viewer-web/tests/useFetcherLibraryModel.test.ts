@@ -8,6 +8,9 @@ import { useFetcherLibraryModel } from "../src/screens/library/useFetcherLibrary
 const mocks = vi.hoisted(() => ({
   cancelFetcherTask: vi.fn(),
   downloadFetcherWorks: vi.fn(),
+  formatLibraryImportSummary: vi.fn(),
+  importLibraryDocument: vi.fn(),
+  parseLibraryImportYaml: vi.fn(),
   removeFetcherWorks: vi.fn(),
   resumeFetcherWorks: vi.fn(),
   updateFetcherWorks: vi.fn(),
@@ -30,6 +33,13 @@ vi.mock("../src/features/fetcher/api", () => ({
 
 vi.mock("../src/hooks/useFetcherStatus", () => ({
   useFetcherStatus: () => mocks.fetcherStatus
+}));
+
+vi.mock("../src/features/library/import", () => ({
+  formatLibraryImportSummary: mocks.formatLibraryImportSummary,
+  importLibraryDocument: mocks.importLibraryDocument,
+  MAX_LIBRARY_IMPORT_BYTES: 1 << 20,
+  parseLibraryImportYaml: mocks.parseLibraryImportYaml
 }));
 
 const novels: NovelSummary[] = [
@@ -121,6 +131,9 @@ describe("useFetcherLibraryModel", () => {
     vi.restoreAllMocks();
     mocks.cancelFetcherTask.mockReset();
     mocks.downloadFetcherWorks.mockReset();
+    mocks.formatLibraryImportSummary.mockReset();
+    mocks.importLibraryDocument.mockReset();
+    mocks.parseLibraryImportYaml.mockReset();
     mocks.removeFetcherWorks.mockReset();
     mocks.resumeFetcherWorks.mockReset();
     mocks.updateFetcherWorks.mockReset();
@@ -188,6 +201,75 @@ describe("useFetcherLibraryModel", () => {
     expect(setLibraryNotice).toHaveBeenCalledWith("removed");
     expect(requestLibraryReload).toHaveBeenCalled();
 
+  });
+
+  it("previews and applies an imported library after confirmation", async () => {
+    const requestLibraryReload = vi.fn();
+    const setLibraryNotice = vi.fn();
+    const clearSelection = vi.fn();
+    const document = { formatVersion: 1 };
+    const preview = { warnings: ["警告"], dryRun: true };
+    const result = { warnings: [], dryRun: false };
+    mocks.parseLibraryImportYaml.mockReturnValue(document);
+    mocks.importLibraryDocument.mockResolvedValueOnce(preview).mockResolvedValueOnce(result);
+    mocks.formatLibraryImportSummary.mockReturnValueOnce("確認結果").mockReturnValueOnce("適用結果");
+    const { snapshots } = await renderHookHost({
+      readerCommands: { clearSelection },
+      requestLibraryReload,
+      setLibraryNotice
+    });
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      value: vi.fn(() => true)
+    });
+
+    await act(async () => {
+      await snapshots[snapshots.length - 1].handleImportLibrary(new File(["formatVersion: 1"], "library.yaml"));
+    });
+
+    expect(mocks.parseLibraryImportYaml).toHaveBeenCalledWith("formatVersion: 1");
+    expect(mocks.importLibraryDocument).toHaveBeenNthCalledWith(1, document, true);
+    expect(mocks.importLibraryDocument).toHaveBeenNthCalledWith(2, document, false);
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("確認結果"));
+    expect(clearSelection).toHaveBeenCalledWith({ clearNovel: false });
+    expect(setLibraryNotice).toHaveBeenCalledWith("インポートしました。適用結果");
+    expect(requestLibraryReload).toHaveBeenCalled();
+    expect(snapshots[snapshots.length - 1].isLibraryImporting).toBe(false);
+  });
+
+  it("does not apply an imported library when confirmation is declined", async () => {
+    const setLibraryNotice = vi.fn();
+    mocks.parseLibraryImportYaml.mockReturnValue({ formatVersion: 1 });
+    mocks.importLibraryDocument.mockResolvedValue({ warnings: [], dryRun: true });
+    mocks.formatLibraryImportSummary.mockReturnValue("確認結果");
+    const { snapshots } = await renderHookHost({ setLibraryNotice });
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      value: vi.fn(() => false)
+    });
+
+    await act(async () => {
+      await snapshots[snapshots.length - 1].handleImportLibrary(new File(["formatVersion: 1"], "library.yaml"));
+    });
+
+    expect(mocks.importLibraryDocument).toHaveBeenCalledTimes(1);
+    expect(setLibraryNotice).toHaveBeenCalledWith("インポートを取り消しました。確認結果");
+  });
+
+  it("rejects an oversized import before reading the file", async () => {
+    const onError = vi.fn();
+    const { snapshots } = await renderHookHost({ onError });
+    const file = new File(["small"], "library.yaml");
+    Object.defineProperty(file, "size", { value: (1 << 20) + 1 });
+    const text = vi.spyOn(file, "text");
+
+    await act(async () => {
+      await snapshots[snapshots.length - 1].handleImportLibrary(file);
+    });
+
+    expect(text).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith("インポートファイルは1MB以下にしてください。");
+    expect(mocks.importLibraryDocument).not.toHaveBeenCalled();
   });
 
   it("reports failed resume, update, remove, cancel, and drop actions", async () => {

@@ -772,6 +772,89 @@ func TestStoreHandlesMissingAndCorruptDocuments(t *testing.T) {
 	}
 }
 
+func TestImportLibraryKeepsExistingStateAndDeduplicatesBookmarks(t *testing.T) {
+	dataDir := t.TempDir()
+	stateStore := New(dataDir)
+	if err := stateStore.Initialize(); err != nil {
+		t.Fatalf("Initialize returned error: %v", err)
+	}
+	episodeIndex := "1"
+	if _, err := stateStore.PutReadingState(ReadingStatePutInput{ReadingState: ReadingState{
+		NovelID:              "novel-1",
+		LastReadEpisodeIndex: &episodeIndex,
+		Position:             3,
+	}}); err != nil {
+		t.Fatalf("PutReadingState returned error: %v", err)
+	}
+	label := "mark"
+	if _, err := stateStore.CreateBookmark(Bookmark{
+		NovelID: "novel-1", EpisodeIndex: episodeIndex, Position: 4, Label: &label,
+	}); err != nil {
+		t.Fatalf("CreateBookmark returned error: %v", err)
+	}
+
+	result, err := stateStore.ImportLibrary([]LibraryImportNovel{{
+		NovelID: "novel-1",
+		ReadingState: &ReadingState{
+			NovelID: "novel-1", LastReadEpisodeIndex: &episodeIndex, Position: 99,
+		},
+		Bookmarks: []Bookmark{
+			{NovelID: "novel-1", EpisodeIndex: episodeIndex, Position: 4, Label: &label},
+			{NovelID: "novel-1", EpisodeIndex: episodeIndex, Position: 8},
+		},
+	}}, false)
+	if err != nil {
+		t.Fatalf("ImportLibrary returned error: %v", err)
+	}
+	if result.ReadingStatesSkipped != 1 || result.BookmarksSkipped != 1 || result.BookmarksApplied != 1 {
+		t.Fatalf("unexpected import result: %+v", result)
+	}
+	state, err := stateStore.GetReadingState("novel-1")
+	if err != nil || state.Position != 3 {
+		t.Fatalf("existing reading state should be kept: state=%+v err=%v", state, err)
+	}
+	bookmarks, err := stateStore.ListBookmarks("novel-1")
+	if err != nil || len(bookmarks) != 2 {
+		t.Fatalf("only the missing bookmark should be added: bookmarks=%+v err=%v", bookmarks, err)
+	}
+}
+
+func TestStateFileSnapshotRestoresExistingAndMissingFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.yaml")
+	if err := os.WriteFile(path, []byte("before"), 0o640); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	snapshot, err := snapshotStateFile(path)
+	if err != nil {
+		t.Fatalf("snapshotStateFile returned error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("after"), 0o600); err != nil {
+		t.Fatalf("overwrite fixture: %v", err)
+	}
+	if err := restoreStateFile(snapshot); err != nil {
+		t.Fatalf("restoreStateFile returned error: %v", err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "before" {
+		t.Fatalf("restored file = %q err=%v", raw, err)
+	}
+
+	missingPath := filepath.Join(dir, "missing.yaml")
+	missingSnapshot, err := snapshotStateFile(missingPath)
+	if err != nil {
+		t.Fatalf("snapshot missing file: %v", err)
+	}
+	if err := os.WriteFile(missingPath, []byte("created"), 0o600); err != nil {
+		t.Fatalf("write missing fixture: %v", err)
+	}
+	if err := restoreStateFile(missingSnapshot); err != nil {
+		t.Fatalf("restore missing file: %v", err)
+	}
+	if _, err := os.Stat(missingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file should be removed, err=%v", err)
+	}
+}
+
 func strPtr(value string) *string {
 	return &value
 }

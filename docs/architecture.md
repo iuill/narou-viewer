@@ -251,6 +251,10 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
   - リクエスト body は `episodeIndex` と `position` を受け取り、話内の保存位置を保持する
 - `DELETE /api/bookmarks/{bookmarkId}`
 - `GET /api/bookmarks?novelId=...`
+- `POST /api/library/import`
+  - `formatVersion: 1` のlibrary export documentと `dryRun` を受け取る
+  - unknown field、未対応version、不正shapeは変更前に拒否し、dry-runとapplyで同じ照合・競合判定を使う
+  - 既存作品の既読位置と栞だけを対象にし、既存値を保持しながら不足分を追加する。未取得作品と存在しない話はwarning付きでskipする
 - `POST /api/library/novels/{novelId}/reader-assistant/chat`
   - 読書AIの非 streaming 応答。現在話、ユーザー発話、直近会話履歴を受け取り、`viewer-api` 内の agent loop で必要な読書文脈 tool を実行して最終回答を返す
 - `POST /api/library/novels/{novelId}/reader-assistant/chat/stream`
