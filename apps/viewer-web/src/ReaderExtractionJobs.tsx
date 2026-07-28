@@ -125,14 +125,15 @@ function ExtractionJobProgress({
         : null;
 
   const activeWorkers = job.activeWorkers ?? [];
+  const generatedCountDetail = extractionJobGeneratedCountDetail(job);
   const progressStats = [
     progress !== null ? { label: "全体", value: `${progress}%`, detail: "" } : null,
     batchStat ? { label: "batch", ...batchStat } : null,
     typeof job.generatedCharacterCount === "number"
-      ? { label: "人物", value: String(job.generatedCharacterCount), detail: "反映済" }
+      ? { label: "人物", value: String(job.generatedCharacterCount), detail: generatedCountDetail }
       : null,
     typeof job.generatedTermCount === "number"
-      ? { label: "用語", value: String(job.generatedTermCount), detail: "反映済" }
+      ? { label: "用語", value: String(job.generatedTermCount), detail: generatedCountDetail }
       : null
   ].filter((value): value is { label: string; value: string; detail: string } => value !== null);
 
@@ -189,6 +190,22 @@ function ExtractionJobProgress({
       ) : null}
     </div>
   );
+}
+
+export function extractionJobGeneratedCountDetail(job: ExtractionJobSummary) {
+  if (job.status === "completed") {
+    return "反映済";
+  }
+  if (
+    (job.status === "failed" || job.status === "paused" || job.status === "interrupted") &&
+    (job.generationStrategy === "serial" || job.generationStrategy === "parallel_identity")
+  ) {
+    return "再開用保存済";
+  }
+  if (job.status === "queued" || job.status === "running" || job.status === "pausing") {
+    return "一時集計";
+  }
+  return "未反映";
 }
 
 function formatExtractionJobStage(job: ExtractionJobSummary): string {

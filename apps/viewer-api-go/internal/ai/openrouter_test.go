@@ -341,25 +341,79 @@ func TestGenerateOpenRouterChatRetriesRetryableErrors(t *testing.T) {
 	}
 }
 
-func TestGenerateOpenRouterChatDoesNotRetryClientTimeout(t *testing.T) {
+func TestGenerateOpenRouterChatRetriesBodyReadTimeoutWhileParentContextIsAlive(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.Header().Set("content-type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"choices":`))
+			w.(http.Flusher).Flush()
+			time.Sleep(2 * time.Second)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+	t.Setenv("OPENROUTER_REQUEST_TIMEOUT_SECONDS", "1")
+
+	result, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+		APIKey:  "sk-test",
+		ModelID: "openrouter/auto",
+	}, []ChatMessage{{Role: "user", Content: "hello"}})
+	if err != nil || result.Answer != "ok" {
+		t.Fatalf("body read timeout should recover on retry: result=%+v err=%v", result, err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("body read timeout should retry once, calls=%d", calls)
+	}
+}
+
+func TestGenerateOpenRouterChatDoesNotRetryBodyReadFailureForNonRetryableStatus(t *testing.T) {
+	var calls int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("content-length", "100")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":`))
+	}))
+	defer server.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
+
+	_, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+		APIKey:  "sk-test",
+		ModelID: "openrouter/auto",
+	}, []ChatMessage{{Role: "user", Content: "hello"}})
+	if err == nil {
+		t.Fatal("truncated unauthorized response should fail")
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("non-retryable status body failure should not retry, calls=%d", calls)
+	}
+}
+
+func TestGenerateOpenRouterChatDoesNotRetryParentDeadline(t *testing.T) {
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
-		time.Sleep(2 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"late"}}]}`))
 	}))
 	defer server.Close()
 	t.Setenv("OPENROUTER_API_BASE_URL", server.URL)
 	t.Setenv("OPENROUTER_REQUEST_TIMEOUT_SECONDS", "1")
 
-	if _, err := GenerateOpenRouterChat(context.Background(), OpenRouterConfig{
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := GenerateOpenRouterChat(ctx, OpenRouterConfig{
 		APIKey:  "sk-test",
 		ModelID: "openrouter/auto",
-	}, []ChatMessage{{Role: "user", Content: "hello"}}); err == nil {
-		t.Fatal("expected client timeout error")
+	}, []ChatMessage{{Role: "user", Content: "hello"}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("parent deadline should propagate immediately, got %v", err)
 	}
 	if atomic.LoadInt32(&calls) != 1 {
-		t.Fatalf("client timeouts should not retry, calls=%d", calls)
+		t.Fatalf("parent deadline should not retry, calls=%d", calls)
 	}
 }
 

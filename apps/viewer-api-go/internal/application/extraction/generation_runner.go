@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sort"
+	"sync"
 	"time"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -25,6 +27,55 @@ const (
 
 type generationRunner struct {
 	ports WorkflowPorts
+}
+
+func (r generationRunner) GenerateParallelIdentityWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+	allocator, err := r.ports.LoadIDAllocator(novelID, seed)
+	if err != nil {
+		return nil, core.GenerationState{}, nil, err
+	}
+	fingerprintInputs := CheckpointGenerationInputs(seed, seedTerms, batches, initialUnresolved, allocator)
+	fingerprintInputs["strategy"] = GenerationStrategyParallelIdentity
+	fingerprint := CheckpointFingerprint(config, fingerprintInputs)
+	checkpoint, err := r.loadCheckpointForGeneration(novelID, upToEpisodeIndex, fingerprint)
+	if err != nil {
+		return nil, core.GenerationState{}, nil, err
+	}
+	if checkpoint.ParallelStrategy != "" && checkpoint.ParallelStrategy != GenerationStrategyParallelIdentity {
+		quarantineErr := r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, "parallel strategy mismatch", nil)
+		if quarantineErr == nil {
+			quarantineErr = errors.New("parallel checkpoint is incompatible: parallel strategy mismatch")
+		}
+		return nil, core.GenerationState{}, nil, quarantineErr
+	}
+	var saveMu sync.Mutex
+	session := &ParallelCheckpointSession{
+		Results: append([]checkpointstore.ParallelBatchResult{}, checkpoint.ParallelBatchResults...),
+		OnIncompatible: func(reason string) error {
+			return r.ports.QuarantineCheckpoint(novelID, upToEpisodeIndex, reason, nil)
+		},
+		OnBatchComplete: func(result checkpointstore.ParallelBatchResult) error {
+			saveMu.Lock()
+			defer saveMu.Unlock()
+			for _, existing := range checkpoint.ParallelBatchResults {
+				if existing.Stage == result.Stage && existing.BatchIndex == result.BatchIndex {
+					return nil
+				}
+			}
+			checkpoint.ParallelStrategy = GenerationStrategyParallelIdentity
+			checkpoint.ParallelBatchResults = append(checkpoint.ParallelBatchResults, result)
+			sort.Slice(checkpoint.ParallelBatchResults, func(i, j int) bool {
+				if checkpoint.ParallelBatchResults[i].Stage != checkpoint.ParallelBatchResults[j].Stage {
+					return checkpoint.ParallelBatchResults[i].Stage < checkpoint.ParallelBatchResults[j].Stage
+				}
+				return checkpoint.ParallelBatchResults[i].BatchIndex < checkpoint.ParallelBatchResults[j].BatchIndex
+			})
+			checkpoint.GenerationFingerprint = fingerprint
+			checkpoint.UpdatedAt = ai.NowISO()
+			return r.ports.SaveCheckpoint(novelID, upToEpisodeIndex, checkpoint)
+		},
+	}
+	return r.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seed, seedIdentityMergeEvents, seedTerms, batches, progressSink, initialUnresolved, session)
 }
 
 func (r generationRunner) GenerateWithCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []core.Batch, progressSink func(BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {

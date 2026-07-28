@@ -46,6 +46,8 @@ type workflowFakePorts struct {
 	saveTermsErr           error
 	generateErrAfter       int
 	parallelCalls          int
+	parallelBatchCalls     []int
+	parallelIncompatible   string
 	planErr                error
 	allocatorErr           error
 	generateCalls          int
@@ -57,7 +59,9 @@ type workflowFakePorts struct {
 	checkpoint             checkpointstore.Checkpoint
 	checkpointQuarantined  bool
 	checkpointReason       string
+	quarantineReturnsNil   bool
 	savedCheckpoint        bool
+	saveCheckpointErr      error
 	savedCharacters        []characters.GeneratedCharacter
 	savedSummaryOptions    characters.SaveGeneratedSummaryOptions
 }
@@ -169,10 +173,36 @@ func (p *workflowFakePorts) GenerateBatch(context.Context, *store.ResolvedAIGene
 	}, nil
 }
 
-func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, _ []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
+func (p *workflowFakePorts) GenerateParallelIdentity(_ context.Context, _ *store.ResolvedAIGenerationConfig, _ string, _ string, seed []characters.GeneratedCharacter, _ []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []core.Batch, _ func(BatchProgress), _ []characters.GeneratedUnresolvedMention, checkpoint *ParallelCheckpointSession) ([]characters.GeneratedCharacter, core.GenerationState, []ai.UsageRequest, error) {
 	p.parallelCalls++
-	if p.generateErr != nil {
+	if p.parallelIncompatible != "" && checkpoint != nil && checkpoint.OnIncompatible != nil {
+		return nil, core.GenerationState{}, nil, checkpoint.OnIncompatible(p.parallelIncompatible)
+	}
+	if p.generateErr != nil && p.generateErrAfter == 0 {
 		return nil, core.GenerationState{}, nil, p.generateErr
+	}
+	resumed := map[int]bool{}
+	if checkpoint != nil {
+		for _, result := range checkpoint.Results {
+			resumed[result.BatchIndex] = true
+		}
+	}
+	for _, batch := range batches {
+		if resumed[batch.BatchIndex] {
+			continue
+		}
+		if p.generateErr != nil && len(p.parallelBatchCalls) >= p.generateErrAfter {
+			return nil, core.GenerationState{}, nil, p.generateErr
+		}
+		p.parallelBatchCalls = append(p.parallelBatchCalls, batch.BatchIndex)
+		if checkpoint != nil && checkpoint.OnBatchComplete != nil {
+			if err := checkpoint.OnBatchComplete(checkpointstore.ParallelBatchResult{
+				Stage: "parallel_entities", BatchIndex: batch.BatchIndex, BatchFingerprint: "test",
+				EpisodeIndexes: batch.EpisodeIndexes, CompletedAt: ai.NowISO(),
+			}); err != nil {
+				return nil, core.GenerationState{}, nil, err
+			}
+		}
 	}
 	generated := append([]characters.GeneratedCharacter{}, seed...)
 	generated = append(generated, characters.GeneratedCharacter{CharacterID: "char_parallel", CanonicalName: "Parallel", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1"})
@@ -199,10 +229,16 @@ func (p *workflowFakePorts) LoadCheckpoint(string, string) (checkpointstore.Chec
 func (p *workflowFakePorts) QuarantineCheckpoint(_ string, _ string, reason string, cause error) error {
 	p.checkpointQuarantined = true
 	p.checkpointReason = reason
+	if p.quarantineReturnsNil {
+		return nil
+	}
 	return &checkpointstore.IncompatibleError{Path: "checkpoint", QuarantinedPath: "checkpoint.unsupported", Reason: reason, Err: cause}
 }
 
 func (p *workflowFakePorts) SaveCheckpoint(_ string, _ string, checkpoint checkpointstore.Checkpoint) error {
+	if p.saveCheckpointErr != nil {
+		return p.saveCheckpointErr
+	}
 	p.savedCheckpoint = true
 	p.checkpoint = checkpoint
 	return nil

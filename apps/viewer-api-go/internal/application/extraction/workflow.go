@@ -283,7 +283,8 @@ func (w *Workflow) generateOpenRouterAndSave(ctx context.Context, recorder *usag
 	var actualUsageRequests []ai.UsageRequest
 	switch strategy {
 	case GenerationStrategyParallelIdentity:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		runner := generationRunner{ports: w.ports}
+		generated, generationState, actualUsageRequests, err = runner.GenerateParallelIdentityWithCheckpoint(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	case GenerationStrategyDiscoveryParallelCorrection:
 		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	default:
@@ -381,7 +382,7 @@ func (w *Workflow) generateOpenRouterPreview(ctx context.Context, recorder *usag
 	var actualUsageRequests []ai.UsageRequest
 	switch strategy {
 	case GenerationStrategyParallelIdentity:
-		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
+		generated, generationState, actualUsageRequests, err = w.ports.GenerateParallelIdentity(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved, nil)
 	case GenerationStrategyDiscoveryParallelCorrection:
 		generated, generationState, actualUsageRequests, err = w.ports.GenerateDiscoveryParallelCorrection(ctx, config, novelID, upToEpisodeIndex, seedGenerated, seedIdentityMergeEvents, seedTerms, inputs.Batches, progressSink, pendingUnresolved)
 	default:

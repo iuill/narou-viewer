@@ -30,7 +30,10 @@
 - response の `terms` は必須で、欠落または `null` は job failure とする。
 - 人物・用語の履歴や名前事前発見の話数が不正、または現在の runtime batch 外の場合は、項目を黙って捨てず job failure とする。structured output を保証しない provider でも、誤った話数を保存してネタバレ境界を壊さないことを優先する。
 - provider が応答した JSON のdecode、正規化、話数境界検証に失敗した場合や、空応答・`finish_reason` による切断の場合は、同じpromptで1回だけ再生成する。再生成後も契約不正ならjobを失敗させ、両attemptのtoken usageを記録する。通信・rate limit等のretryはprovider共通層で別に扱う。
+- OpenRouter の通信・rate limit・client timeout は provider 共通層で最大3attemptまで再試行する。既定client timeoutは1attemptあたり120秒で、環境変数による上書きを含めると最悪所要時間は概ね3attempt分と待機時間になる。親jobのcancel / deadlineは再試行しない。
+- HTTP 200受信後のresponse body読み取り失敗も、親jobが継続中なら一時的なtransport failureとして再試行する。provider側では生成・課金が完了している可能性があり、失敗attemptのusageをresponseから取得できない場合はusage履歴と実支出が一致しない。この重複課金リスクより、長時間jobを一時切断から完走・再開可能にすることを優先する。
 - 保存順は term profile、character events/profile の順。character frontier を commit marker とし、両方の保存後だけ checkpoint を削除する。
+- 成功した並列batchのcheckpoint保存に失敗した場合は、課金済みdeltaをメモリ上だけで続行せずjobを停止する。checkpointへ永続化されていないbatchを完了扱いにして再開保証を壊すことを避け、再実行時の重複requestがあり得る状態を明示的なfailureとして残す。
 - retry / reprocess は置換境界以降の人物・用語履歴を削除してから再適用する。term だけ先行した partial write も character frontier で隠し、retry で収束させる。
 - 旧 character-only state は増分生成しない。`DELETE .../extraction` でクリアして再生成する必要がある。
 
@@ -55,7 +58,9 @@ malformed job file は対象作品を安全に特定できないため、一覧�
 - `cancel` は再開可能なjobを`canceled`へ確定してから実行contextをcancelする。以後は自動実行せず、resumeも受け付けない。
 - viewer-api起動時に残っている`running` / `pausing`は自動再実行せず`interrupted`へ確定し、利用者の明示resumeを待つ。
 - processorはcontext cancellation時にjobを`failed`へ上書きしない。pause/cancel APIが先に永続化した状態を正本とする。
-- serialはbatch完了checkpointから再開する。parallel方式は未commitの並列結果を公開せず、保存済みcheckpointがなければ当該生成単位を再実行する。人物event/profile、term historyへの適用は従来のcharacter frontier commit後だけ公開する。
+- serialはbatch完了checkpointから再開する。`parallel_identity` は成功した runtime batch の正規化済み delta を直ちにcheckpointへ保存し、同じgeneration fingerprintでの再開時は保存済みbatchをproviderへ再送せず、batch index順に決定的にreduceする。未commitの並列結果は人物event/profile、term historyへ公開せず、従来どおりcharacter frontier commit後だけ公開する。`discovery_parallel_correction` は現時点では生成単位で再実行する。
+- `parallel_identity` は1 batchが再試行上限または恒久errorで失敗しても共有contextをcancelせず、他batchを継続して成功分をcheckpointへ保存する。認証・課金・model設定など複数batchに共通する恒久errorでも残りのbatchが走り切る場合があるが、再開costを抑えるfail-nonfastを優先する。親jobのcancel / deadlineは全体を停止する。
+- jobの人物・用語件数は、completedなら「反映済」、checkpoint再開対象のserial / `parallel_identity` がfailed / paused / interruptedなら「再開用保存済」、実行中なら「一時集計」と表示する。checkpoint再開対象外のstrategyやcanceled / incompatibleは「未反映」とし、canonical stateへの反映と混同しない。
 - providerへ送信済みでusageを取得できたrequestは中断時もusage runへ記録する。送信前にcontext cancellationで開始されなかったrequestは記録しない。
 
 ## API

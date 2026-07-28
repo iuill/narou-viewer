@@ -17,7 +17,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
-const SchemaVersion = 4
+const SchemaVersion = 5
 
 var SchemaContract = schemaguard.Contract{
 	ID:            "VA-EXTRACTION-CHECKPOINT",
@@ -64,7 +64,40 @@ type Checkpoint struct {
 	RetiredCharacterIDs       []characters.GeneratedRetiredCharacterID `json:"retiredCharacterIds,omitempty"`
 	IdentityMergeEvents       []characters.GeneratedIdentityMergeEvent `json:"identityMergeEvents,omitempty"`
 	NextCharacterOrdinal      int                                      `json:"nextCharacterOrdinal,omitempty"`
+	ParallelStrategy          string                                   `json:"parallelStrategy,omitempty"`
+	ParallelBatchResults      []ParallelBatchResult                    `json:"parallelBatchResults,omitempty"`
 	UpdatedAt                 string                                   `json:"updatedAt"`
+}
+
+type ParallelBatchResult struct {
+	Stage            string                  `json:"stage"`
+	BatchIndex       int                     `json:"batchIndex"`
+	BatchFingerprint string                  `json:"batchFingerprint"`
+	EpisodeIndexes   []string                `json:"episodeIndexes"`
+	Delta            ParallelCheckpointDelta `json:"delta"`
+	CompletedAt      string                  `json:"completedAt"`
+}
+
+type ParallelCheckpointDelta struct {
+	NewCharacters      []characters.GeneratedCharacter `json:"newCharacters,omitempty"`
+	CharacterUpdates   []characters.GeneratedCharacter `json:"characterUpdates,omitempty"`
+	MergeProposals     []ParallelMergeProposal         `json:"mergeProposals,omitempty"`
+	UnresolvedMentions []ParallelUnresolvedMention     `json:"unresolvedMentions,omitempty"`
+	Terms              []terms.GeneratedTerm           `json:"terms,omitempty"`
+}
+
+type ParallelMergeProposal struct {
+	SourceCharacterID     string  `json:"sourceCharacterId"`
+	TargetCharacterID     string  `json:"targetCharacterId"`
+	Confidence            float64 `json:"confidence"`
+	Reason                string  `json:"reason"`
+	EffectiveEpisodeIndex string  `json:"effectiveEpisodeIndex,omitempty"`
+}
+
+type ParallelUnresolvedMention struct {
+	Mention      string `json:"mention"`
+	EpisodeIndex string `json:"episodeIndex"`
+	Reason       string `json:"reason"`
 }
 
 type FileStore struct {

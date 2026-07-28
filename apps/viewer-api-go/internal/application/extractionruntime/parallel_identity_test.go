@@ -20,6 +20,7 @@ import (
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
@@ -92,9 +93,23 @@ func TestGenerateOpenRouterExtractionDiscoveryParallelCorrectionWithSeed(t *test
 
 func TestExtractionWorkflowPortsGenerateParallelIdentityWrapsServer(t *testing.T) {
 	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
-	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
+	generated, state, usage, err := runtime.GenerateParallelIdentity(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
+	}
+	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
+		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
+	}
+}
+
+func TestExtractionWorkflowPortsGenerateParallelIdentityCompletesEmptyInput(t *testing.T) {
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	generated, state, usage, err := runtime.GenerateParallelIdentity(
+		context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1",
+		nil, nil, nil, nil, nil, nil, &appextraction.ParallelCheckpointSession{},
+	)
+	if err != nil {
+		t.Fatalf("GenerateParallelIdentity returned error: %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
 		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
@@ -106,6 +121,20 @@ func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionWrapsServer(t
 	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(context.Background(), nil, "novel-1", "1", nil, nil, nil, nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "AI生成プロファイル") {
 		t.Fatalf("err = %v", err)
+	}
+	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
+		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
+	}
+}
+
+func TestExtractionWorkflowPortsGenerateDiscoveryParallelCorrectionCompletesEmptyInput(t *testing.T) {
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	generated, state, usage, err := runtime.GenerateDiscoveryParallelCorrection(
+		context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-empty", "1",
+		nil, nil, nil, nil, nil, nil,
+	)
+	if err != nil {
+		t.Fatalf("GenerateDiscoveryParallelCorrection returned error: %v", err)
 	}
 	if len(generated) != 0 || len(usage) != 0 || len(state.UnresolvedMentions) != 0 {
 		t.Fatalf("generated=%+v state=%+v usage=%+v", generated, state, usage)
@@ -132,6 +161,122 @@ func TestParallelIdentityRuntimeAndExtractionEmptyInput(t *testing.T) {
 	}
 	if len(candidates) != 0 || len(rawTerms) != 0 || len(proposals) != 0 || len(usage) != 0 || len(unresolved) != 1 || unresolved[0].Mention != "謎の男" {
 		t.Fatalf("candidates=%+v usage=%+v unresolved=%+v", candidates, usage, unresolved)
+	}
+}
+
+func TestParallelIdentityCheckpointResumeIsStableAcrossConcurrency(t *testing.T) {
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文1"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "合成本文2"}}},
+	}
+	results := make([]checkpointstore.ParallelBatchResult, 0, len(batches))
+	for index, batch := range batches {
+		delta := core.Delta{NewCharacters: []characters.GeneratedCharacter{{
+			CanonicalName: fmt.Sprintf("人物%d", index+1), CanonicalEpisodeIndex: batch.EpisodeIndexes[0],
+			FirstAppearanceEpisodeIndex: batch.EpisodeIndexes[0],
+		}},
+			MergeProposals: []core.MergeProposal{{
+				SourceCharacterID: "source", TargetCharacterID: "target", Confidence: 0.8, Reason: "合成理由",
+			}},
+			UnresolvedMentions: []core.UnresolvedMention{{
+				Mention: "謎の人物", EpisodeIndex: batch.EpisodeIndexes[0], Reason: "合成理由",
+			}},
+			Terms: []terms.GeneratedTerm{{Term: fmt.Sprintf("用語%d", index+1)}},
+		}
+		results = append(results, checkpointstore.ParallelBatchResult{
+			Stage: "parallel_entities", BatchIndex: batch.BatchIndex,
+			BatchFingerprint: parallelCheckpointBatchFingerprint(batch),
+			EpisodeIndexes:   batch.EpisodeIndexes, Delta: parallelCheckpointDeltaFromCore(delta),
+		})
+	}
+
+	for _, concurrency := range []int{1, 3, maxParallelIdentityLLMConcurrency} {
+		t.Run(fmt.Sprintf("concurrency_%d", concurrency), func(t *testing.T) {
+			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+			session := &appextraction.ParallelCheckpointSession{Results: results}
+			candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+				context.Background(), &store.ResolvedAIGenerationConfig{ExtractionParallelConcurrency: concurrency},
+				"novel-1", "2", nil, nil, batches, nil, nil, session,
+			)
+			if err != nil {
+				t.Fatalf("resume returned error: %v", err)
+			}
+			if len(usage) != 0 {
+				t.Fatalf("resumed batches must not record provider usage: %+v", usage)
+			}
+			if len(rawTerms) != 2 || len(proposals) != 2 || len(unresolved) != 2 {
+				t.Fatalf("resumed delta was not restored: terms=%+v proposals=%+v unresolved=%+v", rawTerms, proposals, unresolved)
+			}
+			if got := []string{candidates[0].Character.CanonicalName, candidates[1].Character.CanonicalName}; !reflect.DeepEqual(got, []string{"人物1", "人物2"}) {
+				t.Fatalf("candidate order = %v", got)
+			}
+		})
+	}
+}
+
+func TestParallelIdentityCheckpointResumeIncludesRestoredCountsInProgress(t *testing.T) {
+	openrouter := newExtractionOpenRouterTestServer(
+		t,
+		`{"processedUpToEpisodeIndex":"2","newCharacters":[{"canonicalName":{"text":"人物2","episodeIndex":"2"},"fullName":null,"fullNameHistory":[],"gender":null,"genderHistory":[],"firstAppearanceEpisodeIndex":"2","aliases":[],"appearanceHistory":[],"personalityHistory":[],"summaryHistory":[{"text":"合成人物。","episodeIndex":"2"}]}],"characterUpdates":[],"mergeProposals":[],"unresolvedMentions":[],"terms":[{"term":"用語2","reading":null,"category":{"value":"organization","episodeIndex":"2"},"descriptionHistory":[{"text":"合成用語。","episodeIndex":"2"}]}]}`,
+	)
+	defer openrouter.Close()
+	t.Setenv("OPENROUTER_API_BASE_URL", openrouter.URL)
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+
+	batches := []extractionBatch{
+		{BatchIndex: 1, BatchCount: 2, EpisodeIndexes: []string{"1"}, Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文1"}}},
+		{BatchIndex: 2, BatchCount: 2, EpisodeIndexes: []string{"2"}, Chunks: []extractionChunk{{EpisodeIndex: "2", Text: "合成本文2"}}},
+	}
+	savedDelta := core.Delta{
+		NewCharacters: []characters.GeneratedCharacter{{
+			CanonicalName: "人物1", CanonicalEpisodeIndex: "1", FirstAppearanceEpisodeIndex: "1",
+		}},
+		Terms: []terms.GeneratedTerm{{Term: "用語1"}},
+	}
+	checkpoint := &appextraction.ParallelCheckpointSession{Results: []checkpointstore.ParallelBatchResult{{
+		Stage: "parallel_entities", BatchIndex: 1, BatchFingerprint: parallelCheckpointBatchFingerprint(batches[0]),
+		Delta: parallelCheckpointDeltaFromCore(savedDelta),
+	}}}
+	progressEvents := []appextraction.BatchProgress{}
+	runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+	_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+		context.Background(),
+		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openrouter/auto", ExtractionParallelConcurrency: 1},
+		"novel-1", "2", nil, nil, batches,
+		func(progress appextraction.BatchProgress) { progressEvents = append(progressEvents, progress) },
+		nil, checkpoint,
+	)
+	if err != nil {
+		t.Fatalf("resume returned error: %v", err)
+	}
+	last := progressEvents[len(progressEvents)-1]
+	if last.Phase != "complete" || last.CompletedBatchCount != 2 || last.MergedCharacterCount != 2 || last.MergedTermCount != 2 {
+		t.Fatalf("resumed progress counts = %+v", last)
+	}
+}
+
+func TestParallelIdentityCheckpointRejectsMalformedSavedBatchMetadata(t *testing.T) {
+	batch := extractionBatch{
+		BatchIndex: 1, BatchCount: 1, EpisodeIndexes: []string{"1"},
+		Chunks: []extractionChunk{{EpisodeIndex: "1", Text: "合成本文"}},
+	}
+	tests := []checkpointstore.ParallelBatchResult{
+		{Stage: "unexpected", BatchIndex: 1},
+		{Stage: "parallel_entities", BatchIndex: 2},
+	}
+	for _, saved := range tests {
+		t.Run(fmt.Sprintf("%s_%d", saved.Stage, saved.BatchIndex), func(t *testing.T) {
+			runtime := NewRuntime(RuntimeDependencies{StateDir: t.TempDir()})
+			_, _, _, _, _, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
+				context.Background(), &store.ResolvedAIGenerationConfig{}, "novel-1", "1",
+				nil, nil, []extractionBatch{batch}, nil, nil,
+				&appextraction.ParallelCheckpointSession{Results: []checkpointstore.ParallelBatchResult{saved}},
+			)
+			if err == nil || !strings.Contains(err.Error(), "parallel checkpoint is incompatible") {
+				t.Fatalf("malformed checkpoint error = %v", err)
+			}
+		})
 	}
 }
 
@@ -182,17 +327,24 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 			Chunks:         []extractionChunk{{EpisodeIndex: "2", Title: "第二話", Text: "ボブが庭にいた。"}},
 		},
 	}
-	candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidates(
+	savedResults := []checkpointstore.ParallelBatchResult{}
+	checkpoint := &appextraction.ParallelCheckpointSession{OnBatchComplete: func(result checkpointstore.ParallelBatchResult) error {
+		savedResults = append(savedResults, result)
+		return nil
+	}}
+	candidates, rawTerms, proposals, usage, unresolved, err := runtime.extractParallelIdentityCandidatesWithKnownAndCheckpoint(
 		context.Background(),
 		&store.ResolvedAIGenerationConfig{APIKey: "sk-test", ModelID: "openai/gpt-5.4-mini", AllowFallbacks: true, ExtractionParallelConcurrency: 1},
 		"novel-1",
 		"2",
+		nil,
 		nil,
 		batches,
 		func(progress appextraction.BatchProgress) {
 			progressEvents = append(progressEvents, progress)
 		},
 		nil,
+		checkpoint,
 	)
 	if err != nil {
 		t.Fatalf("extractParallelIdentityCandidates returned error: %v", err)
@@ -202,6 +354,9 @@ func TestExtractParallelIdentityCandidatesCollectsSuccessfulBatches(t *testing.T
 	}
 	if len(proposals) != 0 {
 		t.Fatalf("merge proposals = %+v, want none", proposals)
+	}
+	if len(savedResults) != 2 || savedResults[0].BatchIndex != 1 || savedResults[1].BatchIndex != 2 {
+		t.Fatalf("checkpoint results = %+v", savedResults)
 	}
 	if len(usage) != 2 || usage[0].RequestIndex != 0 || usage[1].RequestIndex != 1 {
 		t.Fatalf("usage = %+v", usage)
@@ -532,7 +687,7 @@ func TestParallelIdentityLLMStartLimiterStopsWaitingOnContextCancel(t *testing.T
 	}
 }
 
-func TestRunParallelIdentityLLMJobsCancelsAfterFirstError(t *testing.T) {
+func TestRunParallelIdentityLLMJobsContinuesAfterBatchError(t *testing.T) {
 	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
 
 	expected := errors.New("first request failed")
@@ -547,8 +702,28 @@ func TestRunParallelIdentityLLMJobsCancelsAfterFirstError(t *testing.T) {
 	if !errors.Is(err, expected) {
 		t.Fatalf("err = %v, want %v", err, expected)
 	}
-	if got := atomic.LoadInt32(&started); got != 1 {
-		t.Fatalf("started jobs = %d, want 1", got)
+	if got := atomic.LoadInt32(&started); got != 3 {
+		t.Fatalf("started jobs = %d, want 3", got)
+	}
+}
+
+func TestRunParallelIdentityLLMJobsPropagatesParentCancellationBeforeStarting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runParallelIdentityLLMJobs(ctx, 2, 1, func(requestCtx context.Context, _ int) error {
+		return requestCtx.Err()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled run = %v", err)
+	}
+}
+
+func TestRunParallelIdentityLLMJobsNormalizesConcurrency(t *testing.T) {
+	t.Setenv("EXTRACTION_LLM_START_INTERVAL_MS", "0")
+	for _, concurrency := range []int{0, maxParallelIdentityLLMConcurrency + 1} {
+		if err := runParallelIdentityLLMJobs(context.Background(), 1, concurrency, func(context.Context, int) error { return nil }); err != nil {
+			t.Fatalf("concurrency %d returned error: %v", concurrency, err)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	appextraction "narou-viewer/apps/viewer-api-go/internal/application/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	core "narou-viewer/apps/viewer-api-go/internal/extraction"
+	"narou-viewer/apps/viewer-api-go/internal/extraction/checkpointstore"
 	"narou-viewer/apps/viewer-api-go/internal/store"
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
@@ -47,9 +48,9 @@ type parallelIdentityCluster struct {
 	Reason        string   `json:"reason"`
 }
 
-func (r *Runtime) GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+func (r *Runtime) GenerateParallelIdentity(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), pendingUnresolved []characters.GeneratedUnresolvedMention, checkpoint *appextraction.ParallelCheckpointSession) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	startedAt := time.Now()
-	generated, state, requests, err := r.generateOpenRouterExtractionParallelIdentityWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, seedIdentityMergeEvents, seedTerms, batches, progressSink, pendingUnresolved)
+	generated, state, requests, err := r.generateOpenRouterExtractionParallelIdentityWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, seedIdentityMergeEvents, seedTerms, batches, progressSink, pendingUnresolved, checkpoint)
 	status := "ok"
 	if err != nil {
 		status = "error"
@@ -73,7 +74,7 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentity(ctx context.Conte
 	return r.generateOpenRouterExtractionParallelIdentityWithSeedState(ctx, config, novelID, upToEpisodeIndex, seed, nil, seedTerms, batches, progressSink, initialUnresolved)
 }
 
-func (r *Runtime) generateOpenRouterExtractionParallelIdentityWithSeedState(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
+func (r *Runtime) generateOpenRouterExtractionParallelIdentityWithSeedState(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, seed []characters.GeneratedCharacter, seedIdentityMergeEvents []characters.GeneratedIdentityMergeEvent, seedTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention, checkpoints ...*appextraction.ParallelCheckpointSession) ([]characters.GeneratedCharacter, extractionGenerationState, []ai.UsageRequest, error) {
 	if config == nil {
 		return nil, extractionGenerationState{}, nil, errors.New("AI生成プロファイルが見つかりません。")
 	}
@@ -86,7 +87,11 @@ func (r *Runtime) generateOpenRouterExtractionParallelIdentityWithSeedState(ctx 
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), nil, err
 	}
-	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnown(ctx, config, novelID, upToEpisodeIndex, visibleSeed, seedTerms, runtimeBatches, progressSink, initialUnresolved, seedIdentityMergeEvents)
+	var checkpoint *appextraction.ParallelCheckpointSession
+	if len(checkpoints) > 0 {
+		checkpoint = checkpoints[0]
+	}
+	extracted, rawTerms, mergeProposals, usageRequests, unresolved, err := r.extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx, config, novelID, upToEpisodeIndex, visibleSeed, seedTerms, runtimeBatches, progressSink, initialUnresolved, checkpoint, seedIdentityMergeEvents)
 	if err != nil {
 		return nil, extractionStateFromAllocator(initialUnresolved, allocator), usageRequests, err
 	}
@@ -292,9 +297,6 @@ func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, concurrency i
 	if jobCount == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	if concurrency < 1 {
 		concurrency = defaultParallelIdentityLLMConcurrency
 	}
@@ -313,7 +315,6 @@ func runParallelIdentityLLMJobs(ctx context.Context, jobCount int, concurrency i
 		errMu.Lock()
 		if firstErr == nil {
 			firstErr = err
-			cancel()
 		}
 		errMu.Unlock()
 	}
@@ -367,6 +368,10 @@ func (r *Runtime) extractParallelIdentityCandidates(ctx context.Context, config 
 }
 
 func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
+	return r.extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx, config, novelID, upToEpisodeIndex, knownCharacters, knownTerms, batches, progressSink, initialUnresolved, nil, identityMergeEventSets...)
+}
+
+func (r *Runtime) extractParallelIdentityCandidatesWithKnownAndCheckpoint(ctx context.Context, config *store.ResolvedAIGenerationConfig, novelID string, upToEpisodeIndex string, knownCharacters []characters.GeneratedCharacter, knownTerms []terms.GeneratedTerm, batches []extractionBatch, progressSink func(appextraction.BatchProgress), initialUnresolved []characters.GeneratedUnresolvedMention, checkpoint *appextraction.ParallelCheckpointSession, identityMergeEventSets ...[]characters.GeneratedIdentityMergeEvent) ([]parallelIdentityCandidate, []terms.GeneratedTerm, []core.MergeProposal, []ai.UsageRequest, []characters.GeneratedUnresolvedMention, error) {
 	results := make([]parallelIdentityExtractionResult, len(batches))
 	identityMergeEvents := []characters.GeneratedIdentityMergeEvent(nil)
 	if len(identityMergeEventSets) > 0 {
@@ -376,9 +381,44 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	completedCount := 0
 	completedCandidateCount := 0
 	completedTermNames := map[string]bool{}
+	resumed := map[int]bool{}
+	pendingIndexes := make([]int, 0, len(batches))
+	if checkpoint != nil {
+		for _, saved := range checkpoint.Results {
+			if saved.Stage != "parallel_entities" {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("unexpected parallel checkpoint stage: %q", saved.Stage))
+			}
+			if saved.BatchIndex < 1 || saved.BatchIndex > len(batches) {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("parallel checkpoint batch index out of range: %d", saved.BatchIndex))
+			}
+			index := saved.BatchIndex - 1
+			if resumed[index] {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("duplicate parallel checkpoint batch index: %d", saved.BatchIndex))
+			}
+			batch := batches[index]
+			if saved.BatchFingerprint != parallelCheckpointBatchFingerprint(batch) {
+				return nil, nil, nil, nil, initialUnresolved, parallelCheckpointIncompatibleError(checkpoint, fmt.Sprintf("parallel batch fingerprint mismatch: batch %d", saved.BatchIndex))
+			}
+			results[index] = parallelIdentityExtractionResultFromDelta(index, batch, parallelCheckpointDeltaToCore(saved.Delta), knownCharacters)
+			resumed[index] = true
+			completedCount++
+			completedCandidateCount += len(results[index].Candidates)
+			for _, term := range results[index].Terms {
+				if name := strings.TrimSpace(term.Term); name != "" {
+					completedTermNames[name] = true
+				}
+			}
+		}
+	}
+	for index := range batches {
+		if !resumed[index] {
+			pendingIndexes = append(pendingIndexes, index)
+		}
+	}
 	concurrency := parallelIdentityLLMConcurrency(config)
 	workerSlots := newParallelWorkerSlots(concurrency)
-	runErr := runParallelIdentityLLMJobs(ctx, len(batches), concurrency, func(requestCtx context.Context, index int) error {
+	runErr := runParallelIdentityLLMJobs(ctx, len(pendingIndexes), concurrency, func(requestCtx context.Context, pendingIndex int) error {
+		index := pendingIndexes[pendingIndex]
 		workerIndex := <-workerSlots
 		defer func() { workerSlots <- workerIndex }()
 		batch := batches[index]
@@ -406,6 +446,19 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 				extraction.MergeProposals[proposalIndex].EffectiveEpisodeIndex = boundary
 			}
 			extraction.Candidates = parallelIdentityCandidatesFromDeltaWithKnown(novelID, index, batch, result.Delta, projectedCharacters)
+			if checkpoint != nil && checkpoint.OnBatchComplete != nil {
+				if saveErr := checkpoint.OnBatchComplete(checkpointstore.ParallelBatchResult{
+					Stage:            "parallel_entities",
+					BatchIndex:       batch.BatchIndex,
+					BatchFingerprint: parallelCheckpointBatchFingerprint(batch),
+					EpisodeIndexes:   append([]string{}, batch.EpisodeIndexes...),
+					Delta:            parallelCheckpointDeltaFromCore(result.Delta),
+					CompletedAt:      ai.NowISO(),
+				}); saveErr != nil {
+					err = saveErr
+					extraction.Err = saveErr
+				}
+			}
 		}
 		results[index] = extraction
 		if progressSink != nil {
@@ -460,6 +513,15 @@ func (r *Runtime) extractParallelIdentityCandidatesWithKnown(ctx context.Context
 	return candidates, rawTerms, mergeProposals, usageRequests, unresolved, nil
 }
 
+func parallelCheckpointIncompatibleError(checkpoint *appextraction.ParallelCheckpointSession, reason string) error {
+	if checkpoint != nil && checkpoint.OnIncompatible != nil {
+		if err := checkpoint.OnIncompatible(reason); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("parallel checkpoint is incompatible: %s", reason)
+}
+
 func extractionBatchBoundary(batch extractionBatch) string {
 	boundary := ""
 	for _, episodeIndex := range batch.EpisodeIndexes {
@@ -468,6 +530,66 @@ func extractionBatchBoundary(batch extractionBatch) string {
 		}
 	}
 	return boundary
+}
+
+func parallelCheckpointBatchFingerprint(batch extractionBatch) string {
+	return appextraction.CheckpointFingerprint(nil, appextraction.CheckpointBatchInput(batch))
+}
+
+func parallelIdentityExtractionResultFromDelta(index int, batch extractionBatch, delta core.Delta, knownCharacters []characters.GeneratedCharacter) parallelIdentityExtractionResult {
+	boundary := extractionBatchBoundary(batch)
+	mergeProposals := append([]core.MergeProposal{}, delta.MergeProposals...)
+	for proposalIndex := range mergeProposals {
+		mergeProposals[proposalIndex].EffectiveEpisodeIndex = boundary
+	}
+	return parallelIdentityExtractionResult{
+		RequestIndex:   index,
+		Batch:          batch,
+		Candidates:     parallelIdentityCandidatesFromDeltaWithKnown("", index, batch, delta, projectGeneratedCharactersAtBoundary(knownCharacters, boundary)),
+		MergeProposals: mergeProposals,
+		Unresolved:     delta.UnresolvedMentions,
+		Terms:          delta.Terms,
+	}
+}
+
+func parallelCheckpointDeltaFromCore(delta core.Delta) checkpointstore.ParallelCheckpointDelta {
+	result := checkpointstore.ParallelCheckpointDelta{
+		NewCharacters:    delta.NewCharacters,
+		CharacterUpdates: delta.CharacterUpdates,
+		Terms:            delta.Terms,
+	}
+	for _, proposal := range delta.MergeProposals {
+		result.MergeProposals = append(result.MergeProposals, checkpointstore.ParallelMergeProposal{
+			SourceCharacterID: proposal.SourceCharacterID, TargetCharacterID: proposal.TargetCharacterID,
+			Confidence: proposal.Confidence, Reason: proposal.Reason, EffectiveEpisodeIndex: proposal.EffectiveEpisodeIndex,
+		})
+	}
+	for _, mention := range delta.UnresolvedMentions {
+		result.UnresolvedMentions = append(result.UnresolvedMentions, checkpointstore.ParallelUnresolvedMention{
+			Mention: mention.Mention, EpisodeIndex: mention.EpisodeIndex, Reason: mention.Reason,
+		})
+	}
+	return result
+}
+
+func parallelCheckpointDeltaToCore(delta checkpointstore.ParallelCheckpointDelta) core.Delta {
+	result := core.Delta{
+		NewCharacters:    delta.NewCharacters,
+		CharacterUpdates: delta.CharacterUpdates,
+		Terms:            delta.Terms,
+	}
+	for _, proposal := range delta.MergeProposals {
+		result.MergeProposals = append(result.MergeProposals, core.MergeProposal{
+			SourceCharacterID: proposal.SourceCharacterID, TargetCharacterID: proposal.TargetCharacterID,
+			Confidence: proposal.Confidence, Reason: proposal.Reason, EffectiveEpisodeIndex: proposal.EffectiveEpisodeIndex,
+		})
+	}
+	for _, mention := range delta.UnresolvedMentions {
+		result.UnresolvedMentions = append(result.UnresolvedMentions, core.UnresolvedMention{
+			Mention: mention.Mention, EpisodeIndex: mention.EpisodeIndex, Reason: mention.Reason,
+		})
+	}
+	return result
 }
 
 func projectGeneratedCharactersAtBoundary(values []characters.GeneratedCharacter, boundary string) []characters.GeneratedCharacter {

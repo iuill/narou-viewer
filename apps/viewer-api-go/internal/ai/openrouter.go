@@ -132,6 +132,7 @@ var openRouterModelInfoCache sync.Map
 var (
 	ErrOpenRouterEmptyResponse     = errors.New("OpenRouter returned an empty response")
 	ErrOpenRouterTruncatedResponse = errors.New("OpenRouter response was truncated")
+	ErrOpenRouterResponseTooLarge  = errors.New("OpenRouter response body exceeded the size limit")
 )
 
 func IsOpenRouterOutputError(err error) bool {
@@ -355,12 +356,13 @@ func doOpenRouterChatRequest(ctx context.Context, client *http.Client, config Op
 	request.Header.Set("x-openrouter-title", openRouterAppTitle())
 	response, err := client.Do(request)
 	if err != nil {
-		return ChatResult{}, isRetryableOpenRouterTransportError(err), err
+		return ChatResult{}, isRetryableOpenRouterTransportError(ctx, err), err
 	}
 	defer response.Body.Close()
 	responseBody, err := readLimitedOpenRouterResponseBody(response)
 	if err != nil {
-		return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode), err
+		retryableReadError := response.StatusCode >= 200 && response.StatusCode < 300 && isRetryableOpenRouterTransportError(ctx, err)
+		return ChatResult{}, isRetryableOpenRouterStatus(response.StatusCode) || retryableReadError, err
 	}
 	var decoded struct {
 		Choices []struct {
@@ -426,7 +428,7 @@ func readLimitedOpenRouterResponseBody(response *http.Response) ([]byte, error) 
 		return nil, err
 	}
 	if int64(len(raw)) > maxOpenRouterResponseBytes {
-		return nil, fmt.Errorf("OpenRouter response body exceeded %d bytes", maxOpenRouterResponseBytes)
+		return nil, fmt.Errorf("%w: maximum=%d bytes", ErrOpenRouterResponseTooLarge, maxOpenRouterResponseBytes)
 	}
 	return raw, nil
 }
@@ -444,16 +446,22 @@ func isRetryableOpenRouterStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
 }
 
-func isRetryableOpenRouterTransportError(err error) bool {
+func isRetryableOpenRouterTransportError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if ctx != nil && ctx.Err() != nil {
 		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, ErrOpenRouterResponseTooLarge) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return false
+		return true
 	}
 	return true
 }
