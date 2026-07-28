@@ -178,3 +178,19 @@ export type EpisodeResponse = {
   updatedAt: string;
   contentEtag: string;
 };
+
+export type NovelSearchMatch = {
+  episodeIndex: EpisodeIndex;
+  episodeNumber: number;
+  title: string;
+  position: number;
+  snippet: string;
+};
+
+export type NovelSearchResponse = {
+  query: string;
+  candidateCount: number;
+  matchedEpisodeCount: number;
+  truncated: boolean;
+  matches: NovelSearchMatch[];
+};

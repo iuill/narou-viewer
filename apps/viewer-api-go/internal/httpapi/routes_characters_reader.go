@@ -72,6 +72,8 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 		s.handleExtractionJobs(w, r, novelID)
 	case "reader-settings":
 		s.handleNovelReaderSettings(w, r, novelID)
+	case "search":
+		s.handleNovelSearch(w, r, novelID)
 	case "reader-assistant/chat":
 		s.handleReaderAssistantChat(w, r, novelID, false)
 	case "reader-assistant/chat/stream":
@@ -83,6 +85,58 @@ func (s *Server) handleReaderSubroute(w http.ResponseWriter, r *http.Request, no
 		}
 		writeError(w, http.StatusNotFound, "Not found.")
 	}
+}
+
+func (s *Server) handleNovelSearch(w http.ResponseWriter, r *http.Request, novelID string) {
+	if !methodOnly(w, r, http.MethodGet) {
+		return
+	}
+	if s.readerAssistant == nil || s.library == nil {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "q is required.")
+		return
+	}
+	toc, err := s.library.GetToc(r.Context(), novelID)
+	if err != nil {
+		writeResult(w, nil, err)
+		return
+	}
+	if toc == nil {
+		writeError(w, http.StatusNotFound, "Novel not found.")
+		return
+	}
+	lastEpisodeIndex := ""
+	if len(toc.Episodes) > 0 {
+		lastEpisodeIndex = toc.Episodes[len(toc.Episodes)-1].EpisodeIndex
+	}
+	arguments, _ := json.Marshal(map[string]any{
+		"query":       query,
+		"startNumber": 1,
+		"endNumber":   len(toc.Episodes),
+		"maxResults":  20,
+	})
+	result := s.readerAssistant.ExecuteTool(r.Context(), readerassistant.Context{
+		NovelID:                      novelID,
+		NovelTitle:                   toc.Title,
+		CurrentEpisodeIndex:          lastEpisodeIndex,
+		CurrentEpisodeNumber:         len(toc.Episodes),
+		SpoilerBoundaryEpisodeIndex:  lastEpisodeIndex,
+		SpoilerBoundaryEpisodeNumber: len(toc.Episodes),
+		TocEpisodes:                  toc.Episodes,
+	}, "search_full_text", string(arguments))
+	if result.Name == "tool_recovery" {
+		message, _ := result.Result["message"].(string)
+		if message == "" {
+			message = "Invalid search query."
+		}
+		writeError(w, http.StatusBadRequest, message)
+		return
+	}
+	writeJSON(w, http.StatusOK, result.Result)
 }
 
 func (s *Server) handleNovels(w http.ResponseWriter, r *http.Request) {

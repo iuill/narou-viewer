@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -147,6 +148,68 @@ func TestHTTPAPIHelperBranches(t *testing.T) {
 	if fingerprint := extractionCheckpointFingerprint(nil, func() {}); fingerprint == "" {
 		t.Fatal("extractionCheckpointFingerprint should return a stable fallback hash")
 	}
+}
+
+func TestNovelSearchReturnsPreviewWithoutChangingReaderState(t *testing.T) {
+	dataDir := newHTTPAPITestData(t)
+	handler, err := newTestServerWithDataDir(dataDir)
+	if err != nil {
+		t.Fatalf("newTestServerWithDataDir: %v", err)
+	}
+	novelID := library.NovelID(library.Work{ID: 1, Site: "syosetu", SiteWorkID: "n1234"})
+	before := requestJSON(t, handler, http.MethodGet, "/api/reader/state?novelId="+url.QueryEscape(novelID), nil, http.StatusOK)
+	result := requestJSON(
+		t,
+		handler,
+		http.MethodGet,
+		"/api/library/novels/"+url.PathEscape(novelID)+"/search?q="+url.QueryEscape("本文"),
+		nil,
+		http.StatusOK,
+	)
+	matches, ok := result["matches"].([]any)
+	if !ok || len(matches) != 1 {
+		t.Fatalf("search matches = %+v", result["matches"])
+	}
+	match := matches[0].(map[string]any)
+	if match["episodeIndex"] != "1" || match["position"] != float64(0) || !strings.Contains(match["snippet"].(string), "本文です") {
+		t.Fatalf("search match = %+v", match)
+	}
+	after := requestJSON(t, handler, http.MethodGet, "/api/reader/state?novelId="+url.QueryEscape(novelID), nil, http.StatusOK)
+	if fmt.Sprint(after) != fmt.Sprint(before) {
+		t.Fatalf("search changed reader state: before=%+v after=%+v", before, after)
+	}
+	requestJSON(
+		t,
+		handler,
+		http.MethodGet,
+		"/api/library/novels/"+url.PathEscape(novelID)+"/search",
+		nil,
+		http.StatusBadRequest,
+	)
+	requestJSON(
+		t,
+		handler,
+		http.MethodPost,
+		"/api/library/novels/"+url.PathEscape(novelID)+"/search?q=test",
+		nil,
+		http.StatusMethodNotAllowed,
+	)
+	requestJSON(
+		t,
+		handler,
+		http.MethodGet,
+		"/api/library/novels/missing/search?q=test",
+		nil,
+		http.StatusNotFound,
+	)
+	requestJSON(
+		t,
+		handler,
+		http.MethodGet,
+		"/api/library/novels/"+url.PathEscape(novelID)+"/search?q="+url.QueryEscape(strings.Repeat("長", 121)),
+		nil,
+		http.StatusBadRequest,
+	)
 }
 
 func TestExtractionUsageTokenHelpers(t *testing.T) {

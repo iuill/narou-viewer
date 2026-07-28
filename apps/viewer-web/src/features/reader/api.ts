@@ -15,12 +15,23 @@ import type {
   EpisodeResponse,
   NovelReaderCorrectionPatch,
   NovelReaderSettingsResponse,
+  NovelSearchResponse,
   ReaderAiAssistantChatRequest,
   ReaderAiAssistantStreamEvent,
   ReaderPreferencesResponse,
   ReaderState,
   TocResponse
 } from "./types";
+
+export function searchNovelText(novelId: string, query: string): Promise<NovelSearchResponse> {
+  const encodedNovelId = encodeURIComponent(novelId);
+  const encodedQuery = encodeURIComponent(query);
+  return requestJson<NovelSearchResponse>(
+    `/api/library/novels/${encodedNovelId}/search?q=${encodedQuery}`,
+    undefined,
+    "作品内検索に失敗しました。"
+  );
+}
 
 type ReaderStatePutRequest = {
   novelId: string;
