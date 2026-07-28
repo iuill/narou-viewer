@@ -3242,7 +3242,37 @@ describe("App", () => {
 
     await waitFor(() => getButtonByLabel(container, "次のページへ進む").disabled === false);
 
+    const viewport = container.querySelector(".reader-page-viewport");
+    if (!(viewport instanceof dom.window.HTMLElement)) {
+      throw new Error("reader viewport not found");
+    }
+    const getClientRectsSpy = vi.spyOn(dom.window.Element.prototype, "getClientRects");
+    const getBoundingClientRectSpy = vi.spyOn(dom.window.Element.prototype, "getBoundingClientRect");
+
     await keyDown(dom.window, "ArrowLeft");
+    expect(getClientRectsSpy).not.toHaveBeenCalled();
+    expect(getBoundingClientRectSpy).not.toHaveBeenCalled();
+    getClientRectsSpy.mockRestore();
+    getBoundingClientRectSpy.mockRestore();
+
+    const article = container.querySelector(".reader-prose-paged");
+    if (!(article instanceof dom.window.HTMLElement)) {
+      throw new Error("reader article not found");
+    }
+    const mutationTarget = dom.window.document.createElement("span");
+    mutationTarget.dataset.readerVisibilityFragment = "test";
+    mutationTarget.getClientRects = () =>
+      [
+        {
+          width: Number.NaN,
+          height: 24,
+          left: 0,
+          right: 24
+        }
+      ] as unknown as DOMRectList;
+    article.append(mutationTarget);
+    await waitFor(() => mutationTarget.classList.contains("reader-page-overflow-hidden"));
+
     await keyDown(dom.window, "ArrowLeft");
 
     await waitFor(() => container.textContent?.includes("次の話へ進みますか？") === true);

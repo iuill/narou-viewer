@@ -1,4 +1,4 @@
-import { useEffect, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
+import { useEffect, useRef, type Dispatch, type MutableRefObject, type RefObject, type SetStateAction } from "react";
 import { ReaderStateConflictError } from "../../features/reader/api";
 import { isReaderEdgeClick } from "../../features/reader/gestureNavigation";
 import { extractImageViewerState, type ImageViewerState } from "../../features/reader/imageViewer";
@@ -7,11 +7,10 @@ import type { EpisodeIndex, EpisodeResponse } from "../../features/reader/types"
 import type { ReaderSessionCommands } from "../../features/reader/useReaderSession";
 import {
   hasMeaningfulVerticalReserveChange,
-  isRectWithinVerticalPage,
   normalizeVerticalReservePx,
 } from "../../features/reader/verticalPagination";
 import type { ReaderSyncConflict, ReaderSyncConflictResolutionState } from "../../hooks/useReaderState";
-import { getReaderPositionFromViewport, scrollReaderPositionIntoView } from "../../readerPosition";
+import { scrollReaderPositionIntoView } from "../../readerPosition";
 import type { ReaderExperimentalFontWeight } from "../../readerExperimentalFonts";
 import type { ReadingMode } from "../../readerPreferences";
 import {
@@ -21,8 +20,6 @@ import {
 import { isReaderStateSaveDisabled } from "../../testing/e2eControl";
 import type { useReaderPagingHelpers } from "./useReaderPagingHelpers";
 
-const READER_PAGE_OVERFLOW_HIDDEN_CLASS = "reader-page-overflow-hidden";
-const READER_PAGE_OVERFLOW_DEBUG_CLASS = "reader-page-overflow-debug";
 const READER_SPEECH_PROGRESS_SAVE_DEBOUNCE_MS = 2500;
 
 type ScreenMode = "library" | "reader";
@@ -60,6 +57,7 @@ type UseReaderEffectsOptions = ReturnType<typeof useReaderPagingHelpers> & {
   selectedEpisodeIndexRef: MutableRefObject<EpisodeIndex | null>;
   selectedNovelId: string | null;
   selectedPosition: number | null;
+  selectedPositionRef: MutableRefObject<number | null>;
   setCurrentPageIndex: Dispatch<SetStateAction<number>>;
   setError: Dispatch<SetStateAction<string | null>>;
   setIsEpisodeLayoutReady: Dispatch<SetStateAction<boolean>>;
@@ -72,6 +70,7 @@ type UseReaderEffectsOptions = ReturnType<typeof useReaderPagingHelpers> & {
 
 export function useReaderEffects({
   appliedReaderStateAutoSaveGuardRef,
+  clearVerticalPageVisibility,
   currentPageIndex,
   debugPageOverflow,
   episode,
@@ -83,11 +82,13 @@ export function useReaderEffects({
   isEpisodeLoading,
   isReaderFullscreen,
   isReaderSpeechProgressAutoScrollSuppressed,
+  invalidateVerticalPageSnapshot,
   layoutAnchorPositionRef,
   logReaderSpeechDebugEvent,
   measureVerticalPages,
   openImageViewer,
   pendingReadingStateKeyRef,
+  prepareVerticalPageSnapshot,
   readerArticleFontFamilyCss,
   readerArticleFontWeight,
   readerExperimentalFontLayoutVersion,
@@ -108,16 +109,21 @@ export function useReaderEffects({
   selectedEpisodeIndexRef,
   selectedNovelId,
   selectedPosition,
+  selectedPositionRef,
   setCurrentPageIndex,
   setError,
   setIsEpisodeLayoutReady,
   setTotalPages,
   setVerticalLastPageReservePx,
   shouldCapturePageAnchorRef,
+  syncVerticalPageVisibility,
   totalPages,
   verticalLastPageReservePx,
   verticalPagingCacheRef
 }: UseReaderEffectsOptions) {
+  const latestPageVisibilityRef = useRef({ currentPageIndex, debugPageOverflow });
+  latestPageVisibilityRef.current = { currentPageIndex, debugPageOverflow };
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: pending reading keys are mutable guards, not render dependencies.
   useEffect(() => {
     if (pendingReadingStateKeyRef.current === savedReadingStateKey) {
@@ -210,9 +216,13 @@ export function useReaderEffects({
       }
 
       setTotalPages(pendingImageCount > 0 ? 1 : calculatedPages);
+      if (readingMode === "vertical" && pendingImageCount === 0) {
+        prepareVerticalPageSnapshot(viewport);
+      }
+      const currentSelectedPosition = selectedPositionRef.current;
       const isSpeechProgressPosition =
-        selectedPosition !== null && isReaderSpeechProgressAutoScrollSuppressed(selectedPosition);
-      const anchoredPosition = isSpeechProgressPosition ? null : selectedPosition ?? layoutAnchorPositionRef.current;
+        currentSelectedPosition !== null && isReaderSpeechProgressAutoScrollSuppressed(currentSelectedPosition);
+      const anchoredPosition = isSpeechProgressPosition ? null : layoutAnchorPositionRef.current;
       if (anchoredPosition !== null) {
         const scrollBefore = {
           left: viewport.scrollLeft,
@@ -289,7 +299,6 @@ export function useReaderEffects({
     readerExperimentalFontLayoutVersion,
     readerFontSizePx,
     readerLetterSpacingEm,
-    selectedPosition,
     isReaderSpeechProgressAutoScrollSuppressed,
     verticalLastPageReservePx
   ]);
@@ -364,29 +373,33 @@ export function useReaderEffects({
       return;
     }
 
-    const { pageSize } = getPagingMetrics(viewport, readingMode);
-    if (pageSize > 0) {
-      const scrollBefore = {
+    const scrollBefore = {
+      left: viewport.scrollLeft,
+      top: viewport.scrollTop
+    };
+    scrollToPage(viewport, currentPageIndex, readingMode);
+    logReaderSpeechDebugEvent("page-index-scroll", {
+      currentPageIndex,
+      readingMode,
+      scrollBefore,
+      scrollAfter: {
         left: viewport.scrollLeft,
         top: viewport.scrollTop
-      };
-      scrollToPage(viewport, currentPageIndex, readingMode);
-      logReaderSpeechDebugEvent("page-index-scroll", {
-        currentPageIndex,
-        readingMode,
-        scrollBefore,
-        scrollAfter: {
-          left: viewport.scrollLeft,
-          top: viewport.scrollTop
-        }
-      });
-    }
+      }
+    });
   }, [currentPageIndex, screenMode, readingMode]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: overflow visibility is synchronized to DOM layout and reader style changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the snapshot is rebuilt only when DOM layout inputs change.
   useEffect(() => {
     const viewport = readerViewportRef.current;
-    if (!viewport) {
+    if (
+      !viewport ||
+      screenMode !== "reader" ||
+      !episode ||
+      readingMode !== "vertical" ||
+      !isEpisodeLayoutReady
+    ) {
+      clearVerticalPageVisibility();
       return;
     }
 
@@ -395,52 +408,7 @@ export function useReaderEffects({
       return;
     }
 
-    const getVisibilityTargets = () =>
-      Array.from(
-        article.querySelectorAll<HTMLElement>(
-          '.reader-dash-run, [data-reader-visibility-fragment], [data-reader-pagination-fragment="image"], [data-reader-pagination-fragment="html"]'
-        )
-      );
-
-    const clearOverflowState = () => {
-      for (const target of getVisibilityTargets()) {
-        target.classList.remove(READER_PAGE_OVERFLOW_HIDDEN_CLASS, READER_PAGE_OVERFLOW_DEBUG_CLASS);
-      }
-    };
-
     let overflowRafId = 0;
-
-    const runOverflowState = () => {
-      const { verticalPages } = getPagingMetrics(viewport, readingMode);
-      const currentPage = verticalPages?.[currentPageIndex];
-      if (!currentPage) {
-        clearOverflowState();
-        return;
-      }
-
-      const viewportRect = viewport.getBoundingClientRect();
-      const targets = getVisibilityTargets();
-      for (const target of targets) {
-        const rects = Array.from(target.getClientRects()).filter((rect) => rect.width > 0 && rect.height > 0);
-        const isOnCurrentPage =
-          rects.length === 0 ||
-          rects.some((rect) =>
-            isRectWithinVerticalPage(
-              rect,
-              {
-                viewportRectLeft: viewportRect.left,
-                scrollLeft: viewport.scrollLeft,
-                clientLeft: viewport.clientLeft,
-                shiftX: currentPage.shiftX
-              },
-              currentPage
-            )
-          );
-
-        target.classList.toggle(READER_PAGE_OVERFLOW_HIDDEN_CLASS, !isOnCurrentPage && !debugPageOverflow);
-        target.classList.toggle(READER_PAGE_OVERFLOW_DEBUG_CLASS, !isOnCurrentPage && debugPageOverflow);
-      }
-    };
 
     const scheduleOverflowState = () => {
       if (overflowRafId !== 0) {
@@ -449,14 +417,11 @@ export function useReaderEffects({
 
       overflowRafId = window.requestAnimationFrame(() => {
         overflowRafId = 0;
-        runOverflowState();
+        const latest = latestPageVisibilityRef.current;
+        prepareVerticalPageSnapshot(viewport);
+        syncVerticalPageVisibility(latest.currentPageIndex, latest.debugPageOverflow);
       });
     };
-
-    if (screenMode !== "reader" || !episode || readingMode !== "vertical") {
-      clearOverflowState();
-      return;
-    }
 
     scheduleOverflowState();
     const MutationObserverConstructor =
@@ -467,11 +432,13 @@ export function useReaderEffects({
         if (overflowRafId !== 0) {
           window.cancelAnimationFrame(overflowRafId);
         }
-        clearOverflowState();
+        clearVerticalPageVisibility();
       };
     }
 
     const mutationObserver = new MutationObserverConstructor(() => {
+      clearVerticalPageVisibility();
+      invalidateVerticalPageSnapshot();
       scheduleOverflowState();
     });
     mutationObserver.observe(article, { childList: true, subtree: true });
@@ -481,11 +448,9 @@ export function useReaderEffects({
       if (overflowRafId !== 0) {
         window.cancelAnimationFrame(overflowRafId);
       }
-      clearOverflowState();
+      clearVerticalPageVisibility();
     };
   }, [
-    currentPageIndex,
-    debugPageOverflow,
     episode?.contentEtag,
     isReaderFullscreen,
     isEpisodeLayoutReady,
@@ -498,6 +463,14 @@ export function useReaderEffects({
     screenMode,
     totalPages
   ]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cached page visibility follows page state after layout initialization.
+  useEffect(() => {
+    if (screenMode !== "reader" || !episode || readingMode !== "vertical" || !isEpisodeLayoutReady) {
+      return;
+    }
+    syncVerticalPageVisibility(currentPageIndex, debugPageOverflow);
+  }, [currentPageIndex, debugPageOverflow, episode?.contentEtag, isEpisodeLayoutReady, readingMode, screenMode]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: autosave is intentionally scheduled by page, layout, and reader state signals.
   useEffect(() => {
@@ -694,7 +667,7 @@ export function useReaderEffects({
 
     firstFrameId = window.requestAnimationFrame(() => {
       secondFrameId = window.requestAnimationFrame(() => {
-        const position = getReaderPositionFromViewport(viewport, readingMode);
+        const position = getCurrentReaderViewportPosition();
         if (position !== null) {
           layoutAnchorPositionRef.current = position;
         }

@@ -238,6 +238,36 @@ export function toViewportContentOffset(
   return scrollLeft + rectEdge - viewportRectLeft - clientLeft;
 }
 
+export function findVerticalPageIndexesForContentMidpoint(
+  pages: ReadonlyArray<Pick<VerticalPagingPage, "start" | "end" | "shiftX">>,
+  midpoint: number
+): number[] {
+  if (!Number.isFinite(midpoint)) {
+    return [];
+  }
+
+  const indexes: number[] = [];
+  for (let index = 0; index < pages.length; index += 1) {
+    const page = pages[index];
+    if (
+      !page ||
+      !Number.isFinite(page.start) ||
+      !Number.isFinite(page.end) ||
+      !Number.isFinite(page.shiftX)
+    ) {
+      continue;
+    }
+    const adjustedMidpoint = midpoint - page.shiftX;
+    if (
+      adjustedMidpoint >= page.start - PAGE_BOUNDARY_EPSILON &&
+      adjustedMidpoint <= page.end + PAGE_BOUNDARY_EPSILON
+    ) {
+      indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
 export function isRectWithinVerticalPage(
   rect: Pick<DOMRect, "left" | "right" | "width" | "height">,
   metrics: {

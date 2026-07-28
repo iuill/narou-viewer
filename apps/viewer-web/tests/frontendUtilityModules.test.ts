@@ -40,6 +40,7 @@ import {
   buildVerticalPages,
   buildVerticalPageOffsets,
   detectWebKitEngine,
+  findVerticalPageIndexesForContentMidpoint,
   hasMeaningfulVerticalReserveChange,
   isRectWithinVerticalPage,
   normalizeVerticalReservePx,
@@ -286,6 +287,24 @@ describe("frontend utility modules", () => {
     expect(buildVerticalPages([0, 180], 180, 300)).toEqual([
       { start: 0, end: 180, offset: 0, blankLeft: 120, blankRight: 0, shiftX: 120 }
     ]);
+  });
+
+  it("assigns vertical content to every matching shifted page and rejects invalid geometry", () => {
+    const pages = [
+      { start: 700, end: 1000, shiftX: 0 },
+      { start: 400, end: 700, shiftX: 0 },
+      { start: 0, end: 250, shiftX: 50 }
+    ];
+
+    expect(findVerticalPageIndexesForContentMidpoint(pages, 700)).toEqual([0, 1]);
+    expect(findVerticalPageIndexesForContentMidpoint(pages, 200)).toEqual([2]);
+    expect(findVerticalPageIndexesForContentMidpoint(pages, Number.NaN)).toEqual([]);
+    expect(
+      findVerticalPageIndexesForContentMidpoint(
+        [{ start: Number.NaN, end: 100, shiftX: 0 }],
+        50
+      )
+    ).toEqual([]);
   });
 
   it("normalizes vertical reserve px and ignores sub-pixel reserve jitter", () => {
