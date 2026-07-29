@@ -41,8 +41,8 @@ export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="${BUN_INSTALL}/bin:${PATH}"
 # 以下の CLI バージョンは viewer-dev/Dockerfile の ARG と一致させること。
 # Dockerfile 側で焼き込み済みならこのスクリプトはインストールをスキップする。
-OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-0.144.6}"
-GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-1.0.71}"
+OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-latest}"
+GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-latest}"
 PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.17}"
 SERENA_AGENT_VERSION="${SERENA_AGENT_VERSION:-1.3.0}"
 SCC_VERSION="${SCC_VERSION:-v3.7.0}"
@@ -309,11 +309,13 @@ bun run install:locked
 # @playwright/test, PLAYWRIGHT_TEST_VERSION, and the playwright-e2e image tag.
 packages_to_install=()
 
-if [ "$(get_codex_version)" != "${OPENAI_CODEX_VERSION}" ]; then
+if [ "${OPENAI_CODEX_VERSION}" != latest ] \
+  && [ "$(get_codex_version)" != "${OPENAI_CODEX_VERSION}" ]; then
   packages_to_install+=("@openai/codex@${OPENAI_CODEX_VERSION}")
 fi
 
-if [ "$(get_copilot_version)" != "${GITHUB_COPILOT_VERSION}" ]; then
+if [ "${GITHUB_COPILOT_VERSION}" != latest ] \
+  && [ "$(get_copilot_version)" != "${GITHUB_COPILOT_VERSION}" ]; then
   packages_to_install+=("@github/copilot@${GITHUB_COPILOT_VERSION}")
 fi
 

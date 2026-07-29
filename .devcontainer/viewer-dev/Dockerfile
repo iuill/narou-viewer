@@ -48,8 +48,8 @@ ENV PATH=/usr/local/go/bin:${PATH}
 # コンテナ再作成のたびに install-bun-and-deps.sh がツール群を再ダウンロードしないよう
 # イメージに焼き込む。バージョンは install-bun-and-deps.sh のデフォルトと一致させること
 # (不一致の場合は postCreate 側が検出して入れ直すため壊れはしないが、焼き込みが無駄になる)。
-ARG OPENAI_CODEX_VERSION=0.144.6
-ARG GITHUB_COPILOT_VERSION=1.0.71
+ARG OPENAI_CODEX_VERSION=latest
+ARG GITHUB_COPILOT_VERSION=latest
 # Coding-agent screenshot/browser-control CLI. This is intentionally separate
 # from E2E Playwright, which is pinned by @playwright/test and the
 # playwright-e2e image tag.
