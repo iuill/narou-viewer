@@ -126,6 +126,62 @@ func TestGenerateStoresAndLoadsProofreadDocument(t *testing.T) {
 	}
 }
 
+func TestGenerateRetriesInvalidOutputOnceWithCorrectionFeedback(t *testing.T) {
+	calls := 0
+	service := NewService(Dependencies{
+		Library: fakeLibrary{episode: testEpisode()},
+		Settings: fakeSettings{config: &store.ResolvedAIGenerationConfig{
+			APIKey: "test-key", ModelID: "test-model",
+		}},
+		StateDir: t.TempDir(),
+		Generate: func(_ context.Context, _ ai.OpenRouterConfig, messages []ai.ChatMessage) (ai.ChatResult, error) {
+			calls++
+			if calls == 1 {
+				answer, _ := json.Marshal(proofreadOutput{Segments: []proofreadSegment{{
+					ID: 0, Paragraphs: []string{"文の途中です！", "次の文です。"},
+				}}})
+				return ai.ChatResult{Answer: string(answer), TotalTokens: 10}, nil
+			}
+			if len(messages) != 4 || messages[2].Role != "assistant" || messages[3].Role != "user" {
+				t.Fatalf("retry messages = %+v", messages)
+			}
+			retryPrompt, ok := messages[3].Content.(string)
+			if !ok || !strings.Contains(retryPrompt, "空白と改行をすべて除いた文字列") {
+				t.Fatalf("retry prompt = %#v", messages[3].Content)
+			}
+			answer, _ := json.Marshal(proofreadOutput{Segments: []proofreadSegment{{
+				ID: 0, Paragraphs: []string{"文の途中です。", "次の文です。"},
+			}}})
+			return ai.ChatResult{Answer: string(answer), TotalTokens: 20}, nil
+		},
+	})
+
+	response, err := service.Generate(context.Background(), "novel-a", "1")
+	if err != nil || response.Status != "ready" || calls != 2 {
+		t.Fatalf("response=%+v calls=%d err=%v", response, calls, err)
+	}
+}
+
+func TestGenerateReturnsInvalidOutputAfterOneRetry(t *testing.T) {
+	calls := 0
+	service := NewService(Dependencies{
+		Library: fakeLibrary{episode: testEpisode()},
+		Settings: fakeSettings{config: &store.ResolvedAIGenerationConfig{
+			APIKey: "test-key", ModelID: "test-model",
+		}},
+		StateDir: t.TempDir(),
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			calls++
+			return ai.ChatResult{Answer: `{"segments":[]}`}, nil
+		},
+	})
+
+	_, err := service.Generate(context.Background(), "novel-a", "1")
+	if !errors.Is(err, ErrInvalidOutput) || calls != 2 {
+		t.Fatalf("calls=%d err=%v", calls, err)
+	}
+}
+
 func TestEditableSegmentsPreserveBlankParagraphsAsBoundaries(t *testing.T) {
 	document := library.ReaderDocument{Version: 1, Blocks: []library.ReaderBlock{
 		{Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "前半"}}},
@@ -553,11 +609,17 @@ func TestNilLibraryAndFailedUsageAreSafe(t *testing.T) {
 	}
 	service.usageDBPath = dbPath
 	service.recordUsage(
-		time.Unix(1, 0), "novel-a", "1", config, ai.ChatResult{},
+		time.Unix(1, 0), "novel-a", "1", config,
+		[]ai.ChatResult{
+			{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
+			{InputTokens: 7, OutputTokens: 4, TotalTokens: 11},
+		},
 		errors.New("provider failed"),
 	)
 	usage, ok, err := ai.LoadUsage(dbPath)
-	if err != nil || !ok || len(usage.Runs) != 1 || usage.Runs[0].Status != "failed" || usage.Runs[0].ErrorMessage == nil {
+	if err != nil || !ok || len(usage.Runs) != 1 || usage.Runs[0].Status != "failed" ||
+		usage.Runs[0].ErrorMessage == nil || usage.Runs[0].RequestCount != 2 ||
+		usage.Runs[0].TotalTokens != 16 || len(usage.Runs[0].Requests) != 2 {
 		t.Fatalf("usage=%+v ok=%v err=%v", usage, ok, err)
 	}
 }

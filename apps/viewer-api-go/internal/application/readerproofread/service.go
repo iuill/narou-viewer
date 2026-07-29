@@ -202,26 +202,41 @@ func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex
 		ResponseFormat: proofreadResponseFormat(),
 	}
 	started := time.Now()
-	result, err := s.generate(ctx, openRouterConfig, []ai.ChatMessage{
+	messages := []ai.ChatMessage{
 		{Role: "system", Content: proofreadInstructions()},
 		{Role: "user", Content: string(rawInput)},
-	})
-	if err != nil {
-		if errors.Is(err, ai.ErrOpenRouterTruncatedResponse) {
-			err = fmt.Errorf("%w: %v", ErrOutputTooLong, err)
+	}
+	results := make([]ai.ChatResult, 0, 2)
+	var corrected library.ReaderDocument
+	for attempt := 0; attempt < 2; attempt++ {
+		result, generateErr := s.generate(ctx, openRouterConfig, messages)
+		results = append(results, result)
+		if generateErr != nil {
+			if errors.Is(generateErr, ai.ErrOpenRouterTruncatedResponse) {
+				generateErr = fmt.Errorf("%w: %v", ErrOutputTooLong, generateErr)
+			}
+			s.recordUsage(started, novelID, episodeIndex, config, results, generateErr)
+			return Response{}, generateErr
 		}
-		s.recordUsage(started, novelID, episodeIndex, config, result, err)
-		return Response{}, err
-	}
-	var output proofreadOutput
-	if err := json.Unmarshal([]byte(result.Answer), &output); err != nil {
-		s.recordUsage(started, novelID, episodeIndex, config, result, err)
-		return Response{}, fmt.Errorf("%w: JSONを読み取れませんでした: %v", ErrInvalidOutput, err)
-	}
-	corrected, err := applyOutput(episode.ReaderDocument, segments, output)
-	if err != nil {
-		s.recordUsage(started, novelID, episodeIndex, config, result, err)
-		return Response{}, err
+
+		var output proofreadOutput
+		validationErr := json.Unmarshal([]byte(result.Answer), &output)
+		if validationErr != nil {
+			validationErr = fmt.Errorf("%w: JSONを読み取れませんでした: %v", ErrInvalidOutput, validationErr)
+		} else {
+			corrected, validationErr = applyOutput(episode.ReaderDocument, segments, output)
+		}
+		if validationErr == nil {
+			break
+		}
+		if attempt == 1 || !errors.Is(validationErr, ErrInvalidOutput) {
+			s.recordUsage(started, novelID, episodeIndex, config, results, validationErr)
+			return Response{}, validationErr
+		}
+		messages = append(messages,
+			ai.ChatMessage{Role: "assistant", Content: result.Answer},
+			ai.ChatMessage{Role: "user", Content: proofreadRetryInstructions()},
+		)
 	}
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	stored := storedResult{
@@ -229,10 +244,10 @@ func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex
 		SourceETag: episode.ContentEtag, GeneratedAt: generatedAt, ModelID: config.ModelID, ReaderDocument: corrected,
 	}
 	if err := s.write(stored); err != nil {
-		s.recordUsage(started, novelID, episodeIndex, config, result, err)
+		s.recordUsage(started, novelID, episodeIndex, config, results, err)
 		return Response{}, err
 	}
-	s.recordUsage(started, novelID, episodeIndex, config, result, nil)
+	s.recordUsage(started, novelID, episodeIndex, config, results, nil)
 	displayDocument, err := s.applyReaderCorrections(novelID, corrected)
 	if err != nil {
 		return Response{}, err
@@ -578,6 +593,13 @@ func proofreadInstructions() string {
 paragraphs配列の要素は表示上の段落です。JSON schemaに厳密に従ってください。`
 }
 
+func proofreadRetryInstructions() string {
+	return `前回の出力は安全検証に失敗しました。最初の入力JSONと前回の出力を比較し、修正版のJSON全体を返してください。
+各segmentについて、空白と改行をすべて除いた文字列が、最初の入力とUnicode文字単位で完全に一致しなければなりません。
+前回変更した語句、数字、記号、句読点、括弧、表記はすべて最初の入力へ戻し、空白・改行・paragraph境界の校正だけを残してください。
+segmentのidと数を変えず、JSON schemaに厳密に従ってください。`
+}
+
 func proofreadResponseFormat() any {
 	return map[string]any{
 		"type": "json_schema",
@@ -648,7 +670,7 @@ func (s *Service) write(result storedResult) error {
 	return fsatomic.WriteFile(path, raw, 0o600)
 }
 
-func (s *Service) recordUsage(started time.Time, novelID string, episodeIndex string, config *store.ResolvedAIGenerationConfig, result ai.ChatResult, runErr error) {
+func (s *Service) recordUsage(started time.Time, novelID string, episodeIndex string, config *store.ResolvedAIGenerationConfig, results []ai.ChatResult, runErr error) {
 	if strings.TrimSpace(s.usageDBPath) == "" || config == nil {
 		return
 	}
@@ -662,14 +684,25 @@ func (s *Service) recordUsage(started time.Time, novelID string, episodeIndex st
 	}
 	modelID, profileID, profileLabel := config.ModelID, config.ProfileID, config.ProfileLabel
 	feature, workflow, runID := "reader_proofread", "reader_proofread", fmt.Sprintf("reader-proofread-%d", started.UnixNano())
+	answerChars, inputTokens, outputTokens, totalTokens := 0, 0, 0, 0
+	requests := make([]ai.UsageRequest, 0, len(results))
+	for index, result := range results {
+		answerChars += len([]rune(result.Answer))
+		inputTokens += result.InputTokens
+		outputTokens += result.OutputTokens
+		totalTokens += result.TotalTokens
+		requests = append(requests, ai.UsageRequest{
+			RequestIndex: index, Kind: "reader_proofread", InputTokens: result.InputTokens,
+			OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens,
+		})
+	}
 	if err := ai.SaveUsageRun(s.usageDBPath, ai.UsageRun{
 		RunID: runID, Feature: feature, WorkflowName: workflow, Status: status,
 		StartedAt: started.UTC().Format(time.RFC3339Nano), FinishedAt: now.UTC().Format(time.RFC3339Nano),
 		ElapsedMs: int(now.Sub(started).Milliseconds()), NovelID: &novelID, CurrentEpisodeIndex: &episodeIndex,
 		ModelID: &modelID, ProfileID: &profileID, ProfileLabel: &profileLabel, GenerationMode: "remote",
-		AnswerChars: len([]rune(result.Answer)), RequestCount: 1, InputTokens: result.InputTokens,
-		OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, ErrorMessage: errorMessage,
-		Requests: []ai.UsageRequest{{RequestIndex: 0, Kind: "reader_proofread", InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens}},
+		AnswerChars: answerChars, RequestCount: len(results), InputTokens: inputTokens,
+		OutputTokens: outputTokens, TotalTokens: totalTokens, ErrorMessage: errorMessage, Requests: requests,
 	}); err != nil {
 		log.Printf("viewer-api-go: failed to save reader proofread usage: %v", err)
 	}
