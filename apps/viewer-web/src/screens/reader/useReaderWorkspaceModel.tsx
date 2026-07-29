@@ -12,6 +12,7 @@ import { useReaderBookmarks } from "../../hooks/useReaderBookmarks";
 import { useReaderControlsLayout } from "../../hooks/useReaderControlsLayout";
 import { useReaderFullscreen } from "../../hooks/useReaderFullscreen";
 import { useReaderImageViewer } from "../../hooks/useReaderImageViewer";
+import { useReaderAIProofread } from "../../hooks/useReaderAIProofread";
 import { useReaderPagingState } from "../../hooks/useReaderPagingState";
 import { useReaderPanels } from "../../hooks/useReaderPanels";
 import { useReaderPreferences } from "../../hooks/useReaderPreferences";
@@ -109,6 +110,15 @@ export function useReaderWorkspaceModel({
     createEmptyReaderAiAssistantState()
   );
   const [readerNotice, setReaderNotice] = useAutoClearedNotice(2400);
+  const {
+    displayedEpisode,
+    generate: handleGenerateReaderAIProofread,
+    isShowingProofread: isShowingReaderAIProofread,
+    remove: handleDeleteReaderAIProofread,
+    result: readerAIProofreadResult,
+    setIsShowingProofread: setIsShowingReaderAIProofread,
+    state: readerAIProofreadState
+  } = useReaderAIProofread(episode, setError);
   const [pendingNextEpisodeConfirmation, setPendingNextEpisodeConfirmation] = useState<TocEpisode | null>(null);
   const appliedReaderStateAutoSaveGuardRef = useRef<AppliedReaderStateAutoSaveGuard | null>(null);
   const isNextEpisodeConfirmationOpen = pendingNextEpisodeConfirmation !== null;
@@ -239,7 +249,7 @@ export function useReaderWorkspaceModel({
   });
   const { readerControlViewportWidth, readerPageIndicatorWidth } = useReaderControlsLayout({
     currentPageIndex,
-    episode,
+    episode: displayedEpisode,
     readerPageIndicatorRef,
     readerShellRef,
     readerViewportRef,
@@ -261,7 +271,7 @@ export function useReaderWorkspaceModel({
     verticalPagingCacheRef
   } = useReaderPagingHelpers({
     currentPageIndex,
-    episode,
+    episode: displayedEpisode,
     readerArticleFontFamilyCss,
     readerArticleFontWeight,
     readerExperimentalFontLayoutVersion,
@@ -329,7 +339,7 @@ export function useReaderWorkspaceModel({
   } = useReaderDerivedState({
     currentNovel,
     currentPageIndex,
-    episode,
+    episode: displayedEpisode,
     imageViewer,
     imageViewerZoomPercent,
     isEpisodeLayoutReady,
@@ -374,7 +384,7 @@ export function useReaderWorkspaceModel({
     stopReaderSpeech
   } = useReaderSpeech({
     currentPageIndex,
-    episode,
+    episode: displayedEpisode,
     getCurrentPageIndexFromViewport,
     getCurrentReaderViewportPosition,
     getPagingMetrics,
@@ -539,7 +549,7 @@ export function useReaderWorkspaceModel({
     clearVerticalPageVisibility,
     currentPageIndex,
     debugPageOverflow,
-    episode,
+    episode: displayedEpisode,
     getCurrentPageIndexFromViewport,
     getCurrentReaderViewportPosition,
     getPagingMetrics,
@@ -610,7 +620,7 @@ export function useReaderWorkspaceModel({
     canUseReaderPageActions,
     closeReaderPanel,
     edgeTapPageMoveDirections,
-    episode,
+    episode: displayedEpisode,
     episodeContentEtag: episode?.contentEtag ?? null,
     handleCreateBookmark,
     handleOpenCharacterSummary,
@@ -701,7 +711,7 @@ export function useReaderWorkspaceModel({
     currentNovel,
     debugPageOverflow,
     displayedPageNumber,
-    episode,
+    episode: displayedEpisode,
     episodeDisplayLookup,
     error,
     hasStableReaderEpisode,
@@ -720,6 +730,9 @@ export function useReaderWorkspaceModel({
     isReaderAiAssistantOpen,
     isReaderBookmarksOpen,
     isReaderCorrectionUnavailable,
+    readerAIProofreadState,
+    hasReaderAIProofread: readerAIProofreadResult?.status === "ready",
+    isShowingReaderAIProofread,
     isReaderExperimentalFontOpen,
     isReaderFullscreen,
     isReaderInfoOpen,
@@ -797,6 +810,8 @@ export function useReaderWorkspaceModel({
     handleCreateBookmark,
     handleDeleteBookmark,
     handleGenerateCharacterSummary,
+    handleGenerateReaderAIProofread,
+    handleDeleteReaderAIProofread,
     handleOpenCharacterSummary,
     handleOpenTerms,
     handleImageViewerPointerDown,
@@ -828,6 +843,7 @@ export function useReaderWorkspaceModel({
     setIsImageViewerInfoOpen,
     setIsReaderOverflowOpen,
     setIsShowingAllBookmarks,
+    setIsShowingReaderAIProofread,
     setReaderAiAssistantState,
     setReaderExperimentalFontId,
     setReaderExperimentalFontWeight,

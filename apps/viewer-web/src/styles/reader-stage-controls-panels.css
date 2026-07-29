@@ -803,6 +803,43 @@
   gap: 10px;
 }
 
+.reader-settings-ai-proofread {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  border-top: 1px solid var(--reader-surface-border);
+  padding-top: 12px;
+}
+
+.reader-settings-ai-proofread-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader-settings-ai-proofread-actions button {
+  flex: 1 1 9rem;
+}
+
+.reader-ai-proofread-badge {
+  position: fixed;
+  right: 66px;
+  bottom: 10px;
+  z-index: 4;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--reader-surface-border) 58%);
+  border-radius: 50%;
+  padding: 0;
+  background: color-mix(in srgb, var(--reader-surface) 90%, var(--accent-soft) 10%);
+  color: var(--text);
+  box-shadow: var(--reader-surface-shadow);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 .reader-settings-field {
   display: grid;
   gap: 6px;

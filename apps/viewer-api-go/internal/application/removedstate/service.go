@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
+	"narou-viewer/apps/viewer-api-go/internal/application/readerproofread"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	extractdomain "narou-viewer/apps/viewer-api-go/internal/extraction"
 	"narou-viewer/apps/viewer-api-go/internal/publications"
@@ -24,6 +25,7 @@ type CleanupResult struct {
 	PublicationEntriesDeleted    int `json:"publicationEntriesDeleted"`
 	AIUsageRunsDeleted           int `json:"aiUsageRunsDeleted"`
 	ReaderSearchCacheRowsDeleted int `json:"readerSearchCacheRowsDeleted"`
+	ReaderAIProofreadsDeleted    int `json:"readerAiProofreadsDeleted"`
 }
 
 type Service struct {
@@ -110,6 +112,12 @@ func (s *Service) PruneRemovedNovelState(novelIDs []string) (CleanupResult, erro
 			return cleanup, err
 		}
 		cleanup.AIUsageRunsDeleted += usageDeleted
+
+		proofreadsDeleted, err := readerproofread.PruneNovelState(s.stateDir, novelID)
+		if err != nil {
+			return cleanup, err
+		}
+		cleanup.ReaderAIProofreadsDeleted += proofreadsDeleted
 
 	}
 	return cleanup, nil

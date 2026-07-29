@@ -23,6 +23,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/application/fetchercommands"
 	"narou-viewer/apps/viewer-api-go/internal/application/libraryview"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
+	"narou-viewer/apps/viewer-api-go/internal/application/readerproofread"
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerview"
 	"narou-viewer/apps/viewer-api-go/internal/config"
@@ -66,6 +67,7 @@ type Server struct {
 	fetcherCommands    *fetchercommands.Service
 	libraryView        *libraryview.Service
 	readerAssistant    *readerassistant.Service
+	readerProofread    *readerproofread.Service
 	readerView         *readerview.Service
 	extraction         *extractionruntime.Runtime
 	extractionJobQueue *extractionjobs.Service
@@ -85,6 +87,7 @@ type ServerDependencies struct {
 	FetcherCommand                  *fetchercommands.Service
 	LibraryView                     *libraryview.Service
 	ReaderAssistant                 *readerassistant.Service
+	ReaderProofread                 *readerproofread.Service
 	ReaderView                      *readerview.Service
 	Extraction                      *extractionruntime.Runtime
 	ExtractionQueue                 *extractionjobs.Service
@@ -120,6 +123,13 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 			TextCache:   textCache,
 		})
 	}
+	readerProofreadService := deps.ReaderProofread
+	if readerProofreadService == nil {
+		readerProofreadService = readerproofread.NewService(readerproofread.Dependencies{
+			Library: deps.Library, Settings: deps.StateStore, StateDir: stateDir,
+			UsageDBPath: filepath.Join(stateDir, "ai_usage.sqlite"),
+		})
+	}
 	extractionRuntime := deps.Extraction
 	if extractionRuntime == nil {
 		extractionRuntime = extractionruntime.NewRuntime(extractionruntime.RuntimeDependencies{
@@ -147,6 +157,7 @@ func NewServerWithDependencies(deps ServerDependencies) http.Handler {
 		fetcherCommands:    deps.FetcherCommand,
 		libraryView:        libraryViewService,
 		readerAssistant:    readerAssistantService,
+		readerProofread:    readerProofreadService,
 		readerView:         readerViewService,
 		extraction:         extractionRuntime,
 		extractionJobQueue: extractionJobQueue,

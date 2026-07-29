@@ -179,6 +179,16 @@ export type EpisodeResponse = {
   contentEtag: string;
 };
 
+export type ReaderAIProofreadResponse = {
+  status: "not_generated" | "ready";
+  novelId: string;
+  episodeIndex: EpisodeIndex;
+  sourceEtag: string;
+  generatedAt: string | null;
+  modelId: string | null;
+  readerDocument?: ReaderDocumentResponse;
+};
+
 export type NovelSearchMatch = {
   episodeIndex: EpisodeIndex;
   episodeNumber: number;

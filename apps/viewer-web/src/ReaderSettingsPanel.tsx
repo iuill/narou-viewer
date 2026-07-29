@@ -1,5 +1,6 @@
 import type { ReaderFontFamily, ReaderTheme, ReadingMode } from "./readerPreferences";
 import { ReaderFloatingPanel } from "./ReaderFloatingPanel";
+import type { ReaderAIProofreadState } from "./hooks/useReaderAIProofread";
 
 type Props = {
   readingMode: ReadingMode;
@@ -12,6 +13,9 @@ type Props = {
   parenthesisNormalizationEnabled: boolean;
   halfwidthAlnumPunctuationNormalizationEnabled: boolean;
   isReaderCorrectionSaving: boolean;
+  readerAIProofreadState: ReaderAIProofreadState;
+  isShowingAIProofread: boolean;
+  hasAIProofread: boolean;
   readerFontFamily: ReaderFontFamily;
   readerTheme: ReaderTheme;
   onClose: () => void;
@@ -24,6 +28,9 @@ type Props = {
   onHyphenDashNormalizationChange: (enabled: boolean) => void;
   onParenthesisNormalizationChange: (enabled: boolean) => void;
   onHalfwidthAlnumPunctuationNormalizationChange: (enabled: boolean) => void;
+  onGenerateAIProofread: () => void;
+  onDeleteAIProofread: () => void;
+  onShowingAIProofreadChange: (enabled: boolean) => void;
   onReaderFontFamilyChange: (fontFamily: ReaderFontFamily) => void;
   onReaderThemeChange: (theme: ReaderTheme) => void;
   onReset: () => void;
@@ -62,6 +69,9 @@ export function ReaderSettingsPanel({
   parenthesisNormalizationEnabled,
   halfwidthAlnumPunctuationNormalizationEnabled,
   isReaderCorrectionSaving,
+  readerAIProofreadState,
+  isShowingAIProofread,
+  hasAIProofread,
   readerFontFamily,
   readerTheme,
   onClose,
@@ -74,6 +84,9 @@ export function ReaderSettingsPanel({
   onHyphenDashNormalizationChange,
   onParenthesisNormalizationChange,
   onHalfwidthAlnumPunctuationNormalizationChange,
+  onGenerateAIProofread,
+  onDeleteAIProofread,
+  onShowingAIProofreadChange,
   onReaderFontFamilyChange,
   onReaderThemeChange,
   onReset
@@ -267,6 +280,56 @@ export function ReaderSettingsPanel({
               <option value="enabled">オン</option>
             </select>
           </label>
+          <div className="reader-settings-ai-proofread">
+            <div>
+              <span className="reader-panel-section-label">AIによる読みやすさ補正</span>
+              <p className="reader-panel-section-description">AI校正版は表示用です。取得した原文は変更されません。</p>
+            </div>
+            {hasAIProofread ? (
+              <>
+                <label className="reader-settings-field">
+                  <span>表示する本文</span>
+                  <select
+                    disabled={readerAIProofreadState === "deleting"}
+                    onChange={(event) => onShowingAIProofreadChange(event.target.value === "proofread")}
+                    value={isShowingAIProofread ? "proofread" : "original"}
+                  >
+                    <option value="original">原文</option>
+                    <option value="proofread">AI校正版</option>
+                  </select>
+                </label>
+                <div className="reader-settings-ai-proofread-actions">
+                  <button
+                    disabled={readerAIProofreadState === "generating" || readerAIProofreadState === "deleting"}
+                    onClick={onGenerateAIProofread}
+                    type="button"
+                  >
+                    {readerAIProofreadState === "generating" ? "再生成中..." : "再生成"}
+                  </button>
+                  <button
+                    disabled={readerAIProofreadState === "generating" || readerAIProofreadState === "deleting"}
+                    onClick={onDeleteAIProofread}
+                    type="button"
+                  >
+                    {readerAIProofreadState === "deleting" ? "削除中..." : "校正版を削除"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                className="reader-panel-link reader-panel-link-button"
+                disabled={readerAIProofreadState === "loading" || readerAIProofreadState === "generating"}
+                onClick={onGenerateAIProofread}
+                type="button"
+              >
+                {readerAIProofreadState === "loading"
+                  ? "状態を確認中..."
+                  : readerAIProofreadState === "generating"
+                    ? "AI校正中..."
+                    : "この話をAI校正"}
+              </button>
+            )}
+          </div>
         </section>
         <section className="reader-panel-card reader-panel-card--compact reader-settings-section">
           <p className="reader-panel-section-label">デバッグ</p>

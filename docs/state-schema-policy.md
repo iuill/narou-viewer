@@ -168,6 +168,7 @@ path は `data/` からの相対 path を表す。
 | `VA-EXTRACTION-INDEX` | `state/extraction_jobs/index/*.yaml` | viewer-api / 実装済み | 派生 index | job file から rebuild 可 | 作品単位で削除 | job ID、進捗 |
 | `VA-EXTRACTION-CHECKPOINT` | `state/extraction_jobs/checkpoints/*.json` | viewer-api / 実装済み | 一時 state | 再実行できるが provider request と料金が再発生し得る | commit 後と作品削除時に削除 | 未commit model output |
 | `VA-AI-USAGE` | `state/ai_usage.sqlite` | viewer-api / 実装済み | 監査・利用履歴 | 再構築不能。消失しても現在の reader / generation state は壊れないが履歴を失う | 作品紐づき run を削除 | 利用 metadata、会話件数・文字数、転記されたユーザー文言、本文 excerpt / snippet / passage を含み得る制限付き tool I/O |
+| `VA-READER-AI-PROOFREAD` | `state/reader_ai_proofreads/**/*.json` | viewer-api / 実装済み | 派生 view | 原文とLLM設定から再生成可能。消失・不整合時は原文表示へ戻る | 利用者操作では話単位、作品削除時は作品単位で削除 | 第三者作品由来のAI校正版 |
 | `VA-READER-SEARCH` | `state/reader_search.sqlite` | viewer-api / 実装済み | 再生成可能 cache | canonical episode と reader document から lazy rebuild 可 | 作品行を削除 | 第三者作品本文の plain text |
 | `NF-LIBRARY` | `novel-fetcher/library.sqlite` | novel-fetcher / 実装済み | library catalog・索引・取得状態の正本 | `works/**` と一体で保護。DB または file 単独 restore は不整合要因 | fetcher の作品削除で処理 | 作品 metadata、取得履歴 |
 | `NF-CANONICAL-EPISODE` | `novel-fetcher/works/**/episodes/*.json` | novel-fetcher / 実装済み | 取得済み本文の local canonical copy | 再取得できても削除・改稿により同一内容を保証できない | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者作品本文 |

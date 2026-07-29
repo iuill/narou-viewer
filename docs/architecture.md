@@ -162,6 +162,9 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `state/reader_search.sqlite`
   - 読書AI `search_full_text` 用の plain text cache。`novel_id`、`episode_index`、`content_etag` をキーにし、検索時の lazy fill と本文閲覧時の write-through で更新する。
   - 取得済み本文と reader document から再生成できる派生キャッシュであり、破損・削除時も読書状態や AI 設定の正本には影響しない。
+- `state/reader_ai_proofreads/`
+  - 現在話をLLMで保守的に校正したreader documentを、原文content ETagとprompt versionに紐づけて保存する。
+  - 取得済み本文を変更しない再生成可能な派生データであり、不一致・破損・削除時は原文表示へ戻る。
 
 ### 5.3 `viewer-web` / ブラウザが管理
 
