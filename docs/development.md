@@ -12,7 +12,7 @@
 2. `Dev Containers: Reopen in Container` を実行します。
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
    - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.25.12 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
-   - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) も `bun add -g` で固定版インストールされます。coding agent 向けのブラウザ操作 CLI として `@playwright/cli` (`playwright-cli`) も固定版インストールされ、Go LSP の `gopls` も導入されます。
+   - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) のbuild時点の最新版を導入します。coding agent 向けのブラウザ操作 CLIである `@playwright/cli` (`playwright-cli`) は固定版をインストールし、Go LSP の `gopls` も導入します。
    - Dev Container は `${localEnv:HOME}/.codex/auth.json` だけを `/home/node/.codex/auth.json` へ read-write で bind mount します。ローカルでは Dev Container を開く前にホスト側で `codex login` を実行しておくと、その認証を複数の repository / worktree のコンテナから共有できます。`config.toml`、session、history、database、log など `.codex` 配下の他の状態は共有しません。
    - 認証ファイルがまだ存在しない場合は `initializeCommand` が権限 `0600` の空ファイルを作るため、コンテナ起動後に `codex login` できます。`auth.json` 自体が bind mount point になるため、コンテナ内の `codex logout` ではファイルを削除できない場合があります。認証情報を完全に削除する場合は、Dev Container を停止してホスト側で `codex logout` を実行するか、`${HOME}/.codex/auth.json` を削除してください。GitHub Codespaces でのこの認証 mount 経路は未検証です。ローカルホストの認証は引き継がれないため Codespace 内で別途ログインし、コンテナ内で削除できない認証情報を完全に破棄する場合は Codespace 自体を削除してください。
    - GitHub CLI はホストの `${HOME}/.config/gh` をコンテナの `/home/node/.config/gh` へ read-write で bind mountし、`GH_CONFIG_DIR` も同じコンテナ内パスへ設定します。ホストで `gh auth login` 済みなら、コンテナ内で再ログインする必要はありません。コンテナ内でのログイン、ログアウト、アカウント切り替えはホストにも反映されます。
@@ -38,7 +38,7 @@ Pull Request のタイトル、本文、通常コメント、review comment は�
 bash .devcontainer/scripts/install-bun-and-deps.sh
 ```
 
-このスクリプトは `bubblewrap` / `ripgrep` の補完、Bun 本体、workspace 依存、`Codex CLI` / `Copilot CLI` / `@playwright/cli` (`playwright-cli`) の固定版グローバル CLI、`gopls` をまとめて導入します。既定では同じ版がすでに入っていれば再インストールを省略します。`Codex could not find system bubblewrap at /usr/bin/bwrap` という警告が出た場合も、同じスクリプトで `bubblewrap` をインストールできます。インストール後にターミナルや Codex セッションを開き直すと警告が消える想定です。
+このスクリプトは `bubblewrap` / `ripgrep` の補完、Bun 本体、workspace 依存、`Codex CLI` / `Copilot CLI`、固定版の `@playwright/cli` (`playwright-cli`)、`gopls` をまとめて導入します。Codex CLIとCopilot CLIの最新版はDev Container imageのbuild時に導入し、このスクリプトでは重複インストールしません。`Codex could not find system bubblewrap at /usr/bin/bwrap` という警告が出た場合も、同じスクリプトで `bubblewrap` をインストールできます。インストール後にターミナルや Codex セッションを開き直すと警告が消える想定です。
 
 4. ブラウザで `http://localhost:5173` を開きます。`.devcontainer/.env` で `VIEWER_WEB_HOST_PORT` を変更した worktree では、そのポートを使います。
 5. API の疎通確認は `http://localhost:8080/api/health` で行えます。`.devcontainer/.env` で `VIEWER_API_HOST_PORT` を変更した worktree では、そのポートを使います。
