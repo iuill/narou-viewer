@@ -123,6 +123,20 @@ func TestReaderAIProofreadRouteErrors(t *testing.T) {
 	if rich.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("rich status=%d body=%s", rich.Code, rich.Body.String())
 	}
+
+	tooLongService := readerproofread.NewService(readerproofread.Dependencies{
+		Library: routeProofreadLibrary{}, Settings: routeProofreadSettings{}, StateDir: t.TempDir(),
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			return ai.ChatResult{}, readerproofread.ErrOutputTooLong
+		},
+	})
+	tooLong := httptest.NewRecorder()
+	(&Server{readerProofread: tooLongService}).handleEpisodeAIProofread(
+		tooLong, httptest.NewRequest(http.MethodPost, path, nil), "novel-a", "1",
+	)
+	if tooLong.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("too long status=%d body=%s", tooLong.Code, tooLong.Body.String())
+	}
 }
 
 type routeRichProofreadLibrary struct{}

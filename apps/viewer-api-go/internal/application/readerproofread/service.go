@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -19,10 +21,12 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
 
-const promptVersion = 4
+const promptVersion = 5
 
 var ErrUnavailable = errors.New("AI校正はLLM連携が未設定のため利用できません。AI機能の設定でOpenRouter APIキーとモデルを設定してください。")
 var ErrUnsupportedDocument = errors.New("この話にはAI校正できる本文がありません。")
+var ErrInvalidEpisodeIndex = errors.New("episodeIndex must be a non-negative integer string")
+var ErrOutputTooLong = errors.New("この話はAI校正の出力上限を超えました。出力上限の大きいモデルを選択してください。")
 
 type Library interface {
 	GetEpisode(context.Context, string, string) (*library.EpisodeResponse, error)
@@ -49,6 +53,14 @@ type Service struct {
 	stateDir    string
 	usageDBPath string
 	generate    GenerateFunc
+	flightMu    sync.Mutex
+	flights     map[string]*generationFlight
+}
+
+type generationFlight struct {
+	done     chan struct{}
+	response Response
+	err      error
 }
 
 type Response struct {
@@ -94,10 +106,16 @@ func NewService(deps Dependencies) *Service {
 	if generate == nil {
 		generate = ai.GenerateOpenRouterChat
 	}
-	return &Service{library: deps.Library, settings: deps.Settings, stateDir: deps.StateDir, usageDBPath: deps.UsageDBPath, generate: generate}
+	return &Service{
+		library: deps.Library, settings: deps.Settings, stateDir: deps.StateDir,
+		usageDBPath: deps.UsageDBPath, generate: generate, flights: map[string]*generationFlight{},
+	}
 }
 
 func (s *Service) Get(ctx context.Context, novelID string, episodeIndex string) (Response, error) {
+	if !isValidEpisodeIndex(episodeIndex) {
+		return Response{}, ErrInvalidEpisodeIndex
+	}
 	episode, err := s.loadEpisode(ctx, novelID, episodeIndex)
 	if err != nil || episode == nil {
 		return Response{}, err
@@ -122,6 +140,33 @@ func (s *Service) Get(ctx context.Context, novelID string, episodeIndex string) 
 }
 
 func (s *Service) Generate(ctx context.Context, novelID string, episodeIndex string) (Response, error) {
+	if !isValidEpisodeIndex(episodeIndex) {
+		return Response{}, ErrInvalidEpisodeIndex
+	}
+	key := novelID + "\x00" + episodeIndex
+	s.flightMu.Lock()
+	if flight, ok := s.flights[key]; ok {
+		s.flightMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.response, flight.err
+		case <-ctx.Done():
+			return Response{}, ctx.Err()
+		}
+	}
+	flight := &generationFlight{done: make(chan struct{})}
+	s.flights[key] = flight
+	s.flightMu.Unlock()
+
+	flight.response, flight.err = s.generateOnce(ctx, novelID, episodeIndex)
+	s.flightMu.Lock()
+	delete(s.flights, key)
+	close(flight.done)
+	s.flightMu.Unlock()
+	return flight.response, flight.err
+}
+
+func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex string) (Response, error) {
 	episode, err := s.loadEpisode(ctx, novelID, episodeIndex)
 	if err != nil || episode == nil {
 		return Response{}, err
@@ -160,7 +205,10 @@ func (s *Service) Generate(ctx context.Context, novelID string, episodeIndex str
 		{Role: "user", Content: string(rawInput)},
 	})
 	if err != nil {
-		s.recordUsage(started, novelID, episodeIndex, config, ai.ChatResult{}, err)
+		if errors.Is(err, ai.ErrOpenRouterTruncatedResponse) {
+			err = fmt.Errorf("%w: %v", ErrOutputTooLong, err)
+		}
+		s.recordUsage(started, novelID, episodeIndex, config, result, err)
 		return Response{}, err
 	}
 	var output proofreadOutput
@@ -179,6 +227,7 @@ func (s *Service) Generate(ctx context.Context, novelID string, episodeIndex str
 		SourceETag: episode.ContentEtag, GeneratedAt: generatedAt, ModelID: config.ModelID, ReaderDocument: corrected,
 	}
 	if err := s.write(stored); err != nil {
+		s.recordUsage(started, novelID, episodeIndex, config, result, err)
 		return Response{}, err
 	}
 	s.recordUsage(started, novelID, episodeIndex, config, result, nil)
@@ -194,6 +243,9 @@ func (s *Service) Generate(ctx context.Context, novelID string, episodeIndex str
 }
 
 func (s *Service) Delete(novelID string, episodeIndex string) error {
+	if !isValidEpisodeIndex(episodeIndex) {
+		return ErrInvalidEpisodeIndex
+	}
 	err := os.Remove(s.path(novelID, episodeIndex))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -314,6 +366,9 @@ func applyOutput(document library.ReaderDocument, source []sourceSegment, output
 		if !preservesSentenceEndingParagraphStyle(segment.Paragraphs, corrected.Paragraphs) {
 			return library.ReaderDocument{}, errors.New("AI校正結果が原文の文末段落スタイルを変更したため破棄しました。")
 		}
+		if !preservesIdeographicIndentation(segment.Paragraphs, corrected.Paragraphs) {
+			return library.ReaderDocument{}, errors.New("AI校正結果が原文の全角字下げを変更したため破棄しました。")
+		}
 		replacement := make([]library.ReaderBlock, 0, len(corrected.Paragraphs))
 		for _, paragraph := range corrected.Paragraphs {
 			if strings.TrimSpace(paragraph) == "" {
@@ -321,7 +376,7 @@ func applyOutput(document library.ReaderDocument, source []sourceSegment, output
 			}
 			replacement = append(replacement, library.ReaderBlock{
 				Type: "paragraph", Section: segment.Section,
-				Inlines: []library.ReaderInline{{Type: "text", Text: paragraph}},
+				Inlines: paragraphInlines(paragraph),
 			})
 		}
 		if len(replacement) == 0 {
@@ -368,6 +423,53 @@ func sentenceEndingParagraphBoundaries(paragraphs []string) map[int]struct{} {
 		}
 	}
 	return boundaries
+}
+
+func preservesIdeographicIndentation(source []string, corrected []string) bool {
+	sourceIndentation := ideographicIndentationByOffset(source)
+	correctedIndentation := ideographicIndentationByOffset(corrected)
+	for offset, indentation := range sourceIndentation {
+		if correctedIndentation[offset] != indentation {
+			return false
+		}
+	}
+	return true
+}
+
+func ideographicIndentationByOffset(paragraphs []string) map[int]string {
+	indentation := map[int]string{}
+	offset := 0
+	for _, paragraph := range paragraphs {
+		var prefix strings.Builder
+		for _, r := range paragraph {
+			if !unicode.IsSpace(r) {
+				break
+			}
+			prefix.WriteRune(r)
+		}
+		value := prefix.String()
+		if strings.ContainsRune(value, '\u3000') {
+			indentation[offset] = value
+		}
+		offset += len([]rune(nonWhitespaceText([]string{paragraph})))
+	}
+	return indentation
+}
+
+func paragraphInlines(paragraph string) []library.ReaderInline {
+	paragraph = strings.ReplaceAll(paragraph, "\r\n", "\n")
+	paragraph = strings.ReplaceAll(paragraph, "\r", "\n")
+	parts := strings.Split(paragraph, "\n")
+	inlines := make([]library.ReaderInline, 0, len(parts)*2-1)
+	for index, part := range parts {
+		if part != "" {
+			inlines = append(inlines, library.ReaderInline{Type: "text", Text: part})
+		}
+		if index < len(parts)-1 {
+			inlines = append(inlines, library.ReaderInline{Type: "lineBreak"})
+		}
+	}
+	return inlines
 }
 
 func endsWithSentencePunctuation(text string) bool {
@@ -417,6 +519,18 @@ func (s *Service) path(novelID string, episodeIndex string) string {
 	return filepath.Join(s.stateDir, "reader_ai_proofreads", hex.EncodeToString(sum[:]), episodeIndex+".json")
 }
 
+func isValidEpisodeIndex(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) read(novelID string, episodeIndex string) (storedResult, bool, error) {
 	raw, err := os.ReadFile(s.path(novelID, episodeIndex))
 	if errors.Is(err, os.ErrNotExist) {
@@ -461,7 +575,7 @@ func (s *Service) recordUsage(started time.Time, novelID string, episodeIndex st
 	}
 	modelID, profileID, profileLabel := config.ModelID, config.ProfileID, config.ProfileLabel
 	feature, workflow, runID := "reader_proofread", "reader_proofread", fmt.Sprintf("reader-proofread-%d", started.UnixNano())
-	_ = ai.SaveUsageRun(s.usageDBPath, ai.UsageRun{
+	if err := ai.SaveUsageRun(s.usageDBPath, ai.UsageRun{
 		RunID: runID, Feature: feature, WorkflowName: workflow, Status: status,
 		StartedAt: started.UTC().Format(time.RFC3339Nano), FinishedAt: now.UTC().Format(time.RFC3339Nano),
 		ElapsedMs: int(now.Sub(started).Milliseconds()), NovelID: &novelID, CurrentEpisodeIndex: &episodeIndex,
@@ -469,5 +583,7 @@ func (s *Service) recordUsage(started time.Time, novelID string, episodeIndex st
 		AnswerChars: len([]rune(result.Answer)), RequestCount: 1, InputTokens: result.InputTokens,
 		OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens, ErrorMessage: errorMessage,
 		Requests: []ai.UsageRequest{{RequestIndex: 0, Kind: "reader_proofread", InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.TotalTokens}},
-	})
+	}); err != nil {
+		log.Printf("viewer-api-go: failed to save reader proofread usage: %v", err)
+	}
 }

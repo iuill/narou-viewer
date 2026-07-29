@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +21,19 @@ import (
 type fakeLibrary struct {
 	episode *library.EpisodeResponse
 	err     error
+}
+
+type observedContext struct {
+	context.Context
+	observed chan struct{}
+	once     sync.Once
+}
+
+func (c *observedContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.observed)
+	})
+	return c.Context.Done()
 }
 
 func (f fakeLibrary) GetEpisode(context.Context, string, string) (*library.EpisodeResponse, error) {
@@ -182,6 +198,27 @@ func TestApplyOutputPreservesSentenceEndingParagraphStyleAndAcceptsWhitespaceCle
 		[]string{"一。二。", "三。"},
 	) {
 		t.Fatal("moving a sentence-ending paragraph boundary must fail")
+	}
+
+	indented := library.ReaderDocument{Version: 1, Blocks: []library.ReaderBlock{{
+		Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "　字下げです。"}},
+	}}}
+	indentedSegments := editableSegments(indented)
+	if _, err := applyOutput(indented, indentedSegments, proofreadOutput{Segments: []proofreadSegment{{
+		ID: 0, Paragraphs: []string{"字下げです。"},
+	}}}); err == nil {
+		t.Fatal("removing ideographic indentation must fail")
+	}
+}
+
+func TestParagraphInlinesRestoreExplicitLineBreakTokens(t *testing.T) {
+	inlines := paragraphInlines("前半\r\n後半\n")
+	if len(inlines) != 4 ||
+		inlines[0].Type != "text" || inlines[0].Text != "前半" ||
+		inlines[1].Type != "lineBreak" ||
+		inlines[2].Type != "text" || inlines[2].Text != "後半" ||
+		inlines[3].Type != "lineBreak" {
+		t.Fatalf("inlines=%+v", inlines)
 	}
 }
 
@@ -379,6 +416,113 @@ func TestGenerateRecordsUsageWithoutPromptOrOutputSnapshot(t *testing.T) {
 	run := usage.Runs[0]
 	if run.Feature != "reader_proofread" || run.TotalTokens != 12 || run.HasSnapshot {
 		t.Fatalf("run=%+v", run)
+	}
+}
+
+func TestGenerateCoalescesConcurrentRequestsForTheSameEpisode(t *testing.T) {
+	var calls atomic.Int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	service := NewService(Dependencies{
+		Library: fakeLibrary{episode: testEpisode()},
+		Settings: fakeSettings{config: &store.ResolvedAIGenerationConfig{
+			ProfileID: "profile", ProfileLabel: "Profile", APIKey: "key", ModelID: "model",
+		}},
+		StateDir: t.TempDir(),
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			if calls.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return ai.ChatResult{Answer: `{"segments":[{"id":0,"paragraphs":["文の途中です。","次の文です。"]}]}`}, nil
+		},
+	})
+
+	type outcome struct {
+		response Response
+		err      error
+	}
+	first := make(chan outcome, 1)
+	go func() {
+		response, err := service.Generate(context.Background(), "novel-a", "1")
+		first <- outcome{response: response, err: err}
+	}()
+	<-started
+
+	secondContext := &observedContext{Context: context.Background(), observed: make(chan struct{})}
+	second := make(chan outcome, 1)
+	go func() {
+		response, err := service.Generate(secondContext, "novel-a", "1")
+		second <- outcome{response: response, err: err}
+	}()
+	<-secondContext.observed
+	close(release)
+
+	firstResult, secondResult := <-first, <-second
+	if firstResult.err != nil || secondResult.err != nil {
+		t.Fatalf("first=%+v second=%+v", firstResult, secondResult)
+	}
+	if calls.Load() != 1 || firstResult.response.GeneratedAt == nil ||
+		secondResult.response.GeneratedAt == nil ||
+		*firstResult.response.GeneratedAt != *secondResult.response.GeneratedAt {
+		t.Fatalf("calls=%d first=%+v second=%+v", calls.Load(), firstResult.response, secondResult.response)
+	}
+}
+
+func TestGenerateRecordsUsageWhenStateWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	blockedStateDir := filepath.Join(dir, "state-file")
+	if err := os.WriteFile(blockedStateDir, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "usage.sqlite")
+	service := NewService(Dependencies{
+		Library: fakeLibrary{episode: testEpisode()},
+		Settings: fakeSettings{config: &store.ResolvedAIGenerationConfig{
+			ProfileID: "profile", ProfileLabel: "Profile", APIKey: "key", ModelID: "model",
+		}},
+		StateDir: blockedStateDir, UsageDBPath: dbPath,
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			return ai.ChatResult{
+				Answer:      `{"segments":[{"id":0,"paragraphs":["文の途中です。","次の文です。"]}]}`,
+				TotalTokens: 12,
+			}, nil
+		},
+	})
+	if _, err := service.Generate(context.Background(), "novel-a", "1"); err == nil {
+		t.Fatal("state write should fail")
+	}
+	usage, ok, err := ai.LoadUsage(dbPath)
+	if err != nil || !ok || len(usage.Runs) != 1 {
+		t.Fatalf("usage=%+v ok=%v err=%v", usage, ok, err)
+	}
+	if usage.Runs[0].Status != "failed" || usage.Runs[0].TotalTokens != 12 {
+		t.Fatalf("run=%+v", usage.Runs[0])
+	}
+}
+
+func TestGenerateReportsTruncatedOutputAndRejectsInvalidEpisodeIndexes(t *testing.T) {
+	service := NewService(Dependencies{
+		Library: fakeLibrary{episode: testEpisode()},
+		Settings: fakeSettings{config: &store.ResolvedAIGenerationConfig{
+			APIKey: "key", ModelID: "model",
+		}},
+		StateDir: t.TempDir(),
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			return ai.ChatResult{TotalTokens: 12}, fmt.Errorf("%w: finish_reason=length", ai.ErrOpenRouterTruncatedResponse)
+		},
+	})
+	if _, err := service.Generate(context.Background(), "novel-a", "1"); !errors.Is(err, ErrOutputTooLong) {
+		t.Fatalf("err=%v", err)
+	}
+	if _, err := service.Get(context.Background(), "novel-a", "../1"); !errors.Is(err, ErrInvalidEpisodeIndex) {
+		t.Fatalf("get err=%v", err)
+	}
+	if _, err := service.Generate(context.Background(), "novel-a", ""); !errors.Is(err, ErrInvalidEpisodeIndex) {
+		t.Fatalf("generate err=%v", err)
+	}
+	if err := service.Delete("novel-a", "1/2"); !errors.Is(err, ErrInvalidEpisodeIndex) {
+		t.Fatalf("delete err=%v", err)
 	}
 }
 

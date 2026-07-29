@@ -119,6 +119,10 @@ func (s *Server) handleEpisodeAIProofread(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
+		if errors.Is(err, readerproofread.ErrOutputTooLong) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
 		if err != nil {
 			writeResult(w, nil, err)
 			return
