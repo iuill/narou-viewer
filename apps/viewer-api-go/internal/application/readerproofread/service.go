@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/fsatomic"
@@ -27,6 +28,7 @@ var ErrUnavailable = errors.New("AI校正はLLM連携が未設定のため利用
 var ErrUnsupportedDocument = errors.New("この話にはAI校正できる本文がありません。")
 var ErrInvalidEpisodeIndex = errors.New("episodeIndex must be a non-negative integer string")
 var ErrOutputTooLong = errors.New("この話はAI校正の出力上限を超えました。出力上限の大きいモデルを選択してください。")
+var ErrInvalidOutput = errors.New("AI校正結果を安全に適用できませんでした。もう一度生成するか、別のモデルを選択してください。")
 
 type Library interface {
 	GetEpisode(context.Context, string, string) (*library.EpisodeResponse, error)
@@ -214,7 +216,7 @@ func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex
 	var output proofreadOutput
 	if err := json.Unmarshal([]byte(result.Answer), &output); err != nil {
 		s.recordUsage(started, novelID, episodeIndex, config, result, err)
-		return Response{}, fmt.Errorf("AI校正結果を読み取れませんでした: %w", err)
+		return Response{}, fmt.Errorf("%w: JSONを読み取れませんでした: %v", ErrInvalidOutput, err)
 	}
 	corrected, err := applyOutput(episode.ReaderDocument, segments, output)
 	if err != nil {
@@ -344,12 +346,12 @@ func simpleParagraphText(block library.ReaderBlock) (string, bool) {
 
 func applyOutput(document library.ReaderDocument, source []sourceSegment, output proofreadOutput) (library.ReaderDocument, error) {
 	if len(output.Segments) != len(source) {
-		return library.ReaderDocument{}, errors.New("AI校正結果のsegment数が一致しません。")
+		return library.ReaderDocument{}, fmt.Errorf("%w: segment数が一致しません", ErrInvalidOutput)
 	}
 	byID := make(map[int]proofreadSegment, len(output.Segments))
 	for _, segment := range output.Segments {
 		if _, exists := byID[segment.ID]; exists {
-			return library.ReaderDocument{}, errors.New("AI校正結果に重複したsegmentがあります。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: segmentが重複しています", ErrInvalidOutput)
 		}
 		byID[segment.ID] = segment
 	}
@@ -358,16 +360,18 @@ func applyOutput(document library.ReaderDocument, source []sourceSegment, output
 		segment := source[index]
 		corrected, ok := byID[segment.ID]
 		if !ok || len(corrected.Paragraphs) == 0 {
-			return library.ReaderDocument{}, errors.New("AI校正結果に必要な本文segmentがありません。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: 必要な本文segmentがありません", ErrInvalidOutput)
 		}
 		if nonWhitespaceText(segment.Paragraphs) != nonWhitespaceText(corrected.Paragraphs) {
-			return library.ReaderDocument{}, errors.New("AI校正結果が空白・改行以外の原文を変更したため破棄しました。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: 空白・改行以外の原文が変更されました", ErrInvalidOutput)
 		}
+		corrected.Paragraphs = normalizeSentenceEndingParagraphStyle(segment.Paragraphs, corrected.Paragraphs)
+		corrected.Paragraphs = restoreIdeographicIndentation(segment.Paragraphs, corrected.Paragraphs)
 		if !preservesSentenceEndingParagraphStyle(segment.Paragraphs, corrected.Paragraphs) {
-			return library.ReaderDocument{}, errors.New("AI校正結果が原文の文末段落スタイルを変更したため破棄しました。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: 文末段落スタイルを復元できませんでした", ErrInvalidOutput)
 		}
 		if !preservesIdeographicIndentation(segment.Paragraphs, corrected.Paragraphs) {
-			return library.ReaderDocument{}, errors.New("AI校正結果が原文の全角字下げを変更したため破棄しました。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: 全角字下げを復元できませんでした", ErrInvalidOutput)
 		}
 		replacement := make([]library.ReaderBlock, 0, len(corrected.Paragraphs))
 		for _, paragraph := range corrected.Paragraphs {
@@ -380,7 +384,7 @@ func applyOutput(document library.ReaderDocument, source []sourceSegment, output
 			})
 		}
 		if len(replacement) == 0 {
-			return library.ReaderDocument{}, errors.New("AI校正結果から本文が失われました。")
+			return library.ReaderDocument{}, fmt.Errorf("%w: 本文が失われました", ErrInvalidOutput)
 		}
 		blocks = append(blocks[:segment.StartBlock], append(replacement, blocks[segment.EndBlock:]...)...)
 	}
@@ -423,6 +427,89 @@ func sentenceEndingParagraphBoundaries(paragraphs []string) map[int]struct{} {
 		}
 	}
 	return boundaries
+}
+
+func normalizeSentenceEndingParagraphStyle(source []string, corrected []string) []string {
+	boundaries := paragraphBoundaries(corrected)
+	sourceBoundaries := sentenceEndingParagraphBoundaries(source)
+	for offset := range sentencePunctuationOffsets(nonWhitespaceText(source)) {
+		if _, ok := sourceBoundaries[offset]; ok {
+			boundaries[offset] = struct{}{}
+		} else {
+			delete(boundaries, offset)
+		}
+	}
+	return splitParagraphsAtOffsets(strings.Join(corrected, ""), boundaries)
+}
+
+func paragraphBoundaries(paragraphs []string) map[int]struct{} {
+	boundaries := map[int]struct{}{}
+	offset := 0
+	for index, paragraph := range paragraphs {
+		offset += len([]rune(nonWhitespaceText([]string{paragraph})))
+		if index < len(paragraphs)-1 {
+			boundaries[offset] = struct{}{}
+		}
+	}
+	return boundaries
+}
+
+func sentencePunctuationOffsets(text string) map[int]struct{} {
+	offsets := map[int]struct{}{}
+	for index, r := range []rune(text) {
+		if endsWithSentencePunctuation(string(r)) {
+			offsets[index+1] = struct{}{}
+		}
+	}
+	return offsets
+}
+
+func splitParagraphsAtOffsets(text string, boundaries map[int]struct{}) []string {
+	paragraphs := []string{}
+	var builder strings.Builder
+	offset := 0
+	for _, r := range text {
+		builder.WriteRune(r)
+		if !unicode.IsSpace(r) {
+			offset++
+		}
+		if _, ok := boundaries[offset]; ok {
+			if builder.Len() > 0 {
+				paragraphs = append(paragraphs, builder.String())
+				builder.Reset()
+			}
+			delete(boundaries, offset)
+		}
+	}
+	if builder.Len() > 0 {
+		paragraphs = append(paragraphs, builder.String())
+	}
+	return paragraphs
+}
+
+func restoreIdeographicIndentation(source []string, corrected []string) []string {
+	sourceIndentation := ideographicIndentationByOffset(source)
+	offset := 0
+	restored := append([]string{}, corrected...)
+	for index, paragraph := range restored {
+		if indentation, ok := sourceIndentation[offset]; ok {
+			restored[index] = replaceLeadingWhitespace(paragraph, indentation)
+		}
+		offset += len([]rune(nonWhitespaceText([]string{paragraph})))
+	}
+	return restored
+}
+
+func replaceLeadingWhitespace(text string, replacement string) string {
+	index := 0
+	for index < len(text) {
+		r, size := utf8.DecodeRuneInString(text[index:])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		index += size
+	}
+	return replacement + text[index:]
 }
 
 func preservesIdeographicIndentation(source []string, corrected []string) bool {

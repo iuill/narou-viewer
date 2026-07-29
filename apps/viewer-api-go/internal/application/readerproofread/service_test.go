@@ -155,10 +155,16 @@ func TestApplyOutputPreservesSentenceEndingParagraphStyleAndAcceptsWhitespaceCle
 		{Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "３匹程度 。"}}},
 	}}
 	segments := editableSegments(document)
-	if _, err := applyOutput(document, segments, proofreadOutput{Segments: []proofreadSegment{{
-		ID: 0, Paragraphs: []string{"一文目です。３匹程度 。"},
-	}}}); err == nil {
-		t.Fatal("sentence-ending source paragraphs must not be merged")
+	merged, err := applyOutput(document, segments, proofreadOutput{Segments: []proofreadSegment{{
+		ID: 0, Paragraphs: []string{"一文目です。３匹程度。"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merged.Blocks) != 2 ||
+		merged.Blocks[0].Inlines[0].Text != "一文目です。" ||
+		merged.Blocks[1].Inlines[0].Text != "３匹程度。" {
+		t.Fatalf("source paragraph style was not restored: %+v", merged.Blocks)
 	}
 	corrected, err := applyOutput(document, segments, proofreadOutput{Segments: []proofreadSegment{{
 		ID: 0, Paragraphs: []string{"一文目です。", "３匹程度。"},
@@ -174,10 +180,14 @@ func TestApplyOutputPreservesSentenceEndingParagraphStyleAndAcceptsWhitespaceCle
 		Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "一文目です。二文目です。"}},
 	}}}
 	singleSegment := editableSegments(singleParagraph)
-	if _, err := applyOutput(singleParagraph, singleSegment, proofreadOutput{Segments: []proofreadSegment{{
+	rejoined, err := applyOutput(singleParagraph, singleSegment, proofreadOutput{Segments: []proofreadSegment{{
 		ID: 0, Paragraphs: []string{"一文目です。", "二文目です。"},
-	}}}); err == nil {
-		t.Fatal("AI must not introduce sentence-ending paragraph boundaries absent from the source")
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rejoined.Blocks) != 1 || rejoined.Blocks[0].Inlines[0].Text != "一文目です。二文目です。" {
+		t.Fatalf("source paragraph join was not restored: %+v", rejoined.Blocks)
 	}
 
 	midSentence := library.ReaderDocument{Version: 1, Blocks: []library.ReaderBlock{
@@ -204,10 +214,14 @@ func TestApplyOutputPreservesSentenceEndingParagraphStyleAndAcceptsWhitespaceCle
 		Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "　字下げです。"}},
 	}}}
 	indentedSegments := editableSegments(indented)
-	if _, err := applyOutput(indented, indentedSegments, proofreadOutput{Segments: []proofreadSegment{{
+	restoredIndentation, err := applyOutput(indented, indentedSegments, proofreadOutput{Segments: []proofreadSegment{{
 		ID: 0, Paragraphs: []string{"字下げです。"},
-	}}}); err == nil {
-		t.Fatal("removing ideographic indentation must fail")
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restoredIndentation.Blocks[0].Inlines[0].Text; got != "　字下げです。" {
+		t.Fatalf("ideographic indentation = %q", got)
 	}
 }
 

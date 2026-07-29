@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
@@ -136,6 +137,21 @@ func TestReaderAIProofreadRouteErrors(t *testing.T) {
 	)
 	if tooLong.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("too long status=%d body=%s", tooLong.Code, tooLong.Body.String())
+	}
+
+	invalidOutputService := readerproofread.NewService(readerproofread.Dependencies{
+		Library: routeProofreadLibrary{}, Settings: routeProofreadSettings{}, StateDir: t.TempDir(),
+		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
+			return ai.ChatResult{Answer: "not-json"}, nil
+		},
+	})
+	invalidOutput := httptest.NewRecorder()
+	(&Server{readerProofread: invalidOutputService}).handleEpisodeAIProofread(
+		invalidOutput, httptest.NewRequest(http.MethodPost, path, nil), "novel-a", "1",
+	)
+	if invalidOutput.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(invalidOutput.Body.String(), readerproofread.ErrInvalidOutput.Error()) {
+		t.Fatalf("invalid output status=%d body=%s", invalidOutput.Code, invalidOutput.Body.String())
 	}
 }
 
