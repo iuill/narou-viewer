@@ -1692,17 +1692,17 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if episode["title"] != "Episode 1" {
 		t.Fatalf("unexpected episode: %+v", episode)
 	}
-	if episode["contentEtag"] != "hash-1-reader-corrections-q1h1p1a1" {
+	if episode["contentEtag"] != "hash-1-reader-corrections-q1h1p1a1t0d0" {
 		t.Fatalf("episode response etag should include reader correction settings: %+v", episode)
 	}
 	etagResponse := httptest.NewRecorder()
 	etagRequest := httptest.NewRequest(http.MethodGet, "/api/library/novels/"+novelID+"/episodes/"+episodeIndex, nil)
-	etagRequest.Header.Set("If-None-Match", `"hash-1-reader-corrections-q1h1p1a1"`)
+	etagRequest.Header.Set("If-None-Match", `"hash-1-reader-corrections-q1h1p1a1t0d0"`)
 	handler.ServeHTTP(etagResponse, etagRequest)
 	if etagResponse.Code != http.StatusNotModified {
 		t.Fatalf("expected 304 for matching etag, got %d body=%s", etagResponse.Code, etagResponse.Body.String())
 	}
-	if etagResponse.Header().Get("ETag") != `"hash-1-reader-corrections-q1h1p1a1"` {
+	if etagResponse.Header().Get("ETag") != `"hash-1-reader-corrections-q1h1p1a1t0d0"` {
 		t.Fatalf("304 response should include etag, got %q", etagResponse.Header().Get("ETag"))
 	}
 	staleEtagResponse := httptest.NewRecorder()
@@ -1714,7 +1714,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	}
 	defaultReaderSettings := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/reader-settings", nil, http.StatusOK)
 	defaultCorrection := defaultReaderSettings["correction"].(map[string]any)
-	if defaultReaderSettings["novelId"] != novelID || defaultCorrection["quoteNormalization"] != true || defaultCorrection["hyphenDashNormalization"] != true || defaultCorrection["parenthesisNormalization"] != true || defaultCorrection["halfwidthAlnumPunctuationNormalization"] != true {
+	if defaultReaderSettings["novelId"] != novelID || defaultCorrection["quoteNormalization"] != true || defaultCorrection["hyphenDashNormalization"] != true || defaultCorrection["parenthesisNormalization"] != true || defaultCorrection["halfwidthAlnumPunctuationNormalization"] != true || defaultCorrection["tildeNormalization"] != false || defaultCorrection["consecutivePeriodNormalization"] != false {
 		t.Fatalf("unexpected default novel reader settings: %+v", defaultReaderSettings)
 	}
 	partialUpdatedReaderSettings := requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
@@ -1725,7 +1725,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 		t.Fatalf("partial novel reader settings update should preserve omitted fields: %+v", partialUpdatedReaderSettings)
 	}
 	correctedEpisode := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/episodes/"+episodeIndex, nil, http.StatusOK)
-	if correctedEpisode["contentEtag"] != "hash-1-reader-corrections-q0h1p1a1" {
+	if correctedEpisode["contentEtag"] != "hash-1-reader-corrections-q0h1p1a1t0d0" {
 		t.Fatalf("corrected episode should include correction etag key: %+v", correctedEpisode)
 	}
 	halfwidthUpdatedReaderSettings := requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
@@ -1736,7 +1736,7 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 		t.Fatalf("halfwidth partial update should preserve omitted fields: %+v", halfwidthUpdatedReaderSettings)
 	}
 	halfwidthDisabledEpisode := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/episodes/"+episodeIndex, nil, http.StatusOK)
-	if halfwidthDisabledEpisode["contentEtag"] != "hash-1-reader-corrections-q0h1p1a0" {
+	if halfwidthDisabledEpisode["contentEtag"] != "hash-1-reader-corrections-q0h1p1a0t0d0" {
 		t.Fatalf("halfwidth disabled episode should include a0 correction etag key: %+v", halfwidthDisabledEpisode)
 	}
 	requestRaw(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/assets/assets/episodes/1/pic.jpg", nil, http.StatusOK)
@@ -2454,6 +2454,12 @@ func TestServerValidationAndErrorPaths(t *testing.T) {
 	}, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
 		"correction": map[string]any{"quoteNormalization": false, "halfwidthAlnumPunctuationNormalization": "bad"},
+	}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
+		"correction": map[string]any{"tildeNormalization": "bad"},
+	}, http.StatusBadRequest)
+	requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
+		"correction": map[string]any{"consecutivePeriodNormalization": "bad"},
 	}, http.StatusBadRequest)
 	requestJSON(t, handler, http.MethodPut, "/api/library/novels/missing/reader-settings", map[string]any{
 		"correction": map[string]any{"quoteNormalization": false},

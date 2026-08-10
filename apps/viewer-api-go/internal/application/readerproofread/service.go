@@ -309,6 +309,8 @@ func (s *Service) applyReaderCorrections(novelID string, document library.Reader
 		HyphenDashNormalization:                settings.Correction.HyphenDashNormalization,
 		ParenthesisNormalization:               settings.Correction.ParenthesisNormalization,
 		HalfwidthAlnumPunctuationNormalization: settings.Correction.HalfwidthAlnumPunctuationNormalization,
+		TildeNormalization:                     settings.Correction.TildeNormalization,
+		ConsecutivePeriodNormalization:         settings.Correction.ConsecutivePeriodNormalization,
 	}), nil
 }
 

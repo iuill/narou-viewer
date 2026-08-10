@@ -156,6 +156,8 @@ func (s *Store) PutNovelReaderSettings(input NovelReaderSettings) (NovelReaderSe
 		HyphenDashNormalization:                boolPtr(input.Correction.HyphenDashNormalization),
 		ParenthesisNormalization:               boolPtr(input.Correction.ParenthesisNormalization),
 		HalfwidthAlnumPunctuationNormalization: boolPtr(input.Correction.HalfwidthAlnumPunctuationNormalization),
+		TildeNormalization:                     boolPtr(input.Correction.TildeNormalization),
+		ConsecutivePeriodNormalization:         boolPtr(input.Correction.ConsecutivePeriodNormalization),
 	})
 }
 

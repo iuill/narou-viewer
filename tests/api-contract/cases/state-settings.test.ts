@@ -28,6 +28,8 @@ type NovelReaderSettingsContract = {
     hyphenDashNormalization: boolean;
     parenthesisNormalization: boolean;
     halfwidthAlnumPunctuationNormalization: boolean;
+    tildeNormalization: boolean;
+    consecutivePeriodNormalization: boolean;
   };
   updatedAt: string | null;
 };
@@ -373,6 +375,9 @@ describe("reader state and settings contract", () => {
           parenthesisNormalization:
             original.json.correction.parenthesisNormalization,
           halfwidthAlnumPunctuationNormalization: nextHalfwidth,
+          tildeNormalization: original.json.correction.tildeNormalization,
+          consecutivePeriodNormalization:
+            original.json.correction.consecutivePeriodNormalization,
         });
 
         const reloaded = await requestJson<NovelReaderSettingsContract>(

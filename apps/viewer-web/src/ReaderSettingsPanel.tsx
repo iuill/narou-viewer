@@ -12,6 +12,8 @@ type Props = {
   hyphenDashNormalizationEnabled: boolean;
   parenthesisNormalizationEnabled: boolean;
   halfwidthAlnumPunctuationNormalizationEnabled: boolean;
+  tildeNormalizationEnabled: boolean;
+  consecutivePeriodNormalizationEnabled: boolean;
   isReaderCorrectionSaving: boolean;
   readerAIProofreadState: ReaderAIProofreadState;
   isShowingAIProofread: boolean;
@@ -28,6 +30,8 @@ type Props = {
   onHyphenDashNormalizationChange: (enabled: boolean) => void;
   onParenthesisNormalizationChange: (enabled: boolean) => void;
   onHalfwidthAlnumPunctuationNormalizationChange: (enabled: boolean) => void;
+  onTildeNormalizationChange: (enabled: boolean) => void;
+  onConsecutivePeriodNormalizationChange: (enabled: boolean) => void;
   onGenerateAIProofread: () => void;
   onDeleteAIProofread: () => void;
   onShowingAIProofreadChange: (enabled: boolean) => void;
@@ -68,6 +72,8 @@ export function ReaderSettingsPanel({
   hyphenDashNormalizationEnabled,
   parenthesisNormalizationEnabled,
   halfwidthAlnumPunctuationNormalizationEnabled,
+  tildeNormalizationEnabled,
+  consecutivePeriodNormalizationEnabled,
   isReaderCorrectionSaving,
   readerAIProofreadState,
   isShowingAIProofread,
@@ -84,6 +90,8 @@ export function ReaderSettingsPanel({
   onHyphenDashNormalizationChange,
   onParenthesisNormalizationChange,
   onHalfwidthAlnumPunctuationNormalizationChange,
+  onTildeNormalizationChange,
+  onConsecutivePeriodNormalizationChange,
   onGenerateAIProofread,
   onDeleteAIProofread,
   onShowingAIProofreadChange,
@@ -235,7 +243,7 @@ export function ReaderSettingsPanel({
         </section>
         <section className="reader-panel-card reader-panel-card--compact reader-settings-section">
           <p className="reader-panel-section-label">本文校正</p>
-          <p className="reader-panel-section-description">この作品だけに適用します。縦書き・横書き共通で、既読位置に影響しにくい文字数不変の校正から扱います。</p>
+          <p className="reader-panel-section-description">この作品だけに適用します。取得した原文は変更しません。</p>
           <label className="reader-settings-field">
             <span>引用符を〝〟へ置換</span>
             <select
@@ -280,6 +288,29 @@ export function ReaderSettingsPanel({
               <option value="enabled">オン</option>
             </select>
           </label>
+          <label className="reader-settings-field">
+            <span>半角チルダを波ダッシュへ置換</span>
+            <select
+              disabled={isReaderCorrectionSaving}
+              onChange={(event) => onTildeNormalizationChange(event.target.value === "enabled")}
+              value={tildeNormalizationEnabled ? "enabled" : "disabled"}
+            >
+              <option value="disabled">オフ</option>
+              <option value="enabled">オン</option>
+            </select>
+          </label>
+          <label className="reader-settings-field">
+            <span>連続ピリオドを……へ置換</span>
+            <select
+              disabled={isReaderCorrectionSaving}
+              onChange={(event) => onConsecutivePeriodNormalizationChange(event.target.value === "enabled")}
+              value={consecutivePeriodNormalizationEnabled ? "enabled" : "disabled"}
+            >
+              <option value="disabled">オフ</option>
+              <option value="enabled">オン</option>
+            </select>
+          </label>
+          <p className="reader-panel-section-description">連続ピリオドの置換では表示上の文字数が変わります。</p>
           <div className="reader-settings-ai-proofread">
             <div>
               <span className="reader-panel-section-label">AIによる読みやすさ補正</span>

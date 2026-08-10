@@ -96,7 +96,7 @@ body.reader-active .reader-pager {
 .reader-prose.vertical {
   max-height: 72vh;
   writing-mode: vertical-rl;
-  text-orientation: upright;
+  text-orientation: mixed;
   font-family: var(--font-serif-ja);
 }
 

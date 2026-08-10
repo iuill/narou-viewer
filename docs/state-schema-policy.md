@@ -186,7 +186,7 @@ path は `data/` からの相対 path を表す。
 | `VA-READING` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。欠落・malformed・未知 version は mutation 前に拒否し、元 bytes を維持 | 対応 build または supported backup を使う。tombstone の `state_version` は schema version と別軸 |
 | `VA-BOOKMARKS` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。未知 version は作品単位 prune でも拒否 | 対応 build または supported backup を使う |
 | `VA-PREFERENCES` | `schema_version: 3`、supported legacy なし | current のみ typed read / write。未知 version を既定値へ暗黙変換しない | 対応 build または supported backup を使う |
-| `VA-NOVEL-SETTINGS` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。未知 version を作品単位 prune で上書きしない | 対応 build または supported backup を使う |
+| `VA-NOVEL-SETTINGS` | `schema_version: 4`、legacy v3 | v3をreadし、次回writeでv4化する。v4では作品単位のチルダ・連続ピリオド校正設定を追加する。その他の未知versionを作品単位pruneで上書きしない | v3は対応buildでmigration。その他は対応buildまたはsupported backupを使う |
 | `VA-AI-SETTINGS` | document `schema_version: 2`、credential `api_key_version: 1` | document / crypto を独立判定。document は current のみ。平文 key は passphrase があれば encrypted v1 へ lazy migrationし、未知 crypto payload は decrypt・消去・再保存しない | document または crypto に対応する build と同じ master passphrase を使う |
 | `VA-PUBLICATIONS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を read し、次回 materialize / write で v1 化。その他の未知 version は write / prune を拒否 | v0 は対応 build で migration。未知 version は対応 build / backup を使う |
 | `VA-CHAR-EVENTS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を legacy profile migration として read。未知 version は生成、materialize、prune を拒否 | events を生成正本として復旧。fence 前 build への rollback は新 field 消失の危険がある |

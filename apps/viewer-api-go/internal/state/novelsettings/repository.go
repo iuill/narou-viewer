@@ -13,15 +13,16 @@ import (
 )
 
 const (
-	SchemaVersion = 3
+	SchemaVersion = 4
 	FileName      = "novel_reader_settings.yaml"
 )
 
 var SchemaContract = schemaguard.Contract{
-	ID:            "VA-NOVEL-SETTINGS",
-	Path:          FileName,
-	Current:       SchemaVersion,
-	MissingPolicy: schemaguard.MissingReject,
+	ID:             "VA-NOVEL-SETTINGS",
+	Path:           FileName,
+	Current:        SchemaVersion,
+	ReadableLegacy: []int{3},
+	MissingPolicy:  schemaguard.MissingReject,
 }
 
 type Settings struct {
@@ -35,6 +36,8 @@ type Correction struct {
 	HyphenDashNormalization                bool `json:"hyphenDashNormalization"`
 	ParenthesisNormalization               bool `json:"parenthesisNormalization"`
 	HalfwidthAlnumPunctuationNormalization bool `json:"halfwidthAlnumPunctuationNormalization"`
+	TildeNormalization                     bool `json:"tildeNormalization"`
+	ConsecutivePeriodNormalization         bool `json:"consecutivePeriodNormalization"`
 }
 
 type Patch struct {
@@ -42,13 +45,17 @@ type Patch struct {
 	HyphenDashNormalization                *bool
 	ParenthesisNormalization               *bool
 	HalfwidthAlnumPunctuationNormalization *bool
+	TildeNormalization                     *bool
+	ConsecutivePeriodNormalization         *bool
 }
 
 func (patch Patch) IsEmpty() bool {
 	return patch.QuoteNormalization == nil &&
 		patch.HyphenDashNormalization == nil &&
 		patch.ParenthesisNormalization == nil &&
-		patch.HalfwidthAlnumPunctuationNormalization == nil
+		patch.HalfwidthAlnumPunctuationNormalization == nil &&
+		patch.TildeNormalization == nil &&
+		patch.ConsecutivePeriodNormalization == nil
 }
 
 type Repository struct {
@@ -72,6 +79,8 @@ type correctionRecord struct {
 	HyphenDashNormalization                *bool `yaml:"hyphen_dash_normalization"`
 	ParenthesisNormalization               *bool `yaml:"parenthesis_normalization"`
 	HalfwidthAlnumPunctuationNormalization *bool `yaml:"halfwidth_alnum_punctuation_normalization"`
+	TildeNormalization                     *bool `yaml:"tilde_normalization"`
+	ConsecutivePeriodNormalization         *bool `yaml:"consecutive_period_normalization"`
 }
 
 func NewRepository(stateDir string) *Repository {
@@ -106,6 +115,8 @@ func (r *Repository) Put(input Settings) (Settings, error) {
 		HyphenDashNormalization:                boolPtr(input.Correction.HyphenDashNormalization),
 		ParenthesisNormalization:               boolPtr(input.Correction.ParenthesisNormalization),
 		HalfwidthAlnumPunctuationNormalization: boolPtr(input.Correction.HalfwidthAlnumPunctuationNormalization),
+		TildeNormalization:                     boolPtr(input.Correction.TildeNormalization),
+		ConsecutivePeriodNormalization:         boolPtr(input.Correction.ConsecutivePeriodNormalization),
 	})
 }
 
@@ -143,6 +154,12 @@ func (r *Repository) Patch(novelID string, patch Patch) (Settings, error) {
 	if patch.HalfwidthAlnumPunctuationNormalization != nil {
 		current.HalfwidthAlnumPunctuationNormalization = *patch.HalfwidthAlnumPunctuationNormalization
 	}
+	if patch.TildeNormalization != nil {
+		current.TildeNormalization = *patch.TildeNormalization
+	}
+	if patch.ConsecutivePeriodNormalization != nil {
+		current.ConsecutivePeriodNormalization = *patch.ConsecutivePeriodNormalization
+	}
 	now := isoNow()
 	doc.Revision++
 	doc.Novels[novelID] = record{
@@ -151,6 +168,8 @@ func (r *Repository) Patch(novelID string, patch Patch) (Settings, error) {
 			HyphenDashNormalization:                boolPtr(current.HyphenDashNormalization),
 			ParenthesisNormalization:               boolPtr(current.ParenthesisNormalization),
 			HalfwidthAlnumPunctuationNormalization: boolPtr(current.HalfwidthAlnumPunctuationNormalization),
+			TildeNormalization:                     boolPtr(current.TildeNormalization),
+			ConsecutivePeriodNormalization:         boolPtr(current.ConsecutivePeriodNormalization),
 		},
 		UpdatedAt: &now,
 	}
@@ -209,6 +228,8 @@ func normalizeDocument(raw document) document {
 				HyphenDashNormalization:                rawRecord.Correction.HyphenDashNormalization,
 				ParenthesisNormalization:               rawRecord.Correction.ParenthesisNormalization,
 				HalfwidthAlnumPunctuationNormalization: rawRecord.Correction.HalfwidthAlnumPunctuationNormalization,
+				TildeNormalization:                     rawRecord.Correction.TildeNormalization,
+				ConsecutivePeriodNormalization:         rawRecord.Correction.ConsecutivePeriodNormalization,
 			},
 			UpdatedAt: stringPtrOrNil(rawRecord.UpdatedAt),
 		}
@@ -224,6 +245,8 @@ func DefaultSettings(novelID string) Settings {
 			HyphenDashNormalization:                true,
 			ParenthesisNormalization:               true,
 			HalfwidthAlnumPunctuationNormalization: true,
+			TildeNormalization:                     false,
+			ConsecutivePeriodNormalization:         false,
 		},
 	}
 }
@@ -236,6 +259,8 @@ func toSettings(novelID string, record record) Settings {
 			HyphenDashNormalization:                boolValueOrDefault(record.Correction.HyphenDashNormalization, true),
 			ParenthesisNormalization:               boolValueOrDefault(record.Correction.ParenthesisNormalization, true),
 			HalfwidthAlnumPunctuationNormalization: boolValueOrDefault(record.Correction.HalfwidthAlnumPunctuationNormalization, true),
+			TildeNormalization:                     boolValueOrDefault(record.Correction.TildeNormalization, false),
+			ConsecutivePeriodNormalization:         boolValueOrDefault(record.Correction.ConsecutivePeriodNormalization, false),
 		},
 		UpdatedAt: record.UpdatedAt,
 	}

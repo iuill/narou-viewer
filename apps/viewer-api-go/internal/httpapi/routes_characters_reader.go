@@ -390,6 +390,22 @@ func (s *Server) handleNovelReaderSettings(w http.ResponseWriter, r *http.Reques
 			}
 			patch.HalfwidthAlnumPunctuationNormalization = &halfwidthAlnumPunctuationNormalization
 		}
+		if rawTildeNormalization, exists := correctionValue["tildeNormalization"]; exists {
+			tildeNormalization, ok := rawTildeNormalization.(bool)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "correction.tildeNormalization must be a boolean.")
+				return
+			}
+			patch.TildeNormalization = &tildeNormalization
+		}
+		if rawConsecutivePeriodNormalization, exists := correctionValue["consecutivePeriodNormalization"]; exists {
+			consecutivePeriodNormalization, ok := rawConsecutivePeriodNormalization.(bool)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "correction.consecutivePeriodNormalization must be a boolean.")
+				return
+			}
+			patch.ConsecutivePeriodNormalization = &consecutivePeriodNormalization
+		}
 		if patch.IsEmpty() {
 			writeError(w, http.StatusBadRequest, "At least one correction field is required.")
 			return

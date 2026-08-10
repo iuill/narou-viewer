@@ -17,6 +17,8 @@ function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
     onHyphenDashNormalizationChange: vi.fn(),
     onParenthesisNormalizationChange: vi.fn(),
     onHalfwidthAlnumPunctuationNormalizationChange: vi.fn(),
+    onTildeNormalizationChange: vi.fn(),
+    onConsecutivePeriodNormalizationChange: vi.fn(),
     onQuoteNormalizationChange: vi.fn(),
     onReverseTapPageNavigationChange: vi.fn(),
     onReaderThemeChange: vi.fn(),
@@ -27,6 +29,8 @@ function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
     hyphenDashNormalizationEnabled: false,
     parenthesisNormalizationEnabled: false,
     halfwidthAlnumPunctuationNormalizationEnabled: false,
+    tildeNormalizationEnabled: false,
+    consecutivePeriodNormalizationEnabled: false,
     quoteNormalizationEnabled: false,
     readerFontFamily: "mincho",
     readerFontSizePx: 20,
@@ -116,6 +120,8 @@ describe("ReaderSettingsPanel", () => {
     expect(container.textContent).toContain("連続ハイフンをダッシュへ置換");
     expect(container.textContent).toContain("半角括弧を全角へ置換");
     expect(container.textContent).toContain("半角英数字・!?を全角へ置換");
+    expect(container.textContent).toContain("半角チルダを波ダッシュへ置換");
+    expect(container.textContent).toContain("連続ピリオドを……へ置換");
     expect(container.textContent).toContain("デバッグ");
     expect(container.textContent).toContain("文字サイズ: 20px");
     expect(container.textContent).toContain("文字間隔: 0.08em");
@@ -132,7 +138,9 @@ describe("ReaderSettingsPanel", () => {
     await changeSelect(selects[4] as HTMLSelectElement, "enabled", dom);
     await changeSelect(selects[5] as HTMLSelectElement, "enabled", dom);
     await changeSelect(selects[6] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[7] as HTMLSelectElement, "debug", dom);
+    await changeSelect(selects[7] as HTMLSelectElement, "enabled", dom);
+    await changeSelect(selects[8] as HTMLSelectElement, "enabled", dom);
+    await changeSelect(selects[9] as HTMLSelectElement, "debug", dom);
     await click(container.querySelector('button[aria-label="読書設定を閉じる"]') as Element, dom);
 
     expect(props.onReadingModeChange).toHaveBeenCalledWith("horizontal");
@@ -142,6 +150,8 @@ describe("ReaderSettingsPanel", () => {
     expect(props.onHyphenDashNormalizationChange).toHaveBeenCalledWith(true);
     expect(props.onParenthesisNormalizationChange).toHaveBeenCalledWith(true);
     expect(props.onHalfwidthAlnumPunctuationNormalizationChange).toHaveBeenCalledWith(true);
+    expect(props.onTildeNormalizationChange).toHaveBeenCalledWith(true);
+    expect(props.onConsecutivePeriodNormalizationChange).toHaveBeenCalledWith(true);
     expect(props.onDebugPageOverflowChange).toHaveBeenCalledWith(true);
     expect(props.onReaderFontFamilyChange).toHaveBeenCalledWith("gothic");
     expect(props.onReaderThemeChange).toHaveBeenCalledWith("forest");
@@ -238,7 +248,7 @@ describe("ReaderSettingsPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    const overflowDebugSelect = container.querySelectorAll("select")[7] as HTMLSelectElement;
+    const overflowDebugSelect = container.querySelectorAll("select")[9] as HTMLSelectElement;
     expect(overflowDebugSelect.value).toBe("debug");
 
     await act(async () => {
@@ -256,10 +266,14 @@ describe("ReaderSettingsPanel", () => {
     const hyphenDashNormalizationSelect = container.querySelectorAll("select")[4] as HTMLSelectElement;
     const parenthesisNormalizationSelect = container.querySelectorAll("select")[5] as HTMLSelectElement;
     const halfwidthAlnumPunctuationNormalizationSelect = container.querySelectorAll("select")[6] as HTMLSelectElement;
+    const tildeNormalizationSelect = container.querySelectorAll("select")[7] as HTMLSelectElement;
+    const consecutivePeriodNormalizationSelect = container.querySelectorAll("select")[8] as HTMLSelectElement;
     expect(quoteNormalizationSelect.disabled).toBe(true);
     expect(hyphenDashNormalizationSelect.disabled).toBe(true);
     expect(parenthesisNormalizationSelect.disabled).toBe(true);
     expect(halfwidthAlnumPunctuationNormalizationSelect.disabled).toBe(true);
+    expect(tildeNormalizationSelect.disabled).toBe(true);
+    expect(consecutivePeriodNormalizationSelect.disabled).toBe(true);
     expect(getButtonByText(container, "読書設定を初期化").disabled).toBe(true);
 
     await act(async () => {

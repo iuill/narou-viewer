@@ -21,7 +21,7 @@
 
 `tests/fixtures/e2e/novel-fetcher/library.sqlite` は git 管理する E2E fixture の正本である。`data_e2e/novel-fetcher/library.sqlite` は `e2e:fixture:init` / `e2e:fixture:rebuild` が正本から用意する作業コピーであり、E2E service が触っても git 差分として扱わない。
 
-fixture builder の既定は通常 E2E 用作品だけを生成する。`--work-set e2e` で通常 E2E 用作品だけ、`--work-set verification` で検証用作品だけ、`--work-set all` で両方を生成できる。通常 E2E fixture は既存 smoke の固定期待と合わせるため検証用作品を含めない。検証用 site は `verification`、現行の検証用作品はキャラクター抽出の本名・別名・役職名・血縁呼称・偽名の混同を調べる「E2E 人物名寄せ検証」である。
+fixture builder の既定は通常 E2E 用作品だけを生成する。`--work-set e2e` で通常 E2E 用作品だけ、`--work-set verification` で検証用作品だけ、`--work-set all` で両方を生成できる。通常 E2E fixture は既存 smoke の固定期待と合わせるため検証用作品を含めない。検証用 site は `verification` とし、キャラクター抽出の名前解決を調べる「E2E 人物名寄せ検証」と、作品単位の通常校正・AI本文校正および縦書きの括弧・約物・半角全角文字を原文と比較する「校正確認用 チルダ・連続ピリオド合成本文」を生成する。校正確認用作品は、第一話を文字・約物の網羅例、第二話を同じ表記が会話と地の文に現れる自作短編として構成する。
 
 Dev Container の `viewer-dev` には SQLite CLI (`sqlite3`) も入っているため、正本の `tests/fixtures/e2e/novel-fetcher/library.sqlite`、作業コピーの `data_e2e/novel-fetcher/library.sqlite`、`data_e2e/state/ai_usage.sqlite` の調査に使える。
 

@@ -70,7 +70,9 @@ export function expectNovelReaderSettingsShape(value: unknown): void {
         quoteNormalization: expect.any(Boolean),
         hyphenDashNormalization: expect.any(Boolean),
         parenthesisNormalization: expect.any(Boolean),
-        halfwidthAlnumPunctuationNormalization: expect.any(Boolean)
+        halfwidthAlnumPunctuationNormalization: expect.any(Boolean),
+        tildeNormalization: expect.any(Boolean),
+        consecutivePeriodNormalization: expect.any(Boolean)
       })
     })
   );

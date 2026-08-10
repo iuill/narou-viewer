@@ -66,6 +66,8 @@ export type NovelReaderSettingsResponse = {
     hyphenDashNormalization: boolean;
     parenthesisNormalization: boolean;
     halfwidthAlnumPunctuationNormalization: boolean;
+    tildeNormalization: boolean;
+    consecutivePeriodNormalization: boolean;
   };
   updatedAt: string | null;
 };

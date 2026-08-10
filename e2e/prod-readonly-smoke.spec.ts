@@ -249,7 +249,9 @@ test.describe("pc-xga 代表の runtime APIs", () => {
       `q${settings.correction.quoteNormalization ? 1 : 0}`,
       `h${settings.correction.hyphenDashNormalization ? 1 : 0}`,
       `p${settings.correction.parenthesisNormalization ? 1 : 0}`,
-      `a${settings.correction.halfwidthAlnumPunctuationNormalization ? 1 : 0}`
+      `a${settings.correction.halfwidthAlnumPunctuationNormalization ? 1 : 0}`,
+      `t${settings.correction.tildeNormalization ? 1 : 0}`,
+      `d${settings.correction.consecutivePeriodNormalization ? 1 : 0}`
     ].join("");
 
     const firstResponse = await request.get(episodeUrl);

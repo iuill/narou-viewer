@@ -596,6 +596,16 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   halfwidthAlnumPunctuationNormalization: enabled
                 })
               }
+              onTildeNormalizationChange={(enabled) =>
+                readerSessionCommands.changeNovelReaderCorrection({
+                  tildeNormalization: enabled
+                })
+              }
+              onConsecutivePeriodNormalizationChange={(enabled) =>
+                readerSessionCommands.changeNovelReaderCorrection({
+                  consecutivePeriodNormalization: enabled
+                })
+              }
               onGenerateAIProofread={() => {
                 void handleGenerateReaderAIProofread();
               }}
@@ -632,13 +642,19 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   quoteNormalization: true,
                   hyphenDashNormalization: true,
                   parenthesisNormalization: true,
-                  halfwidthAlnumPunctuationNormalization: true
+                  halfwidthAlnumPunctuationNormalization: true,
+                  tildeNormalization: false,
+                  consecutivePeriodNormalization: false
                 });
               }}
               onReverseTapPageNavigationChange={setReverseTapPageNavigation}
               debugPageOverflow={debugPageOverflow}
               halfwidthAlnumPunctuationNormalizationEnabled={
                 activeReaderSettings?.correction.halfwidthAlnumPunctuationNormalization ?? true
+              }
+              tildeNormalizationEnabled={activeReaderSettings?.correction.tildeNormalization ?? false}
+              consecutivePeriodNormalizationEnabled={
+                activeReaderSettings?.correction.consecutivePeriodNormalization ?? false
               }
               hyphenDashNormalizationEnabled={activeReaderSettings?.correction.hyphenDashNormalization ?? true}
               isReaderCorrectionSaving={isReaderCorrectionUnavailable}
