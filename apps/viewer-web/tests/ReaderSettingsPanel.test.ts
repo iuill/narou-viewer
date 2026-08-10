@@ -122,6 +122,7 @@ describe("ReaderSettingsPanel", () => {
     expect(container.textContent).toContain("半角英数字・!?を全角へ置換");
     expect(container.textContent).toContain("半角チルダを波ダッシュへ置換");
     expect(container.textContent).toContain("連続ピリオドを……へ置換");
+    expect(container.textContent).toContain("半角ピリオドが2個以上続く箇所を一律で……へ置換");
     expect(container.textContent).toContain("デバッグ");
     expect(container.textContent).toContain("文字サイズ: 20px");
     expect(container.textContent).toContain("文字間隔: 0.08em");

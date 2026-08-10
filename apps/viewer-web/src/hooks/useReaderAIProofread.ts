@@ -16,7 +16,9 @@ export function useReaderAIProofread(
   const [state, setState] = useState<ReaderAIProofreadState>("loading");
   const [isShowingProofread, setIsShowingProofread] = useState(false);
   const episodeKey = episode ? `${episode.novelId}\n${episode.episodeIndex}\n${episode.contentEtag}` : null;
+  const episodeIdentity = episode ? `${episode.novelId}\n${episode.episodeIndex}` : null;
   const currentEpisodeKeyRef = useRef(episodeKey);
+  const previousEpisodeIdentityRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
   currentEpisodeKeyRef.current = episodeKey;
 
@@ -29,8 +31,12 @@ export function useReaderAIProofread(
 
   useEffect(() => {
     let active = true;
+    const isSameEpisode = previousEpisodeIdentityRef.current === episodeIdentity;
+    previousEpisodeIdentityRef.current = episodeIdentity;
     setResult(null);
-    setIsShowingProofread(false);
+    if (!isSameEpisode) {
+      setIsShowingProofread(false);
+    }
     if (!episode) {
       setState("not_generated");
       return () => {
@@ -45,6 +51,9 @@ export function useReaderAIProofread(
         }
         setResult(next);
         setState(next.status);
+        if (next.status !== "ready") {
+          setIsShowingProofread(false);
+        }
       })
       .catch((loadError) => {
         if (!active) {
@@ -56,7 +65,7 @@ export function useReaderAIProofread(
     return () => {
       active = false;
     };
-  }, [episode, onError]);
+  }, [episode, episodeIdentity, onError]);
 
   const generate = useCallback(async () => {
     if (!episode || state === "generating" || state === "deleting") {
@@ -113,8 +122,7 @@ export function useReaderAIProofread(
       result?.status !== "ready" ||
       !result.readerDocument ||
       result.novelId !== episode.novelId ||
-      result.episodeIndex !== episode.episodeIndex ||
-      result.sourceEtag !== episode.contentEtag
+      result.episodeIndex !== episode.episodeIndex
     ) {
       return episode;
     }

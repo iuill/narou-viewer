@@ -76,18 +76,27 @@ function createTestRoot(): Root {
   return createRoot(rootElement);
 }
 
+function HookHarness({
+  episode,
+  onError,
+  onRender
+}: {
+  episode: EpisodeResponse | null;
+  onError: (message: string | null) => void;
+  onRender: (result: HookResult) => void;
+}) {
+  const result = useReaderAIProofread(episode, onError);
+  onRender(result);
+  return null;
+}
+
 function renderHarness(
   root: Root,
   episode: EpisodeResponse | null,
   onError: (message: string | null) => void,
   onRender: (result: HookResult) => void
 ): void {
-  function Harness() {
-    const result = useReaderAIProofread(episode, onError);
-    onRender(result);
-    return null;
-  }
-  root.render(createElement(Harness));
+  root.render(createElement(HookHarness, { episode, onError, onRender }));
 }
 
 describe("useReaderAIProofread", () => {
@@ -150,6 +159,16 @@ describe("useReaderAIProofread", () => {
 
     await act(async () => {
       latest?.setIsShowingProofread(true);
+      await flushAsyncWork();
+    });
+    expect(latest?.isShowingProofread).toBe(true);
+    expect(latest?.displayedEpisode?.readerDocument).toBe(ready.readerDocument);
+
+    const episodeWithUpdatedCorrections = { ...episode, contentEtag: `${episode.contentEtag}-corrections` };
+    await act(async () => {
+      renderHarness(testRoot, episodeWithUpdatedCorrections, onError, (result) => {
+        latest = result;
+      });
       await flushAsyncWork();
     });
     expect(latest?.isShowingProofread).toBe(true);

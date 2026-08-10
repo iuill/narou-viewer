@@ -310,7 +310,9 @@ export function ReaderSettingsPanel({
               <option value="enabled">オン</option>
             </select>
           </label>
-          <p className="reader-panel-section-description">連続ピリオドの置換では表示上の文字数が変わります。</p>
+          <p className="reader-panel-section-description">
+            半角ピリオドが2個以上続く箇所を一律で……へ置換するため、表示上の文字数が変わります。
+          </p>
           <div className="reader-settings-ai-proofread">
             <div>
               <span className="reader-panel-section-label">AIによる読みやすさ補正</span>
