@@ -53,7 +53,7 @@ ARG GITHUB_COPILOT_VERSION=latest
 # Coding-agent screenshot/browser-control CLI. This is intentionally separate
 # from E2E Playwright, which is pinned by @playwright/test and the
 # playwright-e2e image tag.
-ARG PLAYWRIGHT_CLI_VERSION=0.1.17
+ARG PLAYWRIGHT_CLI_VERSION=0.1.18
 ARG SERENA_AGENT_VERSION=1.3.0
 ARG SCC_VERSION=v3.7.0
 ARG SCC_LINUX_X86_64_SHA256=3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a

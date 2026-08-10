@@ -1,4 +1,4 @@
-ARG PLAYWRIGHT_IMAGE_VERSION=1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64
+ARG PLAYWRIGHT_IMAGE_VERSION=1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64
 ARG PLAYWRIGHT_BASE_IMAGE=ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION}
 
 FROM ${PLAYWRIGHT_BASE_IMAGE}

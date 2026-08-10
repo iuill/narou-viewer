@@ -126,7 +126,7 @@ services:
       - "${VIEWER_API_E2E_HOST_PORT:-18080}:18080"
 
   viewer-web-e2e:
-    image: oven/bun:1.3.11
+    image: oven/bun:1.3.14
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace
@@ -152,8 +152,8 @@ services:
     build:
       context: ./playwright-e2e
       args:
-        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
-        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
+        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
     init: true
     working_dir: /workspace
     command: bash ./scripts/run-playwright-e2e.sh
@@ -161,10 +161,10 @@ services:
     shm_size: 1gb
     environment:
       PLAYWRIGHT_BASE_URL: http://viewer-web-e2e:15173
-      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
-      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.58.2-node20-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
+      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
       PLAYWRIGHT_STAGE_DIR: /playwright-runtime
-      PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.58.2}
+      PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.62.1}
     depends_on:
       - viewer-web-e2e
     volumes:
