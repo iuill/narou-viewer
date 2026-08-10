@@ -27,7 +27,7 @@ const promptVersion = 5
 var ErrUnavailable = errors.New("AI校正はLLM連携が未設定のため利用できません。AI機能の設定でOpenRouter APIキーとモデルを設定してください。")
 var ErrUnsupportedDocument = errors.New("この話にはAI校正できる本文がありません。")
 var ErrInvalidEpisodeIndex = errors.New("episodeIndex must be a non-negative integer string")
-var ErrOutputTooLong = errors.New("この話はAI校正の出力上限を超えました。出力上限の大きいモデルを選択してください。")
+var ErrOutputTooLong = errors.New("この話はAI校正で扱える長さの上限を超えました。現在は1話を分割せず処理するため、この話はAI校正できません。")
 var ErrInvalidOutput = errors.New("AI校正結果を安全に適用できませんでした。もう一度生成するか、別のモデルを選択してください。")
 
 type Library interface {

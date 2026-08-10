@@ -48,7 +48,7 @@ export function useReaderAIProofread(
   }, [episode, onError]);
 
   const generate = useCallback(async () => {
-    if (!episode || state === "generating") {
+    if (!episode || state === "generating" || state === "deleting") {
       return;
     }
     setState("generating");
@@ -64,7 +64,7 @@ export function useReaderAIProofread(
   }, [episode, onError, state]);
 
   const remove = useCallback(async () => {
-    if (!episode || state === "deleting") {
+    if (!episode || state === "generating" || state === "deleting") {
       return;
     }
     setState("deleting");

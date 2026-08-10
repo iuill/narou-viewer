@@ -204,8 +204,10 @@ describe("useReaderAIProofread", () => {
 
     await act(async () => {
       await latest?.generate();
+      await latest?.remove();
     });
     expect(generateReaderAIProofread).toHaveBeenCalledTimes(1);
+    expect(deleteReaderAIProofread).not.toHaveBeenCalled();
 
     await act(async () => {
       resolveGeneration?.(ready);
