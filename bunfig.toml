@@ -1,7 +1,7 @@
 [install]
 linker = "hoisted"
 minimumReleaseAge = 1814400
-minimumReleaseAgeExcludes = ["postcss", "nanoid", "js-yaml"]
+minimumReleaseAgeExcludes = ["nanoid", "js-yaml"]
 
 [run]
 bun = true
