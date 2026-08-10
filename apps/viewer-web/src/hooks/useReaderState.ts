@@ -338,10 +338,12 @@ export function useReaderState({
   }, [
     libraryReloadKey,
     onError,
+    readerSettingsCorrection?.consecutivePeriodNormalization,
     readerSettingsCorrection?.hyphenDashNormalization,
     readerSettingsCorrection?.halfwidthAlnumPunctuationNormalization,
     readerSettingsCorrection?.parenthesisNormalization,
     readerSettingsCorrection?.quoteNormalization,
+    readerSettingsCorrection?.tildeNormalization,
     readerSettingsNovelId,
     screenMode,
     selectedEpisodeIndex,

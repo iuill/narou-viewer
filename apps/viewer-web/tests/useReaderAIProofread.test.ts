@@ -312,6 +312,96 @@ describe("useReaderAIProofread", () => {
     expect(latest?.isShowingProofread).toBe(false);
   });
 
+  it("ignores a generation result after the episode changes", async () => {
+    installDom();
+    const firstEpisode = createEpisode("1");
+    const secondEpisode = createEpisode("2");
+    let resolveGeneration: ((value: ReaderAIProofreadResponse) => void) | null = null;
+    vi.mocked(fetchReaderAIProofread).mockResolvedValue({
+      status: "not_generated",
+      novelId: firstEpisode.novelId,
+      episodeIndex: firstEpisode.episodeIndex,
+      sourceEtag: firstEpisode.contentEtag,
+      generatedAt: null,
+      modelId: null
+    });
+    vi.mocked(generateReaderAIProofread).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveGeneration = resolve;
+        })
+    );
+    const testRoot = createTestRoot();
+    root = testRoot;
+    let latest: HookResult | null = null;
+    const onError = vi.fn();
+
+    await act(async () => {
+      renderHarness(testRoot, firstEpisode, onError, (result) => {
+        latest = result;
+      });
+      await flushAsyncWork();
+    });
+    let generation: Promise<void> | undefined;
+    await act(async () => {
+      generation = latest?.generate();
+      await flushAsyncWork();
+      renderHarness(testRoot, secondEpisode, onError, (result) => {
+        latest = result;
+      });
+      await flushAsyncWork();
+      resolveGeneration?.(createReadyResult(firstEpisode));
+      await generation;
+      await flushAsyncWork();
+    });
+
+    expect(latest?.state).toBe("not_generated");
+    expect(latest?.displayedEpisode).toBe(secondEpisode);
+    expect(latest?.isShowingProofread).toBe(false);
+  });
+
+  it("ignores deletion completion after the episode changes", async () => {
+    installDom();
+    const firstEpisode = createEpisode("1");
+    const secondEpisode = createEpisode("2");
+    let resolveDeletion: (() => void) | null = null;
+    vi.mocked(fetchReaderAIProofread)
+      .mockResolvedValueOnce(createReadyResult(firstEpisode))
+      .mockResolvedValueOnce(createReadyResult(secondEpisode));
+    vi.mocked(deleteReaderAIProofread).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDeletion = resolve;
+        })
+    );
+    const testRoot = createTestRoot();
+    root = testRoot;
+    let latest: HookResult | null = null;
+    const onError = vi.fn();
+
+    await act(async () => {
+      renderHarness(testRoot, firstEpisode, onError, (result) => {
+        latest = result;
+      });
+      await flushAsyncWork();
+    });
+    let deletion: Promise<void> | undefined;
+    await act(async () => {
+      deletion = latest?.remove();
+      await flushAsyncWork();
+      renderHarness(testRoot, secondEpisode, onError, (result) => {
+        latest = result;
+      });
+      await flushAsyncWork();
+      resolveDeletion?.();
+      await deletion;
+      await flushAsyncWork();
+    });
+
+    expect(latest?.state).toBe("ready");
+    expect(latest?.result?.episodeIndex).toBe("2");
+  });
+
   it("ignores successful and failed loads after unmounting", async () => {
     installDom();
     const episode = createEpisode();

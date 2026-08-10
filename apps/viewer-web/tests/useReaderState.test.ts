@@ -146,6 +146,8 @@ function createReaderSettings(
       hyphenDashNormalization: true,
       parenthesisNormalization: true,
       halfwidthAlnumPunctuationNormalization: true,
+      tildeNormalization: false,
+      consecutivePeriodNormalization: false,
       ...overrides
     },
     updatedAt: null
@@ -1882,12 +1884,18 @@ describe("useReaderState", () => {
     const initialFetchCount = vi.mocked(fetchEpisode).mock.calls.length;
     expect(initialFetchCount).toBeGreaterThan(0);
 
-    await act(async () => {
-      latest?.setReaderSettings(createReaderSettings({ quoteNormalization: false }));
-      await flushAsyncWork();
-    });
+    for (const correction of [
+      { quoteNormalization: false },
+      { tildeNormalization: true },
+      { consecutivePeriodNormalization: true }
+    ]) {
+      await act(async () => {
+        latest?.setReaderSettings(createReaderSettings(correction));
+        await flushAsyncWork();
+      });
+    }
 
-    expect(fetchEpisode).toHaveBeenCalledTimes(initialFetchCount + 1);
+    expect(fetchEpisode).toHaveBeenCalledTimes(initialFetchCount + 3);
 
     await act(async () => {
       root?.unmount();

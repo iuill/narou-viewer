@@ -204,6 +204,8 @@ path は `data/` からの相対 path を表す。
 | `NF-TASKS` | migration 4 | `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints` | task request・状態遷移・idempotency・queue order・起動 recovery を管理する。`queued` のみ自動実行し、`paused` / `interrupted` / `failed` は明示 resume まで保持する |
 | `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import なし | unknown version / field / malformed data を mutation 前に strict reject。dry-run と apply は同一 validator（[#17](https://github.com/iuill/narou-viewer/issues/17)） |
 
+`VA-NOVEL-SETTINGS`をschema v4対応前のbuildへロールバックする場合、旧buildはv4を読み込めないため、そのまま再保存して移行することはできない。サービスを停止してからv3のbackupを復元する。作品別読書設定を失ってよい場合は`state/novel_reader_settings.yaml`を退避または削除し、旧buildにv3として再作成させてもよい。手動で戻す場合は`schema_version`を3へ変更し、v4で追加した`tilde_normalization`と`consecutive_period_normalization`を全作品から削除する。いずれも取得済み原文には影響しない。
+
 ## 4. schema 別の重要事項
 
 ### 4.1 reader state、bookmarks、preferences
