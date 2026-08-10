@@ -6,7 +6,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/playwright-runner-common.sh"
 
 stage_dir="${PLAYWRIGHT_STAGE_DIR:-/playwright-runtime}"
-playwright_test_version="${PLAYWRIGHT_TEST_VERSION:-1.58.2}"
+playwright_test_version="${PLAYWRIGHT_TEST_VERSION:-1.62.1}"
 workspace_dir="${PLAYWRIGHT_WORKSPACE_DIR:-/workspace}"
 workspace_report_dir="${workspace_dir}/playwright-report"
 workspace_test_results_dir="${workspace_dir}/test-results"
