@@ -3,6 +3,7 @@ package novelsettings
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/state/schemaguard"
@@ -19,7 +20,7 @@ func TestRepositoryGetsPutsPatchesAndPrunes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
 	}
-	if defaults.NovelID != "novel" || !defaults.Correction.QuoteNormalization || defaults.UpdatedAt != nil {
+	if defaults.NovelID != "novel" || !defaults.Correction.QuoteNormalization || defaults.Correction.TildeNormalization || defaults.Correction.ConsecutivePeriodNormalization || defaults.UpdatedAt != nil {
 		t.Fatalf("unexpected defaults: %+v", defaults)
 	}
 	updated, err := repo.Put(Settings{NovelID: "novel", Correction: Correction{
@@ -27,6 +28,8 @@ func TestRepositoryGetsPutsPatchesAndPrunes(t *testing.T) {
 		HyphenDashNormalization:                true,
 		ParenthesisNormalization:               true,
 		HalfwidthAlnumPunctuationNormalization: true,
+		TildeNormalization:                     true,
+		ConsecutivePeriodNormalization:         true,
 	}})
 	if err != nil {
 		t.Fatalf("Put returned error: %v", err)
@@ -60,6 +63,34 @@ func TestRepositoryGetsPutsPatchesAndPrunes(t *testing.T) {
 	deleted, err = repo.PruneNovel("novel")
 	if err != nil || deleted {
 		t.Fatalf("second PruneNovel should be no-op, deleted=%v err=%v", deleted, err)
+	}
+}
+
+func TestRepositoryReadsVersion3AndMigratesOnWrite(t *testing.T) {
+	stateDir := t.TempDir()
+	path := filepath.Join(stateDir, FileName)
+	legacy := "schema_version: 3\nrevision: 1\nnovels:\n  novel:\n    correction:\n      quote_normalization: false\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy settings: %v", err)
+	}
+	repo := NewRepository(stateDir)
+	settings, err := repo.Get("novel")
+	if err != nil {
+		t.Fatalf("Get legacy settings: %v", err)
+	}
+	if settings.Correction.QuoteNormalization || settings.Correction.TildeNormalization || settings.Correction.ConsecutivePeriodNormalization {
+		t.Fatalf("unexpected legacy settings: %+v", settings)
+	}
+	enabled := true
+	if _, err := repo.Patch("novel", Patch{TildeNormalization: &enabled}); err != nil {
+		t.Fatalf("Patch legacy settings: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated settings: %v", err)
+	}
+	if !strings.Contains(string(data), "schema_version: 4") || !strings.Contains(string(data), "tilde_normalization: true") {
+		t.Fatalf("legacy settings were not migrated: %s", data)
 	}
 }
 

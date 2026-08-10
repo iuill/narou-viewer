@@ -123,7 +123,15 @@ func EpisodeResponseETag(contentETag string, correctionSettings library.ReaderCo
 	if correctionSettings.HalfwidthAlnumPunctuationNormalization {
 		halfwidthState = "a1"
 	}
-	return contentETag + "-reader-corrections-" + quoteState + hyphenState + parenthesisState + halfwidthState
+	tildeState := "t0"
+	if correctionSettings.TildeNormalization {
+		tildeState = "t1"
+	}
+	periodState := "d0"
+	if correctionSettings.ConsecutivePeriodNormalization {
+		periodState = "d1"
+	}
+	return contentETag + "-reader-corrections-" + quoteState + hyphenState + parenthesisState + halfwidthState + tildeState + periodState
 }
 
 func readerCorrectionSettings(settings store.NovelReaderSettings) library.ReaderCorrectionSettings {
@@ -132,5 +140,7 @@ func readerCorrectionSettings(settings store.NovelReaderSettings) library.Reader
 		HyphenDashNormalization:                settings.Correction.HyphenDashNormalization,
 		ParenthesisNormalization:               settings.Correction.ParenthesisNormalization,
 		HalfwidthAlnumPunctuationNormalization: settings.Correction.HalfwidthAlnumPunctuationNormalization,
+		TildeNormalization:                     settings.Correction.TildeNormalization,
+		ConsecutivePeriodNormalization:         settings.Correction.ConsecutivePeriodNormalization,
 	}
 }

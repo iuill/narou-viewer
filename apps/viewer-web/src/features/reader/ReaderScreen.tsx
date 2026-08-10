@@ -30,6 +30,7 @@ import type { NovelSummary } from "../library/types";
 import type { ReaderSpeechChunk, ReaderSpeechVoiceOption } from "../../readerSpeech";
 import type { ReaderExperimentalFontId, ReaderExperimentalFontWeight, ReadingMode } from "../../readerPreferences";
 import type { ReaderSyncConflict, ReaderSyncConflictResolutionState } from "../../hooks/useReaderState";
+import type { ReaderAIProofreadState } from "../../hooks/useReaderAIProofread";
 import {
   buildEpisodeLabel,
   formatEpisodeIndexLabel,
@@ -92,6 +93,9 @@ export type ReaderScreenState = {
   isReaderAiAssistantOpen: boolean;
   isReaderBookmarksOpen: boolean;
   isReaderCorrectionUnavailable: boolean;
+  readerAIProofreadState: ReaderAIProofreadState;
+  hasReaderAIProofread: boolean;
+  isShowingReaderAIProofread: boolean;
   isReaderExperimentalFontOpen: boolean;
   isReaderFullscreen: boolean;
   isReaderInfoOpen: boolean;
@@ -172,8 +176,11 @@ export type ReaderScreenCommands = {
   handleCreateBookmark: () => Promise<void>;
   handleDeleteBookmark: (bookmarkId: string) => Promise<void>;
   handleGenerateCharacterSummary: () => void | Promise<void>;
+  handleGenerateReaderAIProofread: () => void | Promise<void>;
+  handleDeleteReaderAIProofread: () => void | Promise<void>;
   handleOpenCharacterSummary: () => void | Promise<void>;
   handleOpenTerms: () => void | Promise<void>;
+  setIsShowingReaderAIProofread: (enabled: boolean) => void;
   handleImageViewerPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
   handleImageViewerPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
   handleImageViewerPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
@@ -277,6 +284,8 @@ export function ReaderScreen(props: ReaderScreenProps) {
     handleCreateBookmark,
     handleDeleteBookmark,
     handleGenerateCharacterSummary,
+    handleGenerateReaderAIProofread,
+    handleDeleteReaderAIProofread,
     handleOpenCharacterSummary,
     handleOpenTerms,
     handleImageViewerPointerDown,
@@ -314,6 +323,9 @@ export function ReaderScreen(props: ReaderScreenProps) {
     isReaderAiAssistantOpen,
     isReaderBookmarksOpen,
     isReaderCorrectionUnavailable,
+    readerAIProofreadState,
+    hasReaderAIProofread,
+    isShowingReaderAIProofread,
     isReaderExperimentalFontOpen,
     isReaderFullscreen,
     isReaderInfoOpen,
@@ -389,6 +401,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
     setIsImageViewerInfoOpen,
     setIsReaderOverflowOpen,
     setIsShowingAllBookmarks,
+    setIsShowingReaderAIProofread,
     setReaderAiAssistantState,
     setReaderExperimentalFontId,
     setReaderExperimentalFontWeight,
@@ -583,6 +596,23 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   halfwidthAlnumPunctuationNormalization: enabled
                 })
               }
+              onTildeNormalizationChange={(enabled) =>
+                readerSessionCommands.changeNovelReaderCorrection({
+                  tildeNormalization: enabled
+                })
+              }
+              onConsecutivePeriodNormalizationChange={(enabled) =>
+                readerSessionCommands.changeNovelReaderCorrection({
+                  consecutivePeriodNormalization: enabled
+                })
+              }
+              onGenerateAIProofread={() => {
+                void handleGenerateReaderAIProofread();
+              }}
+              onDeleteAIProofread={() => {
+                void handleDeleteReaderAIProofread();
+              }}
+              onShowingAIProofreadChange={setIsShowingReaderAIProofread}
               onHyphenDashNormalizationChange={(enabled) =>
                 readerSessionCommands.changeNovelReaderCorrection({
                   hyphenDashNormalization: enabled
@@ -612,7 +642,9 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   quoteNormalization: true,
                   hyphenDashNormalization: true,
                   parenthesisNormalization: true,
-                  halfwidthAlnumPunctuationNormalization: true
+                  halfwidthAlnumPunctuationNormalization: true,
+                  tildeNormalization: false,
+                  consecutivePeriodNormalization: false
                 });
               }}
               onReverseTapPageNavigationChange={setReverseTapPageNavigation}
@@ -620,8 +652,15 @@ export function ReaderScreen(props: ReaderScreenProps) {
               halfwidthAlnumPunctuationNormalizationEnabled={
                 activeReaderSettings?.correction.halfwidthAlnumPunctuationNormalization ?? true
               }
+              tildeNormalizationEnabled={activeReaderSettings?.correction.tildeNormalization ?? false}
+              consecutivePeriodNormalizationEnabled={
+                activeReaderSettings?.correction.consecutivePeriodNormalization ?? false
+              }
               hyphenDashNormalizationEnabled={activeReaderSettings?.correction.hyphenDashNormalization ?? true}
               isReaderCorrectionSaving={isReaderCorrectionUnavailable}
+              readerAIProofreadState={readerAIProofreadState}
+              hasAIProofread={hasReaderAIProofread}
+              isShowingAIProofread={isShowingReaderAIProofread}
               parenthesisNormalizationEnabled={activeReaderSettings?.correction.parenthesisNormalization ?? true}
               quoteNormalizationEnabled={activeReaderSettings?.correction.quoteNormalization ?? true}
               readerFontFamily={readerFontFamily}
@@ -632,6 +671,17 @@ export function ReaderScreen(props: ReaderScreenProps) {
               reverseTapPageNavigation={reverseTapPageNavigation}
             />
           </section>
+        ) : null}
+        {isShowingReaderAIProofread ? (
+          <button
+            aria-label="AI校正版を表示中。原文に戻す"
+            className="reader-ai-proofread-badge"
+            onClick={() => setIsShowingReaderAIProofread(false)}
+            title="原文に戻す"
+            type="button"
+          >
+            AI
+          </button>
         ) : null}
         {isReaderExperimentalFontOpen ? (
           <section ref={readerPanelRef}>

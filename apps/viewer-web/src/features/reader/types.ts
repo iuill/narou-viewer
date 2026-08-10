@@ -66,6 +66,8 @@ export type NovelReaderSettingsResponse = {
     hyphenDashNormalization: boolean;
     parenthesisNormalization: boolean;
     halfwidthAlnumPunctuationNormalization: boolean;
+    tildeNormalization: boolean;
+    consecutivePeriodNormalization: boolean;
   };
   updatedAt: string | null;
 };
@@ -177,6 +179,16 @@ export type EpisodeResponse = {
   plainTextLength: number;
   updatedAt: string;
   contentEtag: string;
+};
+
+export type ReaderAIProofreadResponse = {
+  status: "not_generated" | "ready";
+  novelId: string;
+  episodeIndex: EpisodeIndex;
+  sourceEtag: string;
+  generatedAt: string | null;
+  modelId: string | null;
+  readerDocument?: ReaderDocumentResponse;
 };
 
 export type NovelSearchMatch = {

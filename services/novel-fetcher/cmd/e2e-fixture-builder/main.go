@@ -108,7 +108,10 @@ func fixtureWorks(workSet string) ([]model.Work, error) {
 			},
 		},
 	}
-	verificationWorks := []model.Work{characterAliasVerificationWork(fetchedAt.Add(2 * time.Hour))}
+	verificationWorks := []model.Work{
+		characterAliasVerificationWork(fetchedAt.Add(2 * time.Hour)),
+		readerCorrectionVerificationWork(fetchedAt.Add(3 * time.Hour)),
+	}
 
 	switch strings.TrimSpace(strings.ToLower(workSet)) {
 	case "", "e2e":
@@ -221,6 +224,100 @@ func characterAliasVerificationWork(fetchedAt time.Time) model.Work {
 		Story:      "キャラクター抽出で、本名・別名・役職名・血縁呼称・偽名を混同しないか確認するための合成検証データです。",
 		FetchedAt:  fetchedAt,
 		Episodes:   episodes,
+	}
+}
+
+func readerCorrectionVerificationWork(fetchedAt time.Time) model.Work {
+	patternBody := strings.Join([]string{
+		"<p>冒険者のレベルは1~2です。次の訓練値は5~8です。</p>",
+		"<p>英字に挟まれた半角チルダsample~valueも確認します。</p>",
+		"<p>........行頭半角ピリオド8個です。</p>",
+		"<p>二つのピリオド..と三つのピリオド...も同じ三点リーダーへ置換します。</p>",
+		"<p>単独ピリオドA.Bは連続していないため維持します。</p>",
+		"<p>鉤括弧は「会話です」と『作中作です』を確認します。</p>",
+		"<p>和文括弧は（丸括弧）［角括弧］｛波括弧｝【隅付き括弧】を確認します。</p>",
+		"<p>山括弧は〈山括弧〉《二重山括弧》、亀甲括弧は〔亀甲括弧〕を確認します。</p>",
+		"<p>和文約物は、読点。句点・中点：コロン；セミコロン？疑問符！感嘆符を確認します。</p>",
+		"<p>縦書き記号は……三点リーダー、‥二点リーダー、――ダッシュ、〜波ダッシュ、ー長音です。</p>",
+		`<p>半角英字 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz</p>`,
+		`<p>半角数字 0123456789 / 混在 ID:ABC-123_xyz</p>`,
+		`<p>半角記号 ! &quot; # $ % &amp; &#39; ( ) * + , - . / : ; &lt; = &gt; ? @ [ \ ] ^ _ &#96; { | } ~</p>`,
+		"<p>全角英字 ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ</p>",
+		"<p>全角数字 ０１２３４５６７８９ / 混在 ＩＤ：ＡＢＣ－１２３＿ｘｙｚ</p>",
+		"<p>全角記号 ！＂＃＄％＆＇（）＊＋，－．／：；＜＝＞？＠［＼］＾＿｀｛｜｝～</p>",
+		"<p>数式と単位 +1 -2 ×3 ÷4 =5 ≠6 ≤7 ≥8 ±9 100% 12.5℃ ¥1,234 $56.78</p>",
+		"<p>矢印とその他 → ← ↑ ↓ ⇒ ⇔ ※ 〒 № α β Ω</p>",
+		"<p>合成　本文の字下げと、意図的な空白を確認します。</p>",
+		"<p><ruby>校正<rt>こうせい</rt></ruby>と<a href=\"https://example.invalid/synthetic\">合成リンク</a>を含む段落です。</p>",
+	}, "\n")
+	storyBody := strings.Join([]string{
+		"<p>雨の夜、冒険者リナは古びた依頼書をランタンにかざした。紙の隅には、赤い文字で【至急】と書かれている。</p>",
+		"<p>「依頼書には『北の塔で青い火を見た』ってある。危険度はレベル1~2、報酬は銀貨5~8枚か」</p>",
+		"<p>相棒のトウマは肩をすくめた。「ずいぶん幅があるな。........まあ、見に行くだけ行こう」</p>",
+		"<p>森を抜けると、霧の向こうに塔が現れた。入口の札には &quot;KEEP OUT!&quot;、その下には全角で「立入禁止！」とある。</p>",
+		"<p>扉の金属板には GATE-A17 / OPEN? [Y/N] と刻まれていた。隣には、誰かが炭で「ＧＡＴＥ－Ａ１７【封鎖中】」と書き足している。</p>",
+		"<p>「暗証番号は0123……いや、０１２３かも？」リナが半角のキーを押すと、表示は ERROR:CODE-02 のまま点滅した。</p>",
+		"<p>トウマが全角キーで「ＩＤ：ＡＢＣ－１２３」を入力する。すると扉は、ギィ――と細長い音を立てて開いた。</p>",
+		"<p>塔の中には（割れた時計）、［空の額縁］、そして〈青い火〉が浮かんでいた。火の下の台座には《夜明けを待つ者へ》とある。</p>",
+		"<p>........だれかいるの？　リナの声に、二階から「いるよ...ずっと、ここに」と返事が落ちてきた。</p>",
+		"<p>階段は全部で12段。けれど数えるたびに１３段、14段、また１２段へと変わる。確率50%？　そんな単純な仕掛けではない。</p>",
+		"<p>最上階で待っていたのは魔物ではなく、小さな時計職人だった。「午前0:00から針が動かないんだ。歯車A.Bを直してくれないか」</p>",
+		"<p>リナが歯車を右へ→、トウマが留め具を左へ←回す。+1、+2、+3……やがて針は正午を示し、青い火は金色へ変わった。</p>",
+		"<p><ruby>暁鐘<rt>ぎょうしょう</rt></ruby>が鳴るころ、二人は塔を出た。報酬は銀貨8枚と、職人が焼いた星形のパイだった。</p>",
+		"<p>「危険度は？」とトウマが尋ねる。「そうね……レベル1~2。ただし、空腹なら3~4かな」リナは笑い、温かなパイを半分に割った。</p>",
+	}, "\n")
+	firstHref := "/works/reader-correction-001/episodes/1"
+	secondHref := "/works/reader-correction-001/episodes/2"
+
+	return model.Work{
+		Site:       model.SiteVerification,
+		SiteName:   "表示検証用",
+		SiteWorkID: "reader-correction-001",
+		SourceURL:  "https://verification.local/works/reader-correction-001",
+		Title:      "校正確認用 チルダ・連続ピリオド合成本文",
+		Author:     "合成データ",
+		Story:      "作品単位の通常校正とAI本文校正を、原文と比較して確認するための合成検証データです。",
+		FetchedAt:  fetchedAt,
+		Episodes: []model.Episode{
+			{
+				Index:        "1",
+				Href:         firstHref,
+				SourceURL:    "https://verification.local" + firstHref,
+				Title:        "第一話　通常校正の確認",
+				FileSubtitle: "第一話　通常校正の確認",
+				Chapter:      "校正パターン",
+				Subchapter:   "文字・約物の網羅例",
+				PublishedAt:  "2026/08/10 12:00",
+				ModifiedAt:   "2026/08/10 12:00",
+				FetchedAt:    fetchedAt.Add(time.Minute),
+				Element: model.EpisodeElement{
+					DataType:     "html",
+					Introduction: "<p>すべて自作の合成文です。校正設定を切り替えて表示差を確認できます。</p>",
+					Body:         patternBody,
+					Postscript:   "<p>取得本文は変更せず、表示用の校正結果だけを確認します。</p>",
+				},
+				RawHTML: "<html><body>" + patternBody + "</body></html>",
+			},
+			{
+				Index:        "2",
+				Href:         secondHref,
+				SourceURL:    "https://verification.local" + secondHref,
+				Title:        "第二話　霧の塔と青い火",
+				FileSubtitle: "第二話　霧の塔と青い火",
+				Chapter:      "実例短編",
+				Subchapter:   "冒険者リナの夜",
+				PublishedAt:  "2026/08/10 12:05",
+				ModifiedAt:   "2026/08/10 12:05",
+				FetchedAt:    fetchedAt.Add(2 * time.Minute),
+				Element: model.EpisodeElement{
+					DataType:     "html",
+					Introduction: "<p>校正対象になりやすい表記を、会話と地の文に混ぜた自作の短編です。</p>",
+					Body:         storyBody,
+					Postscript:   "<p>第一話の網羅例と見比べながら、縦書き表示と校正結果を確認できます。</p>",
+				},
+				RawHTML: "<html><body>" + storyBody + "</body></html>",
+			},
+		},
 	}
 }
 

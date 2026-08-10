@@ -5,6 +5,8 @@ type ReaderCorrectionSettings struct {
 	HyphenDashNormalization                bool
 	ParenthesisNormalization               bool
 	HalfwidthAlnumPunctuationNormalization bool
+	TildeNormalization                     bool
+	ConsecutivePeriodNormalization         bool
 }
 
 type readerCorrectionState struct {
@@ -12,7 +14,7 @@ type readerCorrectionState struct {
 }
 
 func ApplyReaderCorrections(document ReaderDocument, settings ReaderCorrectionSettings) ReaderDocument {
-	if !settings.QuoteNormalization && !settings.HyphenDashNormalization && !settings.ParenthesisNormalization && !settings.HalfwidthAlnumPunctuationNormalization {
+	if !settings.QuoteNormalization && !settings.HyphenDashNormalization && !settings.ParenthesisNormalization && !settings.HalfwidthAlnumPunctuationNormalization && !settings.TildeNormalization && !settings.ConsecutivePeriodNormalization {
 		return document
 	}
 	next := document
@@ -144,7 +146,7 @@ func normalizeReaderHTMLHyphensAcrossTextNodes(nodes []*readerHTMLNode) {
 }
 
 func (state *readerCorrectionState) applyText(text string, settings ReaderCorrectionSettings) string {
-	if !settings.QuoteNormalization && !settings.HyphenDashNormalization && !settings.ParenthesisNormalization && !settings.HalfwidthAlnumPunctuationNormalization {
+	if !settings.QuoteNormalization && !settings.HyphenDashNormalization && !settings.ParenthesisNormalization && !settings.HalfwidthAlnumPunctuationNormalization && !settings.TildeNormalization && !settings.ConsecutivePeriodNormalization {
 		return text
 	}
 	runes := []rune(text)
@@ -177,6 +179,10 @@ func (state *readerCorrectionState) applyText(text string, settings ReaderCorrec
 			if settings.HalfwidthAlnumPunctuationNormalization {
 				runes[index] = '？'
 			}
+		case '~':
+			if settings.TildeNormalization {
+				runes[index] = '〜'
+			}
 		default:
 			if settings.HalfwidthAlnumPunctuationNormalization {
 				runes[index] = normalizeHalfwidthAlnumRune(r)
@@ -186,7 +192,31 @@ func (state *readerCorrectionState) applyText(text string, settings ReaderCorrec
 	if settings.HyphenDashNormalization {
 		normalizeConsecutiveHyphensToDash(runes)
 	}
+	if settings.ConsecutivePeriodNormalization {
+		runes = normalizeConsecutivePeriods(runes)
+	}
 	return string(runes)
+}
+
+func normalizeConsecutivePeriods(runes []rune) []rune {
+	result := make([]rune, 0, len(runes))
+	for index := 0; index < len(runes); {
+		if runes[index] != '.' {
+			result = append(result, runes[index])
+			index++
+			continue
+		}
+		start := index
+		for index < len(runes) && runes[index] == '.' {
+			index++
+		}
+		if index-start < 2 {
+			result = append(result, runes[start:index]...)
+			continue
+		}
+		result = append(result, '…', '…')
+	}
+	return result
 }
 
 func (settings ReaderCorrectionSettings) withoutHalfwidthAlnumPunctuationNormalization() ReaderCorrectionSettings {

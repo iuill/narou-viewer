@@ -342,6 +342,26 @@ func TestApplyReaderCorrectionsSettingsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestApplyReaderCorrectionsNormalizesTildesAndConsecutivePeriods(t *testing.T) {
+	document := ReaderDocument{
+		Version: 1,
+		Blocks: []ReaderBlock{{
+			Type:    "paragraph",
+			Section: "body",
+			Inlines: []ReaderInline{{Type: "text", Text: "レベル1~2なら........ん？単独.は維持"}},
+		}},
+	}
+
+	corrected := ApplyReaderCorrections(document, ReaderCorrectionSettings{
+		TildeNormalization:             true,
+		ConsecutivePeriodNormalization: true,
+	})
+
+	if got := corrected.Blocks[0].Inlines[0].Text; got != "レベル1〜2なら……ん？単独.は維持" {
+		t.Fatalf("unexpected author-specific correction: %q", got)
+	}
+}
+
 func TestApplyReaderCorrectionsDisabledKeepsDocument(t *testing.T) {
 	document := ReaderDocument{
 		Version: 1,

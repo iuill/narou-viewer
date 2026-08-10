@@ -18,6 +18,7 @@ import type {
   NovelSearchResponse,
   ReaderAiAssistantChatRequest,
   ReaderAiAssistantStreamEvent,
+  ReaderAIProofreadResponse,
   ReaderPreferencesResponse,
   ReaderState,
   TocResponse
@@ -155,6 +156,36 @@ export async function fetchEpisode(novelId: string, episodeIndex: EpisodeIndex):
     `/api/library/novels/${encodeURIComponent(novelId)}/episodes/${episodeIndex}`,
     undefined,
     "本文の取得に失敗しました。"
+  );
+}
+
+export async function fetchReaderAIProofread(
+  novelId: string,
+  episodeIndex: EpisodeIndex
+): Promise<ReaderAIProofreadResponse> {
+  return requestJson<ReaderAIProofreadResponse>(
+    `/api/library/novels/${encodeURIComponent(novelId)}/episodes/${encodeURIComponent(episodeIndex)}/ai-proofread`,
+    undefined,
+    "AI校正結果の取得に失敗しました。"
+  );
+}
+
+export async function generateReaderAIProofread(
+  novelId: string,
+  episodeIndex: EpisodeIndex
+): Promise<ReaderAIProofreadResponse> {
+  return requestJson<ReaderAIProofreadResponse>(
+    `/api/library/novels/${encodeURIComponent(novelId)}/episodes/${encodeURIComponent(episodeIndex)}/ai-proofread`,
+    { method: "POST" },
+    "AI校正に失敗しました。"
+  );
+}
+
+export async function deleteReaderAIProofread(novelId: string, episodeIndex: EpisodeIndex): Promise<void> {
+  await requestJson<undefined>(
+    `/api/library/novels/${encodeURIComponent(novelId)}/episodes/${encodeURIComponent(episodeIndex)}/ai-proofread`,
+    { method: "DELETE" },
+    "AI校正版の削除に失敗しました。"
   );
 }
 

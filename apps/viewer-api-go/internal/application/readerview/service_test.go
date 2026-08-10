@@ -66,7 +66,7 @@ func TestGetEpisodeAppliesReaderCorrectionsAndResponseETag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEpisode returned error: %v", err)
 	}
-	if view.ETag != "content-etag-reader-corrections-q1h1p1a1" || view.Episode.ContentEtag != view.ETag {
+	if view.ETag != "content-etag-reader-corrections-q1h1p1a1t0d0" || view.Episode.ContentEtag != view.ETag {
 		t.Fatalf("reader correction ETag should be reflected: %+v", view)
 	}
 }

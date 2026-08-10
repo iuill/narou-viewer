@@ -168,6 +168,7 @@ path は `data/` からの相対 path を表す。
 | `VA-EXTRACTION-INDEX` | `state/extraction_jobs/index/*.yaml` | viewer-api / 実装済み | 派生 index | job file から rebuild 可 | 作品単位で削除 | job ID、進捗 |
 | `VA-EXTRACTION-CHECKPOINT` | `state/extraction_jobs/checkpoints/*.json` | viewer-api / 実装済み | 一時 state | 再実行できるが provider request と料金が再発生し得る | commit 後と作品削除時に削除 | 未commit model output |
 | `VA-AI-USAGE` | `state/ai_usage.sqlite` | viewer-api / 実装済み | 監査・利用履歴 | 再構築不能。消失しても現在の reader / generation state は壊れないが履歴を失う | 作品紐づき run を削除 | 利用 metadata、会話件数・文字数、転記されたユーザー文言、本文 excerpt / snippet / passage を含み得る制限付き tool I/O |
+| `VA-READER-AI-PROOFREAD` | `state/reader_ai_proofreads/**/*.json` | viewer-api / 実装済み | 派生 view | 原文とLLM設定から再生成可能。消失・不整合時は原文表示へ戻る | 利用者操作では話単位、作品削除時は作品単位で削除 | 第三者作品由来のAI校正版 |
 | `VA-READER-SEARCH` | `state/reader_search.sqlite` | viewer-api / 実装済み | 再生成可能 cache | canonical episode と reader document から lazy rebuild 可 | 作品行を削除 | 第三者作品本文の plain text |
 | `NF-LIBRARY` | `novel-fetcher/library.sqlite` | novel-fetcher / 実装済み | library catalog・索引・取得状態の正本 | `works/**` と一体で保護。DB または file 単独 restore は不整合要因 | fetcher の作品削除で処理 | 作品 metadata、取得履歴 |
 | `NF-CANONICAL-EPISODE` | `novel-fetcher/works/**/episodes/*.json` | novel-fetcher / 実装済み | 取得済み本文の local canonical copy | 再取得できても削除・改稿により同一内容を保証できない | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者作品本文 |
@@ -185,7 +186,7 @@ path は `data/` からの相対 path を表す。
 | `VA-READING` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。欠落・malformed・未知 version は mutation 前に拒否し、元 bytes を維持 | 対応 build または supported backup を使う。tombstone の `state_version` は schema version と別軸 |
 | `VA-BOOKMARKS` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。未知 version は作品単位 prune でも拒否 | 対応 build または supported backup を使う |
 | `VA-PREFERENCES` | `schema_version: 3`、supported legacy なし | current のみ typed read / write。未知 version を既定値へ暗黙変換しない | 対応 build または supported backup を使う |
-| `VA-NOVEL-SETTINGS` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。未知 version を作品単位 prune で上書きしない | 対応 build または supported backup を使う |
+| `VA-NOVEL-SETTINGS` | `schema_version: 4`、legacy v3 | v3をreadし、次回writeでv4化する。v4では作品単位のチルダ・連続ピリオド校正設定を追加する。その他の未知versionを作品単位pruneで上書きしない | v3は対応buildでmigration。その他は対応buildまたはsupported backupを使う |
 | `VA-AI-SETTINGS` | document `schema_version: 2`、credential `api_key_version: 1` | document / crypto を独立判定。document は current のみ。平文 key は passphrase があれば encrypted v1 へ lazy migrationし、未知 crypto payload は decrypt・消去・再保存しない | document または crypto に対応する build と同じ master passphrase を使う |
 | `VA-PUBLICATIONS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を read し、次回 materialize / write で v1 化。その他の未知 version は write / prune を拒否 | v0 は対応 build で migration。未知 version は対応 build / backup を使う |
 | `VA-CHAR-EVENTS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を legacy profile migration として read。未知 version は生成、materialize、prune を拒否 | events を生成正本として復旧。fence 前 build への rollback は新 field 消失の危険がある |
@@ -202,6 +203,8 @@ path は `data/` からの相対 path を表す。
 | `NF-ASSETS` | file format 固有、索引は DB | opaque binary | schema migration 対象外。DB metadata と hash の整合を検査 |
 | `NF-TASKS` | migration 4 | `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints` | task request・状態遷移・idempotency・queue order・起動 recovery を管理する。`queued` のみ自動実行し、`paused` / `interrupted` / `failed` は明示 resume まで保持する |
 | `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import なし | unknown version / field / malformed data を mutation 前に strict reject。dry-run と apply は同一 validator（[#17](https://github.com/iuill/narou-viewer/issues/17)） |
+
+`VA-NOVEL-SETTINGS`をschema v4対応前のbuildへロールバックする場合、旧buildはv4を読み込めないため、そのまま再保存して移行することはできない。サービスを停止してからv3のbackupを復元する。作品別読書設定を失ってよい場合は`state/novel_reader_settings.yaml`を退避または削除し、旧buildにv3として再作成させてもよい。手動で戻す場合は`schema_version`を3へ変更し、v4で追加した`tilde_normalization`と`consecutive_period_normalization`を全作品から削除する。いずれも取得済み原文には影響しない。
 
 ## 4. schema 別の重要事項
 

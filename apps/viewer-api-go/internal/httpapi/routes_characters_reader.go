@@ -16,6 +16,7 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerassistant"
+	"narou-viewer/apps/viewer-api-go/internal/application/readerproofread"
 	"narou-viewer/apps/viewer-api-go/internal/application/readerview"
 	"narou-viewer/apps/viewer-api-go/internal/characters"
 	"narou-viewer/apps/viewer-api-go/internal/extraction"
@@ -68,7 +69,13 @@ func (s *Server) handleNovelSubroute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.HasPrefix(suffix, "episodes/") {
-			s.handleEpisode(w, r, novelID, trimPathValue(strings.TrimPrefix(suffix, "episodes/")))
+			episodeSuffix := strings.TrimPrefix(suffix, "episodes/")
+			if strings.HasSuffix(episodeSuffix, "/ai-proofread") {
+				episodeIndex := trimPathValue(strings.TrimSuffix(episodeSuffix, "/ai-proofread"))
+				s.handleEpisodeAIProofread(w, r, novelID, episodeIndex)
+				return
+			}
+			s.handleEpisode(w, r, novelID, trimPathValue(episodeSuffix))
 			return
 		}
 		if strings.HasPrefix(suffix, "assets/") {
@@ -76,6 +83,67 @@ func (s *Server) handleNovelSubroute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleReaderSubroute(w, r, novelID, suffix)
+	}
+}
+
+func (s *Server) handleEpisodeAIProofread(w http.ResponseWriter, r *http.Request, novelID string, episodeIndex string) {
+	if !isDigits(episodeIndex) {
+		writeError(w, http.StatusBadRequest, "episodeIndex must be a non-negative integer string.")
+		return
+	}
+	if s.readerProofread == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI校正を利用できません。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		result, err := s.readerProofread.Get(r.Context(), novelID, episodeIndex)
+		if err != nil {
+			writeResult(w, nil, err)
+			return
+		}
+		if result.SourceETag == "" {
+			writeError(w, http.StatusNotFound, "Episode not found.")
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case http.MethodPost:
+		ctx, cancel := context.WithTimeout(r.Context(), nonStreamingLLMTimeout)
+		defer cancel()
+		result, err := s.readerProofread.Generate(ctx, novelID, episodeIndex)
+		if errors.Is(err, readerproofread.ErrUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		if errors.Is(err, readerproofread.ErrUnsupportedDocument) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if errors.Is(err, readerproofread.ErrOutputTooLong) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if errors.Is(err, readerproofread.ErrInvalidOutput) {
+			writeError(w, http.StatusUnprocessableEntity, readerproofread.ErrInvalidOutput.Error())
+			return
+		}
+		if err != nil {
+			writeResult(w, nil, err)
+			return
+		}
+		if result.SourceETag == "" {
+			writeError(w, http.StatusNotFound, "Episode not found.")
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case http.MethodDelete:
+		if err := s.readerProofread.Delete(novelID, episodeIndex); err != nil {
+			writeResult(w, nil, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		methodOnly(w, r, http.MethodGet, http.MethodPost, http.MethodDelete)
 	}
 }
 
@@ -321,6 +389,22 @@ func (s *Server) handleNovelReaderSettings(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			patch.HalfwidthAlnumPunctuationNormalization = &halfwidthAlnumPunctuationNormalization
+		}
+		if rawTildeNormalization, exists := correctionValue["tildeNormalization"]; exists {
+			tildeNormalization, ok := rawTildeNormalization.(bool)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "correction.tildeNormalization must be a boolean.")
+				return
+			}
+			patch.TildeNormalization = &tildeNormalization
+		}
+		if rawConsecutivePeriodNormalization, exists := correctionValue["consecutivePeriodNormalization"]; exists {
+			consecutivePeriodNormalization, ok := rawConsecutivePeriodNormalization.(bool)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "correction.consecutivePeriodNormalization must be a boolean.")
+				return
+			}
+			patch.ConsecutivePeriodNormalization = &consecutivePeriodNormalization
 		}
 		if patch.IsEmpty() {
 			writeError(w, http.StatusBadRequest, "At least one correction field is required.")
