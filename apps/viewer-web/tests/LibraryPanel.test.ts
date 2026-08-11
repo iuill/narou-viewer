@@ -352,6 +352,18 @@ describe("LibraryPanel", () => {
     expect(managementMenu?.hasAttribute("open")).toBe(true);
 
     await act(async () => {
+      dom.window.document.body.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+    });
+    expect(managementMenu?.hasAttribute("open")).toBe(false);
+
+    await click(managementSummary as Element, dom);
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    });
+    expect(managementMenu?.hasAttribute("open")).toBe(false);
+    expect(dom.window.document.activeElement).toBe(managementSummary);
+
+    await act(async () => {
       root.render(createElement(LibraryPanel, createProps({ mobileHomeTab: "library" })));
     });
 

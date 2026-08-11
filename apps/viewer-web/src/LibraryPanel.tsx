@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   formatFetcherTaskProgress,
   formatFetcherTaskStepProgress,
@@ -186,8 +186,42 @@ export function LibraryPanel({
 }: Props) {
   const [openStoryNovelId, setOpenStoryNovelId] = useState<string | null>(null);
   const [expandedStoryNovelId, setExpandedStoryNovelId] = useState<string | null>(null);
+  const managementMenuRef = useRef<HTMLDetailsElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const isMobileDownloadTab = mobileHomeTab === "download";
+
+  useEffect(() => {
+    function closeManagementMenu({ restoreFocus = false } = {}) {
+      const menu = managementMenuRef.current;
+      if (!menu?.open) {
+        return;
+      }
+      menu.removeAttribute("open");
+      if (restoreFocus) {
+        menu.querySelector("summary")?.focus();
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const menu = managementMenuRef.current;
+      if (event.target instanceof Node && menu?.open && !menu.contains(event.target)) {
+        closeManagementMenu();
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeManagementMenu({ restoreFocus: true });
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
   const shouldShowDownloadComposer = isDownloadComposerOpen || isMobileDownloadTab;
   const shouldShowQueueSection = fetcherTaskEntries.length > 0 || fetcherStatusError || isMobileDownloadTab;
   const shouldShowLibraryList = !isMobileDownloadTab;
@@ -266,9 +300,16 @@ export function LibraryPanel({
                   作品を追加
                 </button>
               ) : null}
-              <details className="library-management-menu">
+              <details className="library-management-menu" ref={managementMenuRef}>
                 <summary className="library-export-button">管理</summary>
-                <div className="library-management-popover">
+                <div
+                  className="library-management-popover"
+                  onClickCapture={(event) => {
+                    if (event.target instanceof Element && event.target.closest("button")) {
+                      managementMenuRef.current?.removeAttribute("open");
+                    }
+                  }}
+                >
                   <StorageUsagePopover selectedNovelId={selectedNovelId} />
                   <button
                     aria-label="ライブラリを書き出す"
