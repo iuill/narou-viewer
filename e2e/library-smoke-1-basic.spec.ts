@@ -33,17 +33,18 @@ test.describe("pc-xga 代表の fetcher validation", () => {
   });
 });
 
-test("library screen opens the fetcher download composer from the add button", async ({ page }) => {
+test("library screen opens the fetcher download composer from the available add entry point", async ({ page }) => {
   await gotoLibrary(page);
 
   if (test.info().project.use.hasTouch === true) {
     await expect(page.locator(".toc-panel")).toHaveCount(0);
     await expect(page.getByText("作品詳細")).toHaveCount(0);
+    await page.getByRole("button", { name: "取得", exact: true }).click();
+  } else {
+    await page.locator(".library-panel").getByRole("button", { name: "作品を追加" }).click();
   }
 
   const libraryPanel = page.locator(".library-panel");
-  await libraryPanel.getByRole("button", { name: "小説を追加" }).click();
-
   const composer = libraryPanel.locator(".library-download-composer");
   await expect(composer).toBeVisible();
   const submitButton = composer.getByRole("button", { name: "ダウンロード" });

@@ -57,7 +57,7 @@ test.describe("pc-xga 代表の catalog checks", () => {
 
       const [download] = await Promise.all([
         page.waitForEvent("download"),
-        page.getByRole("button", { name: "エクスポート", exact: true }).click()
+        page.getByRole("button", { name: "ライブラリを書き出す", exact: true }).click()
       ]);
       const stream = await download.createReadStream();
 
@@ -121,7 +121,7 @@ test.describe("pc-xga 代表の catalog checks", () => {
         }]
       };
       page.once("dialog", (dialog) => dialog.accept());
-      await page.getByLabel("ライブラリexportを選択").setInputFiles({
+      await page.getByLabel("読み込むライブラリファイルを選択").setInputFiles({
         name: "library-export.yaml",
         mimeType: "application/x-yaml",
         buffer: Buffer.from(JSON.stringify(importDocument))

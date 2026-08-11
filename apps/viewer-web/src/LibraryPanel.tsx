@@ -253,41 +253,49 @@ export function LibraryPanel({
           </p>
           {isMobileDownloadTab ? null : (
             <div className="library-header-buttons">
-              <StorageUsagePopover selectedNovelId={selectedNovelId} />
-              <button
-                className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
-                disabled={isLibraryExporting || novelsCount === 0}
-                onClick={() => void onExportLibrary()}
-                type="button"
-              >
-                {isLibraryExporting ? "出力中..." : "エクスポート"}
-              </button>
-              <button
-                className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
-                disabled={isLibraryImporting}
-                onClick={() => importInputRef.current?.click()}
-                type="button"
-              >
-                {isLibraryImporting ? "読込中..." : "インポート"}
-              </button>
+              {mobileHomeTab === undefined ? (
+                <button
+                  aria-expanded={isDownloadComposerOpen}
+                  aria-label="作品を追加"
+                  className="library-add-button"
+                  onClick={onToggleDownloadComposer}
+                  title="作品URLから取得"
+                  type="button"
+                >
+                  <span aria-hidden="true">＋</span>
+                  作品を追加
+                </button>
+              ) : null}
+              <fieldset className="library-management-actions">
+                <legend className="library-management-label">管理</legend>
+                <StorageUsagePopover selectedNovelId={selectedNovelId} />
+                <button
+                  aria-label="ライブラリを書き出す"
+                  className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
+                  disabled={isLibraryExporting || novelsCount === 0}
+                  onClick={() => void onExportLibrary()}
+                  type="button"
+                >
+                  {isLibraryExporting ? "出力中..." : "書き出す"}
+                </button>
+                <button
+                  aria-label="ライブラリを読み込む"
+                  className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
+                  disabled={isLibraryImporting}
+                  onClick={() => importInputRef.current?.click()}
+                  type="button"
+                >
+                  {isLibraryImporting ? "読込中..." : "読み込む"}
+                </button>
+              </fieldset>
               <input
                 accept=".yaml,.yml,application/x-yaml,text/yaml"
-                aria-label="ライブラリexportを選択"
+                aria-label="読み込むライブラリファイルを選択"
                 hidden
                 onChange={handleImportFileChange}
                 ref={importInputRef}
                 type="file"
               />
-              <button
-                aria-expanded={isDownloadComposerOpen}
-                aria-label="小説を追加"
-                className="library-add-button"
-                onClick={onToggleDownloadComposer}
-                title="小説を追加"
-                type="button"
-              >
-                +
-              </button>
             </div>
           )}
         </div>

@@ -224,9 +224,9 @@ describe("LibraryPanel", () => {
     await click(getButtonByText(container, "クリア"), dom);
     await click(getButtonByText(container, "前へ"), dom);
     await click(getButtonByText(container, "次へ"), dom);
-    await click(getButtonByText(container, "エクスポート"), dom);
+    await click(getButtonByText(container, "書き出す"), dom);
     await click(getButtonByText(container, "小説B"), dom);
-    await click(container.querySelector('button[aria-label="小説を追加"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="作品を追加"]') as Element, dom);
 
     expect(props.onDownloadSubmit).toHaveBeenCalledTimes(1);
     expect(props.onCloseDownloadComposer).toHaveBeenCalledTimes(1);
@@ -317,7 +317,7 @@ describe("LibraryPanel", () => {
       visibleLibraryNovels: []
     });
     const { container, root, dom } = await renderPanel(emptyProps);
-    const exportButton = getButtonByText(container, "エクスポート");
+    const exportButton = getButtonByText(container, "書き出す");
 
     expect(exportButton.disabled).toBe(true);
     await click(exportButton, dom);
@@ -331,6 +331,26 @@ describe("LibraryPanel", () => {
     expect(exportingButton.disabled).toBe(true);
     await click(exportingButton, dom);
     expect(onExportLibrary).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("作品追加とライブラリ管理を分け、モバイルでは追加を取得タブへ一本化する", async () => {
+    const { container, root } = await renderPanel(createProps());
+
+    expect(container.querySelector('button[aria-label="作品を追加"]')).not.toBeNull();
+    expect(container.querySelector(".library-management-actions")).not.toBeNull();
+    expect(container.querySelector('button[aria-label="ライブラリを書き出す"]')).not.toBeNull();
+    expect(container.querySelector('button[aria-label="ライブラリを読み込む"]')).not.toBeNull();
+
+    await act(async () => {
+      root.render(createElement(LibraryPanel, createProps({ mobileHomeTab: "library" })));
+    });
+
+    expect(container.querySelector('button[aria-label="作品を追加"]')).toBeNull();
+    expect(container.querySelector(".library-management-actions")).not.toBeNull();
 
     await act(async () => {
       root.unmount();

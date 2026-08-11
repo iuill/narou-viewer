@@ -27,6 +27,23 @@
   justify-content: flex-end;
 }
 
+.library-management-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border: 0;
+  border-left: 1px solid rgba(84, 58, 22, 0.14);
+  margin: 0;
+}
+
+.library-management-label {
+  padding: 0;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .mobile-workspace-toggle {
   display: none;
   margin-bottom: 12px;
@@ -38,15 +55,23 @@
 }
 
 .library-add-button {
-  width: 38px;
-  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
   border: 1px solid rgba(157, 75, 47, 0.22);
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(255, 250, 242, 0.98), rgba(246, 234, 218, 0.94));
   color: var(--accent-strong);
-  font-size: 1.6rem;
+  font-size: 0.88rem;
+  font-weight: 700;
   line-height: 1;
   box-shadow: 0 10px 20px rgba(73, 43, 18, 0.08);
+}
+
+.library-add-button span {
+  font-size: 1.2rem;
 }
 
 .library-add-button:hover {
@@ -439,6 +464,24 @@
   background: rgba(120, 98, 70, 0.18) !important;
 }
 
+@media (min-width: 1001px) and (max-width: 1280px) {
+  .library-panel > .panel-header {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .library-panel > .panel-header .panel-header-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .library-header-buttons {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 720px) {
   .library-panel > .panel-header {
     display: grid;
@@ -458,6 +501,11 @@
     order: 1;
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .library-management-actions {
+    padding-left: 0;
+    border-left: 0;
   }
 
   .storage-usage-overlay {
