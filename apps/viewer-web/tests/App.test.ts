@@ -2202,7 +2202,7 @@ describe("App", () => {
     });
   });
 
-  it("1000px幅ではトップページに作品詳細を表示しない", async () => {
+  it("1000px以下はモバイルUI、1001px以上はPC向け2ペインで表示する", async () => {
     const fetchHandler: FetchHandler = async (url) => {
       const requestUrl = new URL(url, "http://localhost");
 
@@ -2379,6 +2379,22 @@ describe("App", () => {
 
     await act(async () => {
       root.unmount();
+    });
+
+    const desktop = await renderApp(fetchHandler, {
+      viewportWidth: 1001
+    });
+
+    await waitFor(
+      () => desktop.container.textContent?.includes("Library") === true && desktop.container.textContent?.includes("小説A") === true
+    );
+
+    expect(desktop.container.querySelector(".mobile-home-tabs")).toBeNull();
+    expect(desktop.container.querySelectorAll(".workspace-grid > .panel")).toHaveLength(2);
+    expect(desktop.container.querySelector(".toc-panel")).not.toBeNull();
+
+    await act(async () => {
+      desktop.root.unmount();
     });
   });
 

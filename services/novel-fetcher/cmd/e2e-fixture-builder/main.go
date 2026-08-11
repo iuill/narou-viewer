@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"image"
@@ -33,11 +34,17 @@ func main() {
 }
 
 func buildFixture(outputDir string, workSet string) error {
+	for _, relativePath := range []string{"library.sqlite", "library.sqlite-shm", "library.sqlite-wal", "works"} {
+		if err := os.RemoveAll(filepath.Join(outputDir, relativePath)); err != nil {
+			return fmt.Errorf("reset fixture output %s: %w", relativePath, err)
+		}
+	}
+
 	store, err := storage.NewStore(outputDir)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	works, err := fixtureWorks(workSet)
 	if err != nil {
@@ -49,6 +56,36 @@ func buildFixture(outputDir string, workSet string) error {
 		}
 	}
 
+	if err := store.Close(); err != nil {
+		return err
+	}
+	return normalizeFixtureDatabase(outputDir)
+}
+
+func normalizeFixtureDatabase(outputDir string) error {
+	databasePath := filepath.Join(outputDir, "library.sqlite")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	fixedTimestamp := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, query := range []string{
+		"UPDATE works SET created_at = ?, updated_at = ?",
+		"UPDATE episodes SET last_attempted_at = ?",
+	} {
+		arguments := []any{fixedTimestamp}
+		if strings.Contains(query, "created_at") {
+			arguments = append(arguments, fixedTimestamp)
+		}
+		if _, err := db.Exec(query, arguments...); err != nil {
+			return fmt.Errorf("normalize fixture timestamps: %w", err)
+		}
+	}
+	if _, err := db.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("vacuum fixture database: %w", err)
+	}
 	return nil
 }
 

@@ -1,11 +1,37 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestE2EWorksSeparateReaderControlsAndSearchState(t *testing.T) {
+func TestBuildFixtureProducesDeterministicDatabase(t *testing.T) {
+	outputDir := t.TempDir()
+	if err := buildFixture(outputDir, "e2e"); err != nil {
+		t.Fatalf("first buildFixture returned error: %v", err)
+	}
+	firstDatabase, err := os.ReadFile(filepath.Join(outputDir, "library.sqlite"))
+	if err != nil {
+		t.Fatalf("read first fixture database: %v", err)
+	}
+
+	if err := buildFixture(outputDir, "e2e"); err != nil {
+		t.Fatalf("second buildFixture returned error: %v", err)
+	}
+	secondDatabase, err := os.ReadFile(filepath.Join(outputDir, "library.sqlite"))
+	if err != nil {
+		t.Fatalf("read second fixture database: %v", err)
+	}
+
+	if !bytes.Equal(firstDatabase, secondDatabase) {
+		t.Fatal("fixture database changed between identical builds")
+	}
+}
+
+func TestE2EWorksIncludeDedicatedReaderFixtures(t *testing.T) {
 	works, err := fixtureWorks("e2e")
 	if err != nil {
 		t.Fatalf("fixtureWorks returned error: %v", err)
