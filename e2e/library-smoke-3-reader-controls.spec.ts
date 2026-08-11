@@ -62,8 +62,15 @@ test("作品内検索のプレビューは既読位置を変えず、明示操�
       request.postDataJSON().lastReadEpisodeIndex === "2"
   );
   await panel.getByRole("button", { name: "この位置から読む" }).click();
-  await expect(page.getByRole("heading", { name: "第二話" })).toBeVisible();
-  await savedEpisode;
+  const savedEpisodeRequest = await savedEpisode;
+  const savedEpisodePayload = savedEpisodeRequest.postDataJSON() as {
+    lastReadEpisodeIndex?: string;
+    position?: number;
+  };
+  expect(savedEpisodePayload.lastReadEpisodeIndex).toBe("2");
+  expect(savedEpisodePayload.position).toBeGreaterThan(0);
+  await expect.poll(() => new URL(page.url()).searchParams.get("episode")).toBe("2");
+  await expect(page.getByLabel("本文画面の目次")).toHaveCount(0);
 });
 
 test("本文ページでページ移動と各アイコンの機能が動作する", async ({ page, request }, testInfo) => {
