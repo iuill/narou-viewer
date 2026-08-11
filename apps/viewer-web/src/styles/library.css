@@ -50,7 +50,8 @@
 .library-management-popover {
   position: absolute;
   top: calc(100% + 8px);
-  left: 0;
+  right: 0;
+  left: auto;
   z-index: 20;
   display: grid;
   gap: 8px;
@@ -505,13 +506,6 @@
   }
 }
 
-@media (min-width: 721px) and (max-width: 1000px) {
-  .library-management-popover {
-    right: 0;
-    left: auto;
-  }
-}
-
 @media (max-width: 720px) {
   .library-panel > .panel-header {
     display: grid;
@@ -531,6 +525,11 @@
     order: 1;
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .library-management-popover {
+    right: auto;
+    left: 0;
   }
 
   .storage-usage-overlay {
