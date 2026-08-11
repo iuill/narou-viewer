@@ -103,6 +103,18 @@ async function changeSelect(select: HTMLSelectElement, value: string, dom: JSDOM
   });
 }
 
+function getSwitchByLabel(container: HTMLElement, label: string): HTMLInputElement {
+  const input = Array.from(container.querySelectorAll<HTMLInputElement>('input[role="switch"]')).find(
+    (candidate) => candidate.closest("label")?.textContent?.includes(label)
+  );
+
+  if (!input) {
+    throw new Error(`switch not found: ${label}`);
+  }
+
+  return input;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -134,14 +146,14 @@ describe("ReaderSettingsPanel", () => {
     const selects = container.querySelectorAll("select");
     await changeSelect(selects[0] as HTMLSelectElement, "gothic", dom);
     await changeSelect(selects[1] as HTMLSelectElement, "forest", dom);
-    await changeSelect(selects[2] as HTMLSelectElement, "reversed", dom);
-    await changeSelect(selects[3] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[4] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[5] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[6] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[7] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[8] as HTMLSelectElement, "enabled", dom);
-    await changeSelect(selects[9] as HTMLSelectElement, "debug", dom);
+    await click(getSwitchByLabel(container, "左右端タップのページ移動を反転"), dom);
+    await click(getSwitchByLabel(container, "引用符を〝〟へ置換"), dom);
+    await click(getSwitchByLabel(container, "連続ハイフンをダッシュへ置換"), dom);
+    await click(getSwitchByLabel(container, "半角括弧を全角へ置換"), dom);
+    await click(getSwitchByLabel(container, "半角英数字・!?を全角へ置換"), dom);
+    await click(getSwitchByLabel(container, "半角チルダを波ダッシュへ置換"), dom);
+    await click(getSwitchByLabel(container, "連続ピリオドを……へ置換"), dom);
+    await click(getSwitchByLabel(container, "あふれる列を緑で可視化"), dom);
     await click(container.querySelector('button[aria-label="読書設定を閉じる"]') as Element, dom);
 
     expect(props.onReadingModeChange).toHaveBeenCalledWith("horizontal");
@@ -229,52 +241,44 @@ describe("ReaderSettingsPanel", () => {
     });
   });
 
-  it("左右端タップの反転設定を選択状態に応じて描画する", async () => {
+  it("左右端タップの反転設定をトグルの状態に応じて描画する", async () => {
     const props = createProps({
       reverseTapPageNavigation: true
     });
     const { container, root } = await renderPanel(props);
 
-    const tapNavigationSelect = container.querySelectorAll("select")[2] as HTMLSelectElement;
-    expect(tapNavigationSelect.value).toBe("reversed");
+    expect(getSwitchByLabel(container, "左右端タップのページ移動を反転").checked).toBe(true);
 
     await act(async () => {
       root.unmount();
     });
   });
 
-  it("列はみ出しデバッグ設定を選択状態に応じて描画する", async () => {
+  it("列はみ出しデバッグ設定をトグルの状態に応じて描画する", async () => {
     const props = createProps({
       debugPageOverflow: true
     });
     const { container, root } = await renderPanel(props);
 
-    const overflowDebugSelect = container.querySelectorAll("select")[9] as HTMLSelectElement;
-    expect(overflowDebugSelect.value).toBe("debug");
+    expect(getSwitchByLabel(container, "あふれる列を緑で可視化").checked).toBe(true);
 
     await act(async () => {
       root.unmount();
     });
   });
 
-  it("本文校正が利用できない間は引用符置換の選択を無効化する", async () => {
+  it("本文校正が利用できない間は各トグルを無効化する", async () => {
     const props = createProps({
       isReaderCorrectionSaving: true
     });
     const { container, root } = await renderPanel(props);
 
-    const quoteNormalizationSelect = container.querySelectorAll("select")[3] as HTMLSelectElement;
-    const hyphenDashNormalizationSelect = container.querySelectorAll("select")[4] as HTMLSelectElement;
-    const parenthesisNormalizationSelect = container.querySelectorAll("select")[5] as HTMLSelectElement;
-    const halfwidthAlnumPunctuationNormalizationSelect = container.querySelectorAll("select")[6] as HTMLSelectElement;
-    const tildeNormalizationSelect = container.querySelectorAll("select")[7] as HTMLSelectElement;
-    const consecutivePeriodNormalizationSelect = container.querySelectorAll("select")[8] as HTMLSelectElement;
-    expect(quoteNormalizationSelect.disabled).toBe(true);
-    expect(hyphenDashNormalizationSelect.disabled).toBe(true);
-    expect(parenthesisNormalizationSelect.disabled).toBe(true);
-    expect(halfwidthAlnumPunctuationNormalizationSelect.disabled).toBe(true);
-    expect(tildeNormalizationSelect.disabled).toBe(true);
-    expect(consecutivePeriodNormalizationSelect.disabled).toBe(true);
+    expect(getSwitchByLabel(container, "引用符を〝〟へ置換").disabled).toBe(true);
+    expect(getSwitchByLabel(container, "連続ハイフンをダッシュへ置換").disabled).toBe(true);
+    expect(getSwitchByLabel(container, "半角括弧を全角へ置換").disabled).toBe(true);
+    expect(getSwitchByLabel(container, "半角英数字・!?を全角へ置換").disabled).toBe(true);
+    expect(getSwitchByLabel(container, "半角チルダを波ダッシュへ置換").disabled).toBe(true);
+    expect(getSwitchByLabel(container, "連続ピリオドを……へ置換").disabled).toBe(true);
     expect(getButtonByText(container, "読書設定を初期化").disabled).toBe(true);
 
     await act(async () => {
