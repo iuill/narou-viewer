@@ -2382,7 +2382,9 @@ describe("App", () => {
     });
 
     const desktop = await renderApp(fetchHandler, {
-      viewportWidth: 1001
+      viewportWidth: 1001,
+      coarsePointer: true,
+      maxTouchPoints: 5
     });
 
     await waitFor(

@@ -31,6 +31,26 @@ func TestBuildFixtureProducesDeterministicDatabase(t *testing.T) {
 	}
 }
 
+func TestBuildFixturePreservesOutputForUnknownWorkSet(t *testing.T) {
+	outputDir := t.TempDir()
+	databasePath := filepath.Join(outputDir, "library.sqlite")
+	want := []byte("existing fixture")
+	if err := os.WriteFile(databasePath, want, 0o644); err != nil {
+		t.Fatalf("write existing fixture: %v", err)
+	}
+
+	if err := buildFixture(outputDir, "unknown"); err == nil {
+		t.Fatal("buildFixture returned nil error for unknown work set")
+	}
+	got, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read existing fixture after rejected build: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("existing fixture changed after rejected build: got %q", got)
+	}
+}
+
 func TestE2EWorksIncludeDedicatedReaderFixtures(t *testing.T) {
 	works, err := fixtureWorks("e2e")
 	if err != nil {
