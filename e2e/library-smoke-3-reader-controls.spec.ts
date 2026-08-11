@@ -56,20 +56,20 @@ test("作品内検索のプレビューは既読位置を変えず、明示操�
   expect(episodeTwoStateWrites).toHaveLength(stateWriteCountBeforePreview);
 
   const savedEpisode = page.waitForRequest(
-    (request) =>
-      request.method() === "PUT" &&
-      request.url().endsWith("/api/reader/state") &&
-      request.postDataJSON().lastReadEpisodeIndex === "2"
+    (request) => {
+      if (request.method() !== "PUT" || !request.url().endsWith("/api/reader/state")) {
+        return false;
+      }
+      const payload = request.postDataJSON() as { lastReadEpisodeIndex?: string; position?: number };
+      return payload.lastReadEpisodeIndex === "2" && typeof payload.position === "number" && payload.position > 0;
+    }
   );
   await panel.getByRole("button", { name: "この位置から読む" }).click();
-  const savedEpisodeRequest = await savedEpisode;
-  const savedEpisodePayload = savedEpisodeRequest.postDataJSON() as {
-    lastReadEpisodeIndex?: string;
-    position?: number;
-  };
-  expect(savedEpisodePayload.lastReadEpisodeIndex).toBe("2");
-  expect(savedEpisodePayload.position).toBeGreaterThan(0);
+  await savedEpisode;
   await expect.poll(() => new URL(page.url()).searchParams.get("episode")).toBe("2");
+  await expect
+    .poll(() => Number.parseInt(new URL(page.url()).searchParams.get("pos") ?? "", 10))
+    .toBeGreaterThan(0);
   await expect(page.getByLabel("本文画面の目次")).toHaveCount(0);
 });
 
