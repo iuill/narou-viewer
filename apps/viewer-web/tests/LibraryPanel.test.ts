@@ -304,7 +304,7 @@ describe("LibraryPanel", () => {
     });
   });
 
-  it("作品がないときと出力中はエクスポートボタンを無効化する", async () => {
+  it("作品がないときと出力中は書き出しボタンを無効化する", async () => {
     const onExportLibrary = vi.fn();
     const emptyProps = createProps({
       activeFetcherTaskEntries: [],
@@ -358,6 +358,13 @@ describe("LibraryPanel", () => {
 
     await click(managementSummary as Element, dom);
     await act(async () => {
+      dom.window.document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { bubbles: true, isComposing: true, key: "Escape" })
+      );
+    });
+    expect(managementMenu?.hasAttribute("open")).toBe(true);
+
+    await act(async () => {
       dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     });
     expect(managementMenu?.hasAttribute("open")).toBe(false);
@@ -393,6 +400,13 @@ describe("LibraryPanel", () => {
     await act(async () => {
       root.render(createElement(LibraryPanel, createProps({ isDownloadComposerOpen: true, onCloseDownloadComposer })));
     });
+    await act(async () => {
+      dom.window.document.dispatchEvent(
+        new dom.window.KeyboardEvent("keydown", { bubbles: true, isComposing: true, key: "Escape" })
+      );
+    });
+    expect(onCloseDownloadComposer).toHaveBeenCalledTimes(1);
+
     await act(async () => {
       dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
     });

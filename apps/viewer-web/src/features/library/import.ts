@@ -17,7 +17,7 @@ export type LibraryImportResult = {
 
 export function parseLibraryImportYaml(source: string): unknown {
   if (new Blob([source]).size > MAX_LIBRARY_IMPORT_BYTES) {
-    throw new Error("インポートファイルは1MB以下にしてください。");
+    throw new Error("読み込みファイルは1MB以下にしてください。");
   }
   const document = parseDocument(source, { strict: true, uniqueKeys: true });
   if (document.errors.length > 0) {
@@ -30,7 +30,7 @@ export function importLibraryDocument(document: unknown, dryRun: boolean): Promi
   return mutateJson<LibraryImportResult, { dryRun: boolean; document: unknown }>(
     "/api/library/import",
     { dryRun, document },
-    "ライブラリのインポートに失敗しました。"
+    "ライブラリの読み込みに失敗しました。"
   );
 }
 

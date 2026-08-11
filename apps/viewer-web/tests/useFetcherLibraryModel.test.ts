@@ -232,7 +232,7 @@ describe("useFetcherLibraryModel", () => {
     expect(mocks.importLibraryDocument).toHaveBeenNthCalledWith(2, document, false);
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("確認結果"));
     expect(clearSelection).toHaveBeenCalledWith({ clearNovel: false });
-    expect(setLibraryNotice).toHaveBeenCalledWith("インポートしました。適用結果");
+    expect(setLibraryNotice).toHaveBeenCalledWith("読み込みました。適用結果");
     expect(requestLibraryReload).toHaveBeenCalled();
     expect(snapshots[snapshots.length - 1].isLibraryImporting).toBe(false);
   });
@@ -253,7 +253,7 @@ describe("useFetcherLibraryModel", () => {
     });
 
     expect(mocks.importLibraryDocument).toHaveBeenCalledTimes(1);
-    expect(setLibraryNotice).toHaveBeenCalledWith("インポートを取り消しました。確認結果");
+    expect(setLibraryNotice).toHaveBeenCalledWith("読み込みを取り消しました。確認結果");
   });
 
   it("rejects an oversized import before reading the file", async () => {
@@ -268,7 +268,7 @@ describe("useFetcherLibraryModel", () => {
     });
 
     expect(text).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith("インポートファイルは1MB以下にしてください。");
+    expect(onError).toHaveBeenCalledWith("読み込みファイルは1MB以下にしてください。");
     expect(mocks.importLibraryDocument).not.toHaveBeenCalled();
   });
 

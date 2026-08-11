@@ -193,6 +193,12 @@ export function LibraryPanel({
   const isMobileDownloadTab = mobileHomeTab === "download";
 
   useEffect(() => {
+    const ownerDocument = managementMenuRef.current?.ownerDocument;
+    if (!ownerDocument) {
+      return;
+    }
+    const nodeConstructor = ownerDocument.defaultView?.Node;
+
     function closeManagementMenu({ restoreFocus = false } = {}) {
       const menu = managementMenuRef.current;
       if (!menu?.open) {
@@ -206,22 +212,22 @@ export function LibraryPanel({
 
     function handlePointerDown(event: PointerEvent) {
       const menu = managementMenuRef.current;
-      if (event.target instanceof Node && menu?.open && !menu.contains(event.target)) {
+      if (nodeConstructor && event.target instanceof nodeConstructor && menu?.open && !menu.contains(event.target)) {
         closeManagementMenu();
       }
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (!event.isComposing && event.keyCode !== 229 && event.key === "Escape") {
         closeManagementMenu({ restoreFocus: true });
       }
     }
 
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
+    ownerDocument.addEventListener("pointerdown", handlePointerDown);
+    ownerDocument.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
+      ownerDocument.removeEventListener("pointerdown", handlePointerDown);
+      ownerDocument.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
@@ -229,6 +235,11 @@ export function LibraryPanel({
     if (!isDownloadComposerOpen || isMobileDownloadTab) {
       return;
     }
+    const ownerDocument = addButtonRef.current?.ownerDocument;
+    if (!ownerDocument) {
+      return;
+    }
+    const nodeConstructor = ownerDocument.defaultView?.Node;
 
     function closeDownloadComposer({ restoreFocus = false } = {}) {
       onCloseDownloadComposer();
@@ -238,7 +249,7 @@ export function LibraryPanel({
     }
 
     function handlePointerDown(event: PointerEvent) {
-      if (!(event.target instanceof Node)) {
+      if (!nodeConstructor || !(event.target instanceof nodeConstructor)) {
         return;
       }
       if (!addButtonRef.current?.contains(event.target) && !downloadComposerRef.current?.contains(event.target)) {
@@ -247,16 +258,16 @@ export function LibraryPanel({
     }
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
+      if (!event.isComposing && event.keyCode !== 229 && event.key === "Escape") {
         closeDownloadComposer({ restoreFocus: true });
       }
     }
 
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
+    ownerDocument.addEventListener("pointerdown", handlePointerDown);
+    ownerDocument.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
+      ownerDocument.removeEventListener("pointerdown", handlePointerDown);
+      ownerDocument.removeEventListener("keydown", handleKeyDown);
     };
   }, [isDownloadComposerOpen, isMobileDownloadTab, onCloseDownloadComposer]);
   const shouldShowQueueSection = fetcherTaskEntries.length > 0 || fetcherStatusError || isMobileDownloadTab;
@@ -373,7 +384,7 @@ export function LibraryPanel({
                     className="library-add-button"
                     onClick={onToggleDownloadComposer}
                     ref={addButtonRef}
-                    title="作品URLから取得"
+                    title="作品を追加"
                     type="button"
                   >
                     <span aria-hidden="true">＋</span>
