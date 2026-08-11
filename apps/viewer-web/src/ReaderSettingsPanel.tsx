@@ -62,6 +62,46 @@ function roundToStep(value: number, digits: number) {
   return Number(value.toFixed(digits));
 }
 
+type ReaderSettingsSwitchProps = {
+  checked: boolean;
+  checkedLabel?: string;
+  disabled?: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+  uncheckedLabel?: string;
+};
+
+function ReaderSettingsSwitch({
+  checked,
+  checkedLabel = "オン",
+  disabled = false,
+  label,
+  onChange,
+  uncheckedLabel = "オフ"
+}: ReaderSettingsSwitchProps) {
+  return (
+    <label className="reader-settings-switch-field">
+      <span className="reader-settings-switch-label">{label}</span>
+      <span className="reader-settings-switch-control">
+        <span aria-hidden="true" className="reader-settings-switch-state">
+          {checked ? checkedLabel : uncheckedLabel}
+        </span>
+        <input
+          aria-checked={checked}
+          checked={checked}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+          role="switch"
+          type="checkbox"
+        />
+        <span aria-hidden="true" className="reader-settings-switch-track">
+          <span className="reader-settings-switch-thumb" />
+        </span>
+      </span>
+    </label>
+  );
+}
+
 export function ReaderSettingsPanel({
   readingMode,
   readerFontSizePx,
@@ -230,86 +270,53 @@ export function ReaderSettingsPanel({
         <section className="reader-panel-card reader-panel-card--compact reader-settings-section">
           <p className="reader-panel-section-label">操作</p>
           <p className="reader-panel-section-description">左右端タップだけを切り替えます。左右スワイプのページ移動方向は変わりません。</p>
-          <label className="reader-settings-field">
-            <span>左右端タップ</span>
-            <select
-              onChange={(event) => onReverseTapPageNavigationChange(event.target.value === "reversed")}
-              value={reverseTapPageNavigation ? "reversed" : "default"}
-            >
-              <option value="default">標準</option>
-              <option value="reversed">ページ移動を反転</option>
-            </select>
-          </label>
+          <ReaderSettingsSwitch
+            checked={reverseTapPageNavigation}
+            checkedLabel="反転"
+            label="左右端タップ"
+            onChange={onReverseTapPageNavigationChange}
+            uncheckedLabel="標準"
+          />
         </section>
         <section className="reader-panel-card reader-panel-card--compact reader-settings-section">
           <p className="reader-panel-section-label">本文校正</p>
           <p className="reader-panel-section-description">この作品だけに適用します。取得した原文は変更しません。</p>
-          <label className="reader-settings-field">
-            <span>引用符を〝〟へ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onQuoteNormalizationChange(event.target.value === "enabled")}
-              value={quoteNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
-          <label className="reader-settings-field">
-            <span>連続ハイフンをダッシュへ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onHyphenDashNormalizationChange(event.target.value === "enabled")}
-              value={hyphenDashNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
-          <label className="reader-settings-field">
-            <span>半角括弧を全角へ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onParenthesisNormalizationChange(event.target.value === "enabled")}
-              value={parenthesisNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
-          <label className="reader-settings-field">
-            <span>半角英数字・!?を全角へ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onHalfwidthAlnumPunctuationNormalizationChange(event.target.value === "enabled")}
-              value={halfwidthAlnumPunctuationNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
-          <label className="reader-settings-field">
-            <span>半角チルダを波ダッシュへ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onTildeNormalizationChange(event.target.value === "enabled")}
-              value={tildeNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
-          <label className="reader-settings-field">
-            <span>連続ピリオドを……へ置換</span>
-            <select
-              disabled={isReaderCorrectionSaving}
-              onChange={(event) => onConsecutivePeriodNormalizationChange(event.target.value === "enabled")}
-              value={consecutivePeriodNormalizationEnabled ? "enabled" : "disabled"}
-            >
-              <option value="disabled">オフ</option>
-              <option value="enabled">オン</option>
-            </select>
-          </label>
+          <ReaderSettingsSwitch
+            checked={quoteNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="引用符を〝〟へ置換"
+            onChange={onQuoteNormalizationChange}
+          />
+          <ReaderSettingsSwitch
+            checked={hyphenDashNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="連続ハイフンをダッシュへ置換"
+            onChange={onHyphenDashNormalizationChange}
+          />
+          <ReaderSettingsSwitch
+            checked={parenthesisNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="半角括弧を全角へ置換"
+            onChange={onParenthesisNormalizationChange}
+          />
+          <ReaderSettingsSwitch
+            checked={halfwidthAlnumPunctuationNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="半角英数字・!?を全角へ置換"
+            onChange={onHalfwidthAlnumPunctuationNormalizationChange}
+          />
+          <ReaderSettingsSwitch
+            checked={tildeNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="半角チルダを波ダッシュへ置換"
+            onChange={onTildeNormalizationChange}
+          />
+          <ReaderSettingsSwitch
+            checked={consecutivePeriodNormalizationEnabled}
+            disabled={isReaderCorrectionSaving}
+            label="連続ピリオドを……へ置換"
+            onChange={onConsecutivePeriodNormalizationChange}
+          />
           <p className="reader-panel-section-description">
             半角ピリオドが2個以上続く箇所を一律で……へ置換するため、表示上の文字数が変わります。
           </p>
@@ -367,16 +374,13 @@ export function ReaderSettingsPanel({
         <section className="reader-panel-card reader-panel-card--compact reader-settings-section">
           <p className="reader-panel-section-label">デバッグ</p>
           <p className="reader-panel-section-description">ページからあふれる列を通常は隠し、確認したい時だけ色付きで残します。</p>
-          <label className="reader-settings-field">
-            <span>列はみ出し表示</span>
-            <select
-              onChange={(event) => onDebugPageOverflowChange(event.target.value === "debug")}
-              value={debugPageOverflow ? "debug" : "hidden"}
-            >
-              <option value="hidden">非表示</option>
-              <option value="debug">緑で可視化</option>
-            </select>
-          </label>
+          <ReaderSettingsSwitch
+            checked={debugPageOverflow}
+            checkedLabel="緑で可視化"
+            label="列はみ出し表示"
+            onChange={onDebugPageOverflowChange}
+            uncheckedLabel="非表示"
+          />
         </section>
       </div>
       <div className="reader-settings-actions">

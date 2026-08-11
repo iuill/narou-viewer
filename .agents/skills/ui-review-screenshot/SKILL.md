@@ -193,6 +193,35 @@ playwright-cli -s=iphone snapshot
 - その確認が継続的な回帰テストとして残す価値を持つと判断できる場合だけ、E2E spec に昇格させる。
 - 「今回だけ見るため」の spec は repo に残さない。
 
+## 操作を伴う UI の確認
+
+- toggle、tab、accordion、選択 UI を変更したら、状態を直接注入するだけで済ませず、対象を実際に `click` した直後の viewport を撮る。
+- element 単体の screenshot は細部確認の補助に留める。周辺レイアウト、panel の位置、意図しない空白を確認できる viewport 全体の screenshot を必ず残す。
+- scroll 可能な panel / modal では、外枠と内側の scroll 領域を区別する。操作後に外枠の位置・高さが変わらず、想定した内側だけが scroll することを確認する。
+- 3 端末では変更後の全体レイアウトを確認し、操作後の scroll や focus はまず最も狭い `iphone-16e` で重点確認する。端末固有の分岐がある場合は分岐ごとに操作する。
+
+操作後の座標や scroll 位置が疑わしい場合は、使い捨て spec を作らず `run-code` で確認する。
+
+```bash
+playwright-cli -s=iphone run-code "async page => {
+  const panel = page.locator('.reader-settings-panel');
+  const body = panel.locator('.reader-overlay-panel-body');
+  const target = page.getByRole('switch', { name: '列はみ出し表示' });
+  const before = await panel.evaluate((element) => ({
+    rect: element.getBoundingClientRect().toJSON(),
+    scrollTop: element.scrollTop
+  }));
+  await target.click();
+  const after = await panel.evaluate((element) => ({
+    rect: element.getBoundingClientRect().toJSON(),
+    scrollTop: element.scrollTop
+  }));
+  const bodyScrollTop = await body.evaluate((element) => element.scrollTop);
+  return { before, after, bodyScrollTop };
+}"
+playwright-cli -s=iphone screenshot --filename=ui-review-results/reader-settings-after-toggle-iphone-16e.png
+```
+
 ## artifact の見方
 
 - 画像は `ui-review-results/` に出る。

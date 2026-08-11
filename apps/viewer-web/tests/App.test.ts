@@ -680,6 +680,18 @@ async function changeSelect(select: HTMLSelectElement, value: string, dom: JSDOM
   });
 }
 
+function getReaderSettingsSwitch(container: HTMLElement, label: string): HTMLInputElement {
+  const input = Array.from(container.querySelectorAll<HTMLInputElement>('.reader-settings-panel input[role="switch"]')).find(
+    (candidate) => candidate.closest("label")?.textContent?.includes(label)
+  );
+
+  if (!input) {
+    throw new Error(`reader settings switch not found: ${label}`);
+  }
+
+  return input;
+}
+
 async function submitForm(form: HTMLFormElement, dom: JSDOM): Promise<void> {
   await act(async () => {
     form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
@@ -2760,7 +2772,7 @@ describe("App", () => {
     await click(getButtonByLabel(container, "読書設定"), dom);
     await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
-    await changeSelect(container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement, "enabled", dom);
+    await click(getReaderSettingsSwitch(container, "引用符を〝〟へ置換"), dom);
     await waitFor(() => savedBodies.length === 1);
 
     expect(savedBodies[0]).toEqual({ correction: { quoteNormalization: true } });
@@ -2964,8 +2976,8 @@ describe("App", () => {
     }
     await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
-    await changeSelect(container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement, "enabled", dom);
-    await waitFor(() => (container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement).disabled);
+    await click(getReaderSettingsSwitch(container, "引用符を〝〟へ置換"), dom);
+    await waitFor(() => getReaderSettingsSwitch(container, "引用符を〝〟へ置換").disabled);
 
     await act(async () => {
       dom.window.history.pushState(null, "", "/?novelId=n2&episode=1");
@@ -2995,8 +3007,7 @@ describe("App", () => {
     }
     await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
-    const quoteNormalizationSelect = container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement;
-    expect(quoteNormalizationSelect.value).toBe("disabled");
+    expect(getReaderSettingsSwitch(container, "引用符を〝〟へ置換").checked).toBe(false);
     expect(requestedEpisodes.filter((entry) => entry === "n2:1")).toHaveLength(1);
 
     await act(async () => {
@@ -3194,8 +3205,8 @@ describe("App", () => {
     await click(getButtonByLabel(container, "読書設定"), dom);
     await waitFor(() => Boolean(container.querySelector(".reader-settings-panel")));
 
-    await changeSelect(container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement, "enabled", dom);
-    await waitFor(() => (container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement).disabled);
+    await click(getReaderSettingsSwitch(container, "引用符を〝〟へ置換"), dom);
+    await waitFor(() => getReaderSettingsSwitch(container, "引用符を〝〟へ置換").disabled);
 
     await act(async () => {
       dom.window.history.pushState(null, "", "/?novelId=n2&episode=1");
@@ -3227,7 +3238,7 @@ describe("App", () => {
       if (!container.querySelector(".reader-settings-panel")) {
         return false;
       }
-      return (container.querySelectorAll(".reader-settings-panel select")[3] as HTMLSelectElement).value === "enabled";
+      return getReaderSettingsSwitch(container, "引用符を〝〟へ置換").checked;
     });
 
     await act(async () => {
