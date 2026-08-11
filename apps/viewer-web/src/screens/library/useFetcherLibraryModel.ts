@@ -341,7 +341,7 @@ export function useFetcherLibraryModel({
       return;
     }
     if (file.size > MAX_LIBRARY_IMPORT_BYTES) {
-      onError("インポートファイルは1MB以下にしてください。");
+      onError("読み込みファイルは1MB以下にしてください。");
       return;
     }
     setIsLibraryImporting(true);
@@ -356,11 +356,11 @@ export function useFetcherLibraryModel({
         `${summary}\n\n既存の既読位置と同じ位置の栞は保持し、不足分だけ追加します。${warningPreview ? `\n\n${warningPreview}` : ""}\n\n適用しますか？`
       );
       if (!confirmed) {
-        setLibraryNotice(`インポートを取り消しました。${summary}`);
+        setLibraryNotice(`読み込みを取り消しました。${summary}`);
         return;
       }
       const result = await importLibraryDocument(document, false);
-      setLibraryNotice(`インポートしました。${formatLibraryImportSummary(result)}`);
+      setLibraryNotice(`読み込みました。${formatLibraryImportSummary(result)}`);
       readerCommands.clearSelection({ clearNovel: false });
       requestLibraryReload();
     } catch (importError) {

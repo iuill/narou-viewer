@@ -54,10 +54,11 @@ test.describe("pc-xga 代表の catalog checks", () => {
     try {
       await createBookmark(request, novelId, "1", 12, "E2E export bookmark");
       await gotoLibrary(page);
+      await page.locator(".library-management-menu > summary").click();
 
       const [download] = await Promise.all([
         page.waitForEvent("download"),
-        page.getByRole("button", { name: "エクスポート", exact: true }).click()
+        page.getByRole("button", { name: "ライブラリを書き出す", exact: true }).click()
       ]);
       const stream = await download.createReadStream();
 
@@ -121,12 +122,12 @@ test.describe("pc-xga 代表の catalog checks", () => {
         }]
       };
       page.once("dialog", (dialog) => dialog.accept());
-      await page.getByLabel("ライブラリexportを選択").setInputFiles({
+      await page.getByLabel("読み込むライブラリファイルを選択").setInputFiles({
         name: "library-export.yaml",
         mimeType: "application/x-yaml",
         buffer: Buffer.from(JSON.stringify(importDocument))
       });
-      await expect(page.locator(".message")).toContainText("インポートしました。");
+      await expect(page.locator(".message")).toContainText("読み込みました。");
       const restoredState = await getReadingState(request, novelId);
       expect(restoredState.lastReadEpisodeIndex).toBe("1");
       const restoredBookmarks = await listBookmarks(request, novelId);

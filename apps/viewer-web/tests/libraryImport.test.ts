@@ -24,7 +24,7 @@ novels: []
   it("rejects malformed, aliased, and oversized YAML", () => {
     expect(() => parseLibraryImportYaml("novels: [")).toThrow("YAMLを読み取れませんでした。");
     expect(() => parseLibraryImportYaml("formatVersion: &version 1\ncopy: *version\n")).toThrow();
-    expect(() => parseLibraryImportYaml("x".repeat((1 << 20) + 1))).toThrow("インポートファイルは1MB以下にしてください。");
+    expect(() => parseLibraryImportYaml("x".repeat((1 << 20) + 1))).toThrow("読み込みファイルは1MB以下にしてください。");
   });
 
   it("sends dry-run and formats its summary", async () => {

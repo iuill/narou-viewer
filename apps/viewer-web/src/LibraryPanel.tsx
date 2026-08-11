@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import {
   formatFetcherTaskProgress,
   formatFetcherTaskStepProgress,
@@ -186,9 +186,90 @@ export function LibraryPanel({
 }: Props) {
   const [openStoryNovelId, setOpenStoryNovelId] = useState<string | null>(null);
   const [expandedStoryNovelId, setExpandedStoryNovelId] = useState<string | null>(null);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const downloadComposerRef = useRef<HTMLDivElement>(null);
+  const managementMenuRef = useRef<HTMLDetailsElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const isMobileDownloadTab = mobileHomeTab === "download";
-  const shouldShowDownloadComposer = isDownloadComposerOpen || isMobileDownloadTab;
+
+  useEffect(() => {
+    const ownerDocument = managementMenuRef.current?.ownerDocument;
+    if (!ownerDocument) {
+      return;
+    }
+    const nodeConstructor = ownerDocument.defaultView?.Node;
+
+    function closeManagementMenu({ restoreFocus = false } = {}) {
+      const menu = managementMenuRef.current;
+      if (!menu?.open) {
+        return;
+      }
+      menu.removeAttribute("open");
+      if (restoreFocus) {
+        menu.querySelector("summary")?.focus();
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const menu = managementMenuRef.current;
+      if (nodeConstructor && event.target instanceof nodeConstructor && menu?.open && !menu.contains(event.target)) {
+        closeManagementMenu();
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!event.isComposing && event.keyCode !== 229 && event.key === "Escape") {
+        closeManagementMenu({ restoreFocus: true });
+      }
+    }
+
+    ownerDocument.addEventListener("pointerdown", handlePointerDown);
+    ownerDocument.addEventListener("keydown", handleKeyDown);
+    return () => {
+      ownerDocument.removeEventListener("pointerdown", handlePointerDown);
+      ownerDocument.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDownloadComposerOpen || isMobileDownloadTab) {
+      return;
+    }
+    const ownerDocument = addButtonRef.current?.ownerDocument;
+    if (!ownerDocument) {
+      return;
+    }
+    const nodeConstructor = ownerDocument.defaultView?.Node;
+
+    function closeDownloadComposer({ restoreFocus = false } = {}) {
+      onCloseDownloadComposer();
+      if (restoreFocus) {
+        addButtonRef.current?.focus();
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!nodeConstructor || !(event.target instanceof nodeConstructor)) {
+        return;
+      }
+      if (!addButtonRef.current?.contains(event.target) && !downloadComposerRef.current?.contains(event.target)) {
+        closeDownloadComposer();
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!event.isComposing && event.keyCode !== 229 && event.key === "Escape") {
+        closeDownloadComposer({ restoreFocus: true });
+      }
+    }
+
+    ownerDocument.addEventListener("pointerdown", handlePointerDown);
+    ownerDocument.addEventListener("keydown", handleKeyDown);
+    return () => {
+      ownerDocument.removeEventListener("pointerdown", handlePointerDown);
+      ownerDocument.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isDownloadComposerOpen, isMobileDownloadTab, onCloseDownloadComposer]);
   const shouldShowQueueSection = fetcherTaskEntries.length > 0 || fetcherStatusError || isMobileDownloadTab;
   const shouldShowLibraryList = !isMobileDownloadTab;
   const hasResumableNovels = resumableNovels.length > 0;
@@ -239,6 +320,48 @@ export function LibraryPanel({
     setExpandedStoryNovelId((current) => (current === novelId ? null : novelId));
   }
 
+  function renderDownloadComposer(isPopover: boolean) {
+    return (
+      <div
+        className={`library-download-composer ${isPopover ? "library-download-composer--popover" : ""} ${isDownloadDropActive ? "drag-active" : ""}`}
+        onDragEnterCapture={onDownloadDragEnter}
+        onDragLeaveCapture={onDownloadDragLeave}
+        onDragOverCapture={onDownloadDragOver}
+        onDropCapture={onDownloadDrop}
+        ref={downloadComposerRef}
+      >
+        <form className="download-form inline" onSubmit={(event) => void onDownloadSubmit(event)}>
+          <label className="download-form-field">
+            <span>対象</span>
+            <input
+              onChange={(event) => onDownloadTargetChange(event.target.value)}
+              placeholder="Nコード、作品URL、またはここへ URL をドロップ"
+              type="text"
+              value={downloadTarget}
+            />
+          </label>
+          <div className="download-form-options">
+            <label className="download-form-checkbox">
+              <input checked={downloadForce} onChange={(event) => onDownloadForceChange(event.target.checked)} type="checkbox" />
+              <span>既存分も再取得</span>
+            </label>
+          </div>
+          <div className="download-form-actions">
+            {isMobileDownloadTab ? null : (
+              <button className="download-cancel-button" onClick={onCloseDownloadComposer} type="button">
+                閉じる
+              </button>
+            )}
+            <button disabled={isDownloadSubmitting || downloadTarget.trim().length === 0} type="submit">
+              {isDownloadSubmitting ? "開始中..." : "ダウンロード"}
+            </button>
+          </div>
+        </form>
+        <p className="download-drop-hint">URL のドラッグ＆ドロップにも対応します。</p>
+      </div>
+    );
+  }
+
   return (
     <section className={`panel library-panel ${isMobileDownloadTab ? "library-panel-download" : ""}`}>
       <div className="panel-header">
@@ -253,83 +376,72 @@ export function LibraryPanel({
           </p>
           {isMobileDownloadTab ? null : (
             <div className="library-header-buttons">
-              <StorageUsagePopover selectedNovelId={selectedNovelId} />
-              <button
-                className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
-                disabled={isLibraryExporting || novelsCount === 0}
-                onClick={() => void onExportLibrary()}
-                type="button"
-              >
-                {isLibraryExporting ? "出力中..." : "エクスポート"}
-              </button>
-              <button
-                className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
-                disabled={isLibraryImporting}
-                onClick={() => importInputRef.current?.click()}
-                type="button"
-              >
-                {isLibraryImporting ? "読込中..." : "インポート"}
-              </button>
+              {mobileHomeTab === undefined ? (
+                <div className="library-add-menu">
+                  <button
+                    aria-expanded={isDownloadComposerOpen}
+                    aria-label="作品を追加"
+                    className="library-add-button"
+                    onClick={onToggleDownloadComposer}
+                    ref={addButtonRef}
+                    title="作品を追加"
+                    type="button"
+                  >
+                    <span aria-hidden="true">＋</span>
+                    作品を追加
+                  </button>
+                  {isDownloadComposerOpen ? renderDownloadComposer(true) : null}
+                </div>
+              ) : null}
+              <details className="library-management-menu" ref={managementMenuRef}>
+                <summary className="library-export-button">管理</summary>
+                <div
+                  className="library-management-popover"
+                  onClickCapture={(event) => {
+                    const elementConstructor = event.currentTarget.ownerDocument.defaultView?.Element;
+                    if (
+                      elementConstructor &&
+                      event.target instanceof elementConstructor &&
+                      event.target.closest("button")
+                    ) {
+                      managementMenuRef.current?.removeAttribute("open");
+                    }
+                  }}
+                >
+                  <StorageUsagePopover selectedNovelId={selectedNovelId} />
+                  <button
+                    aria-label="ライブラリを書き出す"
+                    className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
+                    disabled={isLibraryExporting || novelsCount === 0}
+                    onClick={() => void onExportLibrary()}
+                    type="button"
+                  >
+                    {isLibraryExporting ? "出力中..." : "書き出す"}
+                  </button>
+                  <button
+                    aria-label="ライブラリを読み込む"
+                    className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
+                    disabled={isLibraryImporting}
+                    onClick={() => importInputRef.current?.click()}
+                    type="button"
+                  >
+                    {isLibraryImporting ? "読込中..." : "読み込む"}
+                  </button>
+                </div>
+              </details>
               <input
                 accept=".yaml,.yml,application/x-yaml,text/yaml"
-                aria-label="ライブラリexportを選択"
+                aria-label="読み込むライブラリファイルを選択"
                 hidden
                 onChange={handleImportFileChange}
                 ref={importInputRef}
                 type="file"
               />
-              <button
-                aria-expanded={isDownloadComposerOpen}
-                aria-label="小説を追加"
-                className="library-add-button"
-                onClick={onToggleDownloadComposer}
-                title="小説を追加"
-                type="button"
-              >
-                +
-              </button>
             </div>
           )}
         </div>
       </div>
-      {shouldShowDownloadComposer ? (
-        <div
-          className={`library-download-composer ${isDownloadDropActive ? "drag-active" : ""}`}
-          onDragEnterCapture={onDownloadDragEnter}
-          onDragLeaveCapture={onDownloadDragLeave}
-          onDragOverCapture={onDownloadDragOver}
-          onDropCapture={onDownloadDrop}
-        >
-          <form className="download-form inline" onSubmit={(event) => void onDownloadSubmit(event)}>
-            <label className="download-form-field">
-              <span>対象</span>
-              <input
-                onChange={(event) => onDownloadTargetChange(event.target.value)}
-                placeholder="Nコード、作品URL、またはここへ URL をドロップ"
-                type="text"
-                value={downloadTarget}
-              />
-            </label>
-            <div className="download-form-options">
-              <label className="download-form-checkbox">
-                <input checked={downloadForce} onChange={(event) => onDownloadForceChange(event.target.checked)} type="checkbox" />
-                <span>既存分も再取得</span>
-              </label>
-            </div>
-            <div className="download-form-actions">
-              {isMobileDownloadTab ? null : (
-                <button className="download-cancel-button" onClick={onCloseDownloadComposer} type="button">
-                  閉じる
-                </button>
-              )}
-              <button disabled={isDownloadSubmitting || downloadTarget.trim().length === 0} type="submit">
-                {isDownloadSubmitting ? "開始中..." : "ダウンロード"}
-              </button>
-            </div>
-          </form>
-          <p className="download-drop-hint">URL のドラッグ＆ドロップにも対応します。</p>
-        </div>
-      ) : null}
+      {isMobileDownloadTab ? renderDownloadComposer(false) : null}
       {libraryNotice ? <p className="message">{libraryNotice}</p> : null}
       {shouldShowQueueSection ? (
         <section className="library-queue-section" id="library-queue-progress">

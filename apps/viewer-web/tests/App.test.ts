@@ -1017,7 +1017,7 @@ describe("App", () => {
     expect(container.textContent).toContain("novel-fetcher 3.8.1 が利用できます。現在は 3.8.0 を使用中です。");
     expect(container.textContent).toContain("GOOGLE_BOOKS_API_KEY が未設定です。");
 
-    await click(container.querySelector('button[aria-label="小説を追加"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="作品を追加"]') as Element, dom);
     await waitFor(() => container.textContent?.includes("ダウンロード") === true);
     await click(getButtonByText(container, "閉じる"), dom);
 
@@ -6731,7 +6731,7 @@ describe("App", () => {
 
     await waitFor(() => container.textContent?.includes("Library") === true && container.textContent?.includes("小説A") === true);
 
-    await click(container.querySelector('button[aria-label="小説を追加"]') as Element, dom);
+    await click(container.querySelector('button[aria-label="作品を追加"]') as Element, dom);
     await waitFor(() => container.textContent?.includes("ダウンロード") === true);
 
     const composer = container.querySelector(".library-download-composer");
