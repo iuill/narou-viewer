@@ -54,6 +54,7 @@ test.describe("pc-xga 代表の catalog checks", () => {
     try {
       await createBookmark(request, novelId, "1", 12, "E2E export bookmark");
       await gotoLibrary(page);
+      await page.getByText("管理", { exact: true }).click();
 
       const [download] = await Promise.all([
         page.waitForEvent("download"),

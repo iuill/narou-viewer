@@ -338,19 +338,25 @@ describe("LibraryPanel", () => {
   });
 
   it("作品追加とライブラリ管理を分け、モバイルでは追加を取得タブへ一本化する", async () => {
-    const { container, root } = await renderPanel(createProps());
+    const { container, root, dom } = await renderPanel(createProps());
 
     expect(container.querySelector('button[aria-label="作品を追加"]')).not.toBeNull();
-    expect(container.querySelector(".library-management-actions")).not.toBeNull();
+    const managementMenu = container.querySelector(".library-management-menu");
+    const managementSummary = managementMenu?.querySelector("summary");
+    expect(managementMenu).not.toBeNull();
+    expect(managementSummary?.textContent).toBe("管理");
     expect(container.querySelector('button[aria-label="ライブラリを書き出す"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label="ライブラリを読み込む"]')).not.toBeNull();
+
+    await click(managementSummary as Element, dom);
+    expect(managementMenu?.hasAttribute("open")).toBe(true);
 
     await act(async () => {
       root.render(createElement(LibraryPanel, createProps({ mobileHomeTab: "library" })));
     });
 
     expect(container.querySelector('button[aria-label="作品を追加"]')).toBeNull();
-    expect(container.querySelector(".library-management-actions")).not.toBeNull();
+    expect(container.querySelector(".library-management-menu")).not.toBeNull();
 
     await act(async () => {
       root.unmount();

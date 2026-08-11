@@ -266,28 +266,30 @@ export function LibraryPanel({
                   作品を追加
                 </button>
               ) : null}
-              <fieldset className="library-management-actions">
-                <legend className="library-management-label">管理</legend>
-                <StorageUsagePopover selectedNovelId={selectedNovelId} />
-                <button
-                  aria-label="ライブラリを書き出す"
-                  className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
-                  disabled={isLibraryExporting || novelsCount === 0}
-                  onClick={() => void onExportLibrary()}
-                  type="button"
-                >
-                  {isLibraryExporting ? "出力中..." : "書き出す"}
-                </button>
-                <button
-                  aria-label="ライブラリを読み込む"
-                  className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
-                  disabled={isLibraryImporting}
-                  onClick={() => importInputRef.current?.click()}
-                  type="button"
-                >
-                  {isLibraryImporting ? "読込中..." : "読み込む"}
-                </button>
-              </fieldset>
+              <details className="library-management-menu">
+                <summary className="library-export-button">管理</summary>
+                <div className="library-management-popover">
+                  <StorageUsagePopover selectedNovelId={selectedNovelId} />
+                  <button
+                    aria-label="ライブラリを書き出す"
+                    className={`library-export-button ${isLibraryExporting ? "is-exporting" : ""}`}
+                    disabled={isLibraryExporting || novelsCount === 0}
+                    onClick={() => void onExportLibrary()}
+                    type="button"
+                  >
+                    {isLibraryExporting ? "出力中..." : "書き出す"}
+                  </button>
+                  <button
+                    aria-label="ライブラリを読み込む"
+                    className={`library-export-button ${isLibraryImporting ? "is-exporting" : ""}`}
+                    disabled={isLibraryImporting}
+                    onClick={() => importInputRef.current?.click()}
+                    type="button"
+                  >
+                    {isLibraryImporting ? "読込中..." : "読み込む"}
+                  </button>
+                </div>
+              </details>
               <input
                 accept=".yaml,.yml,application/x-yaml,text/yaml"
                 aria-label="読み込むライブラリファイルを選択"

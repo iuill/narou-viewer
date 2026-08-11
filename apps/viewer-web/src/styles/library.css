@@ -27,21 +27,44 @@
   justify-content: flex-end;
 }
 
-.library-management-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 10px;
-  border: 0;
-  border-left: 1px solid rgba(84, 58, 22, 0.14);
-  margin: 0;
+.library-management-menu {
+  position: relative;
 }
 
-.library-management-label {
-  padding: 0;
-  color: var(--text-soft);
-  font-size: 0.78rem;
-  font-weight: 700;
+.library-management-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.library-management-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.library-management-menu[open] > summary {
+  border-color: rgba(157, 75, 47, 0.32);
+  color: var(--accent-strong);
+}
+
+.library-management-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  min-width: 150px;
+  padding: 10px;
+  border: 1px solid rgba(84, 58, 22, 0.14);
+  border-radius: 14px;
+  background: #fffaf2;
+  box-shadow: 0 16px 36px rgba(73, 43, 18, 0.18);
+}
+
+.library-management-popover .library-export-button {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .mobile-workspace-toggle {
@@ -482,6 +505,13 @@
   }
 }
 
+@media (min-width: 721px) and (max-width: 1000px) {
+  .library-management-popover {
+    right: 0;
+    left: auto;
+  }
+}
+
 @media (max-width: 720px) {
   .library-panel > .panel-header {
     display: grid;
@@ -501,11 +531,6 @@
     order: 1;
     width: 100%;
     justify-content: flex-start;
-  }
-
-  .library-management-actions {
-    padding-left: 0;
-    border-left: 0;
   }
 
   .storage-usage-overlay {
