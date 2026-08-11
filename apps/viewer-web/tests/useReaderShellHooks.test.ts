@@ -157,13 +157,10 @@ describe("reader shell hooks", () => {
     });
   });
 
-  it("tracks the single-pane library breakpoint for compact and touch viewports", async () => {
+  it("tracks the single-pane library breakpoint at 1000px", async () => {
     installDom();
-    Object.defineProperty(window.navigator, "maxTouchPoints", { configurable: true, value: 0 });
     const mediaQueries = createMediaQueryRegistry({
-      "(max-width: 800px)": false,
-      "(max-width: 1100px)": false,
-      "(pointer: coarse)": false
+      "(max-width: 1000px)": false
     });
     let latest: boolean | null = null;
 
@@ -179,19 +176,10 @@ describe("reader shell hooks", () => {
     });
     expect(latest).toBe(false);
 
-    const compactQuery = mediaQueries.get("(max-width: 800px)");
+    const compactQuery = mediaQueries.get("(max-width: 1000px)");
     compactQuery?.setMatches(true);
     await act(async () => {
       compactQuery?.dispatchChange();
-      await flushAsyncWork();
-    });
-    expect(latest).toBe(true);
-
-    compactQuery?.setMatches(false);
-    mediaQueries.get("(pointer: coarse)")?.setMatches(true);
-    mediaQueries.get("(max-width: 1100px)")?.setMatches(true);
-    await act(async () => {
-      mediaQueries.get("(pointer: coarse)")?.dispatchChange();
       await flushAsyncWork();
     });
     expect(latest).toBe(true);

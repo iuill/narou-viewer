@@ -456,7 +456,7 @@
   gap: 8px;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 1000px) {
   .app-shell {
     width: min(100vw - 20px, 100%);
     padding-top: 20px;

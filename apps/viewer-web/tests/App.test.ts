@@ -2202,7 +2202,7 @@ describe("App", () => {
     });
   });
 
-  it("タブレット幅のタッチ端末ではトップページに作品詳細を表示しない", async () => {
+  it("1000px幅ではトップページに作品詳細を表示しない", async () => {
     const fetchHandler: FetchHandler = async (url) => {
       const requestUrl = new URL(url, "http://localhost");
 
@@ -2367,9 +2367,7 @@ describe("App", () => {
     };
 
     const { container, root } = await renderApp(fetchHandler, {
-      viewportWidth: 1024,
-      coarsePointer: true,
-      maxTouchPoints: 5
+      viewportWidth: 1000
     });
 
     await waitFor(() => container.textContent?.includes("Library") === true && container.textContent?.includes("小説A") === true);

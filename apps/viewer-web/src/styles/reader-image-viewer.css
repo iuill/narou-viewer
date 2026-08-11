@@ -136,7 +136,7 @@
   width: 100%;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 1000px) {
   .library-card,
   .toc-item {
     padding: 12px 14px;

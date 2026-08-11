@@ -93,6 +93,7 @@ func fixtureWorks(workSet string) ([]model.Work, error) {
 		longSyosetuFixtureWork("n3234ab", "E2E ケースD 本文操作", "ケースDの本文操作を確認する合成fixtureです。", "case-d", fetchedAt.Add(30*time.Minute)),
 		longSyosetuFixtureWork("n4234ab", "E2E ケースE 栞", "ケースEの栞操作を確認する合成fixtureです。", "case-e", fetchedAt.Add(40*time.Minute)),
 		longSyosetuFixtureWork("n5234ab", "E2E ケースF エクスポート", "ケースFの YAML エクスポートを確認する合成fixtureです。", "case-f", fetchedAt.Add(50*time.Minute)),
+		longSyosetuFixtureWork("n6234ab", "E2E ケースH 作品内検索", "ケースHの作品内検索を確認する合成fixtureです。", "case-h", fetchedAt.Add(70*time.Minute)),
 		{
 			Site:       model.SiteKakuyomu,
 			SiteName:   "カクヨム",

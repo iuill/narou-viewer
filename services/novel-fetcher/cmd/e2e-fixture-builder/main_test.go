@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestE2EWorksSeparateReaderControlsAndSearchState(t *testing.T) {
+	works, err := fixtureWorks("e2e")
+	if err != nil {
+		t.Fatalf("fixtureWorks returned error: %v", err)
+	}
+
+	wantTitles := map[string]string{
+		"n3234ab": "E2E ケースD 本文操作",
+		"n6234ab": "E2E ケースH 作品内検索",
+	}
+	for _, work := range works {
+		if wantTitle, ok := wantTitles[work.SiteWorkID]; ok {
+			if work.Title != wantTitle || len(work.Episodes) != 2 {
+				t.Fatalf("unexpected exclusive fixture %s: %+v", work.SiteWorkID, work)
+			}
+			delete(wantTitles, work.SiteWorkID)
+		}
+	}
+	if len(wantTitles) != 0 {
+		t.Fatalf("exclusive fixtures were not found: %+v", wantTitles)
+	}
+}
+
 func TestVerificationWorksIncludeReaderCorrectionFixture(t *testing.T) {
 	works, err := fixtureWorks("verification")
 	if err != nil {
