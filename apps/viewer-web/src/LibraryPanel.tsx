@@ -387,7 +387,12 @@ export function LibraryPanel({
                 <div
                   className="library-management-popover"
                   onClickCapture={(event) => {
-                    if (event.target instanceof Element && event.target.closest("button")) {
+                    const elementConstructor = event.currentTarget.ownerDocument.defaultView?.Element;
+                    if (
+                      elementConstructor &&
+                      event.target instanceof elementConstructor &&
+                      event.target.closest("button")
+                    ) {
                       managementMenuRef.current?.removeAttribute("open");
                     }
                   }}
