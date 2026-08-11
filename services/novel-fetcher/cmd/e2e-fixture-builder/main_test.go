@@ -1,9 +1,78 @@
 package main
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestBuildFixtureProducesDeterministicDatabase(t *testing.T) {
+	outputDir := t.TempDir()
+	if err := buildFixture(outputDir, "e2e"); err != nil {
+		t.Fatalf("first buildFixture returned error: %v", err)
+	}
+	firstDatabase, err := os.ReadFile(filepath.Join(outputDir, "library.sqlite"))
+	if err != nil {
+		t.Fatalf("read first fixture database: %v", err)
+	}
+
+	if err := buildFixture(outputDir, "e2e"); err != nil {
+		t.Fatalf("second buildFixture returned error: %v", err)
+	}
+	secondDatabase, err := os.ReadFile(filepath.Join(outputDir, "library.sqlite"))
+	if err != nil {
+		t.Fatalf("read second fixture database: %v", err)
+	}
+
+	if !bytes.Equal(firstDatabase, secondDatabase) {
+		t.Fatal("fixture database changed between identical builds")
+	}
+}
+
+func TestBuildFixturePreservesOutputForUnknownWorkSet(t *testing.T) {
+	outputDir := t.TempDir()
+	databasePath := filepath.Join(outputDir, "library.sqlite")
+	want := []byte("existing fixture")
+	if err := os.WriteFile(databasePath, want, 0o644); err != nil {
+		t.Fatalf("write existing fixture: %v", err)
+	}
+
+	if err := buildFixture(outputDir, "unknown"); err == nil {
+		t.Fatal("buildFixture returned nil error for unknown work set")
+	}
+	got, err := os.ReadFile(databasePath)
+	if err != nil {
+		t.Fatalf("read existing fixture after rejected build: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("existing fixture changed after rejected build: got %q", got)
+	}
+}
+
+func TestE2EWorksIncludeDedicatedReaderFixtures(t *testing.T) {
+	works, err := fixtureWorks("e2e")
+	if err != nil {
+		t.Fatalf("fixtureWorks returned error: %v", err)
+	}
+
+	wantTitles := map[string]string{
+		"n3234ab": "E2E ケースD 本文操作",
+		"n6234ab": "E2E ケースH 作品内検索",
+	}
+	for _, work := range works {
+		if wantTitle, ok := wantTitles[work.SiteWorkID]; ok {
+			if work.Title != wantTitle || len(work.Episodes) != 2 {
+				t.Fatalf("unexpected exclusive fixture %s: %+v", work.SiteWorkID, work)
+			}
+			delete(wantTitles, work.SiteWorkID)
+		}
+	}
+	if len(wantTitles) != 0 {
+		t.Fatalf("exclusive fixtures were not found: %+v", wantTitles)
+	}
+}
 
 func TestVerificationWorksIncludeReaderCorrectionFixture(t *testing.T) {
 	works, err := fixtureWorks("verification")

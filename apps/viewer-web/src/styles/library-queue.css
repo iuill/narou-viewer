@@ -236,10 +236,6 @@
     text-align: left;
   }
 
-  .workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
   .library-queue-header-meta,
   .library-queue-progress-copy {
     justify-content: flex-start;

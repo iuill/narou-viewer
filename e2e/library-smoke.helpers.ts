@@ -52,6 +52,7 @@ export const illustratedNarouTitle = "E2E ケースA 挿絵表示";
 export const readingStateNarouTitle = "E2E ケースB 読書ログ";
 export const readingStateAnchorNarouTitle = "E2E ケースC 活動アンカー";
 export const readerControlsNarouTitle = "E2E ケースD 本文操作";
+export const readerSearchNarouTitle = "E2E ケースH 作品内検索";
 export const bookmarksNarouTitle = "E2E ケースE 栞";
 export const exportNarouTitle = "E2E ケースF エクスポート";
 export const kakuyomuTitle = "E2E ケースG カクヨム形式";

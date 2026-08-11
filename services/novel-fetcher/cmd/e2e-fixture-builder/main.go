@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -33,22 +35,52 @@ func main() {
 }
 
 func buildFixture(outputDir string, workSet string) error {
-	store, err := storage.NewStore(outputDir)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
 	works, err := fixtureWorks(workSet)
 	if err != nil {
 		return err
 	}
-	for _, work := range works {
-		if err := saveWork(context.Background(), store, outputDir, work); err != nil {
-			return err
+
+	for _, relativePath := range []string{"library.sqlite", "library.sqlite-shm", "library.sqlite-wal", "works"} {
+		if err := os.RemoveAll(filepath.Join(outputDir, relativePath)); err != nil {
+			return fmt.Errorf("reset fixture output %s: %w", relativePath, err)
 		}
 	}
 
+	store, err := storage.NewStore(outputDir)
+	if err != nil {
+		return err
+	}
+
+	for _, work := range works {
+		if err := saveWork(context.Background(), store, outputDir, work); err != nil {
+			return errors.Join(err, store.Close())
+		}
+	}
+
+	if err := store.Close(); err != nil {
+		return err
+	}
+	return normalizeFixtureDatabase(outputDir)
+}
+
+func normalizeFixtureDatabase(outputDir string) error {
+	databasePath := filepath.Join(outputDir, "library.sqlite")
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	fixedTimestamp := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if _, err := db.Exec("UPDATE works SET created_at = ?, updated_at = ?", fixedTimestamp, fixedTimestamp); err != nil {
+		return fmt.Errorf("normalize fixture work timestamps: %w", err)
+	}
+	if _, err := db.Exec("UPDATE episodes SET last_attempted_at = ?", fixedTimestamp); err != nil {
+		return fmt.Errorf("normalize fixture episode timestamps: %w", err)
+	}
+	if _, err := db.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("vacuum fixture database: %w", err)
+	}
 	return nil
 }
 
@@ -93,6 +125,7 @@ func fixtureWorks(workSet string) ([]model.Work, error) {
 		longSyosetuFixtureWork("n3234ab", "E2E ケースD 本文操作", "ケースDの本文操作を確認する合成fixtureです。", "case-d", fetchedAt.Add(30*time.Minute)),
 		longSyosetuFixtureWork("n4234ab", "E2E ケースE 栞", "ケースEの栞操作を確認する合成fixtureです。", "case-e", fetchedAt.Add(40*time.Minute)),
 		longSyosetuFixtureWork("n5234ab", "E2E ケースF エクスポート", "ケースFの YAML エクスポートを確認する合成fixtureです。", "case-f", fetchedAt.Add(50*time.Minute)),
+		longSyosetuFixtureWork("n6234ab", "E2E ケースH 作品内検索", "ケースHの作品内検索を確認する合成fixtureです。", "case-h", fetchedAt.Add(70*time.Minute)),
 		{
 			Site:       model.SiteKakuyomu,
 			SiteName:   "カクヨム",
