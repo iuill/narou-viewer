@@ -338,7 +338,7 @@ describe("LibraryPanel", () => {
   });
 
   it("作品追加とライブラリ管理を分け、モバイルでは追加を取得タブへ一本化する", async () => {
-    const { container, root, dom } = await renderPanel(createProps());
+    const { container, root, dom } = await renderPanel(createProps({ isDownloadComposerOpen: false }));
 
     expect(container.querySelector('button[aria-label="作品を追加"]')).not.toBeNull();
     const managementMenu = container.querySelector(".library-management-menu");
@@ -364,11 +364,46 @@ describe("LibraryPanel", () => {
     expect(dom.window.document.activeElement).toBe(managementSummary);
 
     await act(async () => {
-      root.render(createElement(LibraryPanel, createProps({ mobileHomeTab: "library" })));
+      root.render(createElement(LibraryPanel, createProps({ isDownloadComposerOpen: false, mobileHomeTab: "library" })));
     });
 
     expect(container.querySelector('button[aria-label="作品を追加"]')).toBeNull();
     expect(container.querySelector(".library-management-menu")).not.toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("PCの作品追加をポップアップ表示し、外側クリックとEscapeで閉じる", async () => {
+    const onCloseDownloadComposer = vi.fn();
+    const props = createProps({ onCloseDownloadComposer });
+    const { container, root, dom } = await renderPanel(props);
+
+    expect(container.querySelector(".library-download-composer--popover")).not.toBeNull();
+
+    await act(async () => {
+      dom.window.document.body.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true }));
+    });
+    expect(onCloseDownloadComposer).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.render(createElement(LibraryPanel, createProps({ isDownloadComposerOpen: false, onCloseDownloadComposer })));
+    });
+    await act(async () => {
+      root.render(createElement(LibraryPanel, createProps({ isDownloadComposerOpen: true, onCloseDownloadComposer })));
+    });
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    });
+    expect(onCloseDownloadComposer).toHaveBeenCalledTimes(2);
+    expect(dom.window.document.activeElement).toBe(container.querySelector('button[aria-label="作品を追加"]'));
+
+    await act(async () => {
+      root.render(createElement(LibraryPanel, createProps({ mobileHomeTab: "download", onCloseDownloadComposer })));
+    });
+    expect(container.querySelector(".library-download-composer")).not.toBeNull();
+    expect(container.querySelector(".library-download-composer--popover")).toBeNull();
 
     await act(async () => {
       root.unmount();
