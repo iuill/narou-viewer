@@ -273,7 +273,7 @@ export function ReaderSettingsPanel({
           <ReaderSettingsSwitch
             checked={reverseTapPageNavigation}
             checkedLabel="反転"
-            label="左右端タップ"
+            label="左右端タップのページ移動を反転"
             onChange={onReverseTapPageNavigationChange}
             uncheckedLabel="標準"
           />
@@ -377,7 +377,7 @@ export function ReaderSettingsPanel({
           <ReaderSettingsSwitch
             checked={debugPageOverflow}
             checkedLabel="緑で可視化"
-            label="列はみ出し表示"
+            label="あふれる列を緑で可視化"
             onChange={onDebugPageOverflowChange}
             uncheckedLabel="非表示"
           />

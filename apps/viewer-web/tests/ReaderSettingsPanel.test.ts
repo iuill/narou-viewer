@@ -146,14 +146,14 @@ describe("ReaderSettingsPanel", () => {
     const selects = container.querySelectorAll("select");
     await changeSelect(selects[0] as HTMLSelectElement, "gothic", dom);
     await changeSelect(selects[1] as HTMLSelectElement, "forest", dom);
-    await click(getSwitchByLabel(container, "左右端タップ"), dom);
+    await click(getSwitchByLabel(container, "左右端タップのページ移動を反転"), dom);
     await click(getSwitchByLabel(container, "引用符を〝〟へ置換"), dom);
     await click(getSwitchByLabel(container, "連続ハイフンをダッシュへ置換"), dom);
     await click(getSwitchByLabel(container, "半角括弧を全角へ置換"), dom);
     await click(getSwitchByLabel(container, "半角英数字・!?を全角へ置換"), dom);
     await click(getSwitchByLabel(container, "半角チルダを波ダッシュへ置換"), dom);
     await click(getSwitchByLabel(container, "連続ピリオドを……へ置換"), dom);
-    await click(getSwitchByLabel(container, "列はみ出し表示"), dom);
+    await click(getSwitchByLabel(container, "あふれる列を緑で可視化"), dom);
     await click(container.querySelector('button[aria-label="読書設定を閉じる"]') as Element, dom);
 
     expect(props.onReadingModeChange).toHaveBeenCalledWith("horizontal");
@@ -247,7 +247,7 @@ describe("ReaderSettingsPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(getSwitchByLabel(container, "左右端タップ").checked).toBe(true);
+    expect(getSwitchByLabel(container, "左右端タップのページ移動を反転").checked).toBe(true);
 
     await act(async () => {
       root.unmount();
@@ -260,7 +260,7 @@ describe("ReaderSettingsPanel", () => {
     });
     const { container, root } = await renderPanel(props);
 
-    expect(getSwitchByLabel(container, "列はみ出し表示").checked).toBe(true);
+    expect(getSwitchByLabel(container, "あふれる列を緑で可視化").checked).toBe(true);
 
     await act(async () => {
       root.unmount();

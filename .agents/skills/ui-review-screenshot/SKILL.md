@@ -201,12 +201,13 @@ playwright-cli -s=iphone snapshot
 - 3 端末では変更後の全体レイアウトを確認し、操作後の scroll や focus はまず最も狭い `iphone-16e` で重点確認する。端末固有の分岐がある場合は分岐ごとに操作する。
 
 操作後の座標や scroll 位置が疑わしい場合は、使い捨て spec を作らず `run-code` で確認する。
+次は読書設定 panel の例であり、selector と操作対象の文言はレビュー対象に合わせる。
 
 ```bash
 playwright-cli -s=iphone run-code "async page => {
   const panel = page.locator('.reader-settings-panel');
   const body = panel.locator('.reader-overlay-panel-body');
-  const target = page.getByRole('switch', { name: '列はみ出し表示' });
+  const target = page.getByRole('switch', { name: 'あふれる列を緑で可視化' });
   const before = await panel.evaluate((element) => ({
     rect: element.getBoundingClientRect().toJSON(),
     scrollTop: element.scrollTop
