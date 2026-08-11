@@ -56,14 +56,21 @@ test("作品内検索のプレビューは既読位置を変えず、明示操�
   expect(episodeTwoStateWrites).toHaveLength(stateWriteCountBeforePreview);
 
   const savedEpisode = page.waitForRequest(
-    (request) =>
-      request.method() === "PUT" &&
-      request.url().endsWith("/api/reader/state") &&
-      request.postDataJSON().lastReadEpisodeIndex === "2"
+    (request) => {
+      if (request.method() !== "PUT" || !request.url().endsWith("/api/reader/state")) {
+        return false;
+      }
+      const payload = request.postDataJSON() as { lastReadEpisodeIndex?: string; position?: number };
+      return payload.lastReadEpisodeIndex === "2" && typeof payload.position === "number" && payload.position > 0;
+    }
   );
   await panel.getByRole("button", { name: "この位置から読む" }).click();
-  await expect(page.getByRole("heading", { name: "第二話" })).toBeVisible();
   await savedEpisode;
+  await expect.poll(() => new URL(page.url()).searchParams.get("episode")).toBe("2");
+  await expect
+    .poll(() => Number.parseInt(new URL(page.url()).searchParams.get("pos") ?? "", 10))
+    .toBeGreaterThan(0);
+  await expect(page.getByLabel("本文画面の目次")).toHaveCount(0);
 });
 
 test("本文ページでページ移動と各アイコンの機能が動作する", async ({ page, request }, testInfo) => {
