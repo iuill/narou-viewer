@@ -128,7 +128,7 @@ compose の主な service:
 
 ## 開発
 
-ローカルの Go コマンドは Go 1.25.12 (`GOTOOLCHAIN=local`) を使用します。Dev Container では同じバージョンが導入されます。
+ローカルの Go コマンドは Go 1.27.0 (`GOTOOLCHAIN=local`) を使用します。Dev Container では同じバージョンが導入されます。
 
 日常的な確認では、まず lint と高速テストを実行します。
 
