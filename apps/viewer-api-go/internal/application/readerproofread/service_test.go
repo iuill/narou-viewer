@@ -318,7 +318,7 @@ func TestGetAppliesCurrentDeterministicCorrectionsToStoredProofread(t *testing.T
 	}
 }
 
-func TestGetDoesNotUseUnsupportedStoredProofreadFormat(t *testing.T) {
+func TestUnsupportedStoredProofreadFormatIsIgnoredAndRegenerated(t *testing.T) {
 	dir := t.TempDir()
 	episode := testEpisode()
 	var generateCalls atomic.Int32
@@ -328,7 +328,10 @@ func TestGetDoesNotUseUnsupportedStoredProofreadFormat(t *testing.T) {
 		StateDir: dir,
 		Generate: func(context.Context, ai.OpenRouterConfig, []ai.ChatMessage) (ai.ChatResult, error) {
 			generateCalls.Add(1)
-			return ai.ChatResult{}, nil
+			answer, _ := json.Marshal(proofreadOutput{Segments: []proofreadSegment{{
+				ID: 0, Paragraphs: []string{"文の途中です。", "次の文です。"},
+			}}})
+			return ai.ChatResult{Answer: string(answer)}, nil
 		},
 	})
 	if err := service.write(storedResult{
@@ -342,10 +345,11 @@ func TestGetDoesNotUseUnsupportedStoredProofreadFormat(t *testing.T) {
 	if err != nil || response.Status != "not_generated" {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if _, err := service.Generate(context.Background(), "novel-a", "1"); !errors.Is(err, ErrUnsupportedStoredFormat) {
-		t.Fatalf("generate err=%v", err)
+	generated, err := service.Generate(context.Background(), "novel-a", "1")
+	if err != nil || generated.Status != "ready" {
+		t.Fatalf("generated=%+v err=%v", generated, err)
 	}
-	if calls := generateCalls.Load(); calls != 0 {
+	if calls := generateCalls.Load(); calls != 1 {
 		t.Fatalf("generate calls=%d", calls)
 	}
 	raw, err := os.ReadFile(service.path("novel-a", "1"))
@@ -356,7 +360,7 @@ func TestGetDoesNotUseUnsupportedStoredProofreadFormat(t *testing.T) {
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		t.Fatal(err)
 	}
-	if stored.FormatVersion != formatVersion+1 {
+	if stored.FormatVersion != formatVersion {
 		t.Fatalf("formatVersion=%d", stored.FormatVersion)
 	}
 }

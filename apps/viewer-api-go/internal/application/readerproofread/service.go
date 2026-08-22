@@ -32,7 +32,6 @@ var ErrUnsupportedDocument = errors.New("この話にはAI校正できる本文�
 var ErrInvalidEpisodeIndex = errors.New("episodeIndex must be a non-negative integer string")
 var ErrOutputTooLong = errors.New("この話はAI校正で扱える長さの上限を超えました。現在は1話を分割せず処理するため、この話はAI校正できません。")
 var ErrInvalidOutput = errors.New("AI校正結果を安全に適用できませんでした。もう一度生成するか、別のモデルを選択してください。")
-var ErrUnsupportedStoredFormat = errors.New("保存済みのAI校正結果はこのバージョンでは扱えません。結果を削除してから再生成してください。")
 
 type Library interface {
 	GetEpisode(context.Context, string, string) (*library.EpisodeResponse, error)
@@ -127,9 +126,6 @@ func (s *Service) Get(ctx context.Context, novelID string, episodeIndex string) 
 		return Response{}, err
 	}
 	result, ok, err := s.read(novelID, episodeIndex)
-	if errors.Is(err, ErrUnsupportedStoredFormat) {
-		return Response{Status: "not_generated", NovelID: novelID, EpisodeIndex: episodeIndex, SourceETag: episode.ContentEtag}, nil
-	}
 	if err != nil {
 		return Response{}, err
 	}
@@ -176,9 +172,6 @@ func (s *Service) Generate(ctx context.Context, novelID string, episodeIndex str
 }
 
 func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex string) (Response, error) {
-	if _, _, err := s.read(novelID, episodeIndex); errors.Is(err, ErrUnsupportedStoredFormat) {
-		return Response{}, err
-	}
 	episode, err := s.loadEpisode(ctx, novelID, episodeIndex)
 	if err != nil || episode == nil {
 		return Response{}, err
@@ -665,7 +658,7 @@ func (s *Service) read(novelID string, episodeIndex string) (storedResult, bool,
 		return storedResult{}, false, err
 	}
 	if result.FormatVersion != formatVersion {
-		return storedResult{}, false, ErrUnsupportedStoredFormat
+		return storedResult{}, false, nil
 	}
 	if result.NovelID != novelID || result.EpisodeIndex != episodeIndex {
 		return storedResult{}, false, errors.New("AI校正結果の識別子が一致しません。")
