@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm
+FROM mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm
 
 ENV TZ=Asia/Tokyo
 ARG GO_VERSION=1.27.0

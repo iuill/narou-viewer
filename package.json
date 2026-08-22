@@ -1,6 +1,7 @@
 {
   "name": "narou-viewer",
   "private": true,
+  "type": "module",
   "license": "MIT",
   "version": "0.1.0",
   "packageManager": "bun@1.3.14",
@@ -61,12 +62,11 @@
   },
   "overrides": {
     "@babel/core": "7.29.7",
-    "vite": "7.3.5",
+    "vite": "8.2.0",
     "ws": "8.21.0",
-    "esbuild": "^0.28.1",
     "picomatch": "^4.0.4",
     "postcss": "8.5.18",
-    "nanoid": "3.3.17",
+    "nanoid": "3.3.18",
     "markdown-it": "14.2.0",
     "js-yaml": "4.3.1",
     "smol-toml": "^1.6.1",
@@ -75,15 +75,15 @@
     "linkify-it": "5.0.2"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.9",
+    "@biomejs/biome": "^2.5.6",
     "@playwright/test": "1.62.1",
-    "@vitest/coverage-istanbul": "^4.1.2",
-    "concurrently": "^9.2.1",
-    "jsdom": "^26.1.0",
-    "markdownlint-cli2": "^0.22.1",
-    "prettier": "^3.8.1",
+    "@vitest/coverage-istanbul": "^4.1.10",
+    "concurrently": "^10.0.4",
+    "jsdom": "^30.0.1",
+    "markdownlint-cli2": "^0.23.2",
+    "prettier": "^3.9.6",
     "shellcheck-binaries": "^0.8.0",
     "yaml": "^2.8.2",
-    "vitest": "^4.1.2"
+    "vitest": "^4.1.10"
   }
 }

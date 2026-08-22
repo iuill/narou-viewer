@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { buildPwaManifest, normalizePublicAssetBaseUrl, resolvePublicAssetUrl } from "./src/pwaAssets";
+import { buildPwaManifest, normalizePublicAssetBaseUrl, resolvePublicAssetUrl } from "./src/pwaAssets.ts";
 
 type ViewerBuildInfo = {
   version: string;

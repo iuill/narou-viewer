@@ -11,7 +11,7 @@
    - 2 つ目以降の worktree では `.devcontainer/.env.example` を `.devcontainer/.env` にコピーし、ホスト側公開ポートを重複しない値へ変更してください。通常の単一 Dev Container では `.devcontainer/.env` は不要です。
 2. `Dev Containers: Reopen in Container` を実行します。
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
-   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.27.0 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
+   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.27.0 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@openai/codex` (`codex`) と `@github/copilot` (`copilot`) のbuild時点の最新版を導入します。coding agent 向けのブラウザ操作 CLIである `@playwright/cli` (`playwright-cli`) は固定版をインストールし、Go LSP の `gopls` も導入します。
    - Dev Container は `${localEnv:HOME}/.codex/auth.json` だけを `/home/node/.codex/auth.json` へ read-write で bind mount します。ローカルでは Dev Container を開く前にホスト側で `codex login` を実行しておくと、その認証を複数の repository / worktree のコンテナから共有できます。`config.toml`、session、history、database、log など `.codex` 配下の他の状態は共有しません。
    - 認証ファイルがまだ存在しない場合は `initializeCommand` が権限 `0600` の空ファイルを作るため、コンテナ起動後に `codex login` できます。`auth.json` 自体が bind mount point になるため、コンテナ内の `codex logout` ではファイルを削除できない場合があります。認証情報を完全に削除する場合は、Dev Container を停止してホスト側で `codex logout` を実行するか、`${HOME}/.codex/auth.json` を削除してください。GitHub Codespaces でのこの認証 mount 経路は未検証です。ローカルホストの認証は引き継がれないため Codespace 内で別途ログインし、コンテナ内で削除できない認証情報を完全に破棄する場合は Codespace 自体を削除してください。
@@ -110,7 +110,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - 一方で、`tsc` / `vite` / `vitest` / `playwright` は引き続き Node エコシステムのツールとして扱います。Bun 管理の workspace から呼び出しますが、「Node 完全排除」は現時点の目標にしません。
 - そのため、日常運用では「Bun を標準導線にする」「Node 依存ツールは Bun から起動する」を両立させます。
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
-- Dev Container は `mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.0 (`GOTOOLCHAIN=local`) を有効化しています。CI も同じ考え方で運用します。
+- Node の patch version の正本は root の [`.node-version`](../.node-version) とし、Node を直接使う CI job も同じ版を使用します。Dev Container は同じ major の `mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.0 (`GOTOOLCHAIN=local`) を有効化しています。
 - CI では `bun run audit:bun:vulnerabilities` と `bun run audit:go:vulnerabilities` で Bun / Go それぞれの依存脆弱性を常時監査します。Go toolchain の整合性と module の公開後経過日数は、別の `bun run audit:go:toolchain` / `bun run audit:go:module-age` で検査します。
 - 依存差分のレビューは GitHub Actions の `Dependency Review` workflow を使い、`pull_request` のみで実行します。これは push ごとの再検査ではなく、「その PR が新たに持ち込む依存変更」を確認するためです。
 - 既知の悪性版や脆弱性通知は Dependabot alerts と CI の dependency audit で補完します。
