@@ -1,9 +1,9 @@
 # narou-viewer
 
 ![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=ffffff)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=ffffff)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=ffffff)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)
-![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=ffffff)
+![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=ffffff)
 ![Bun](https://img.shields.io/badge/Bun-1.3-000000?logo=bun&logoColor=ffffff)
 ![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=ffffff)
 ![Dev Container](https://img.shields.io/badge/Dev_Container-ready-0A7ACA?logo=visualstudiocode&logoColor=ffffff)
