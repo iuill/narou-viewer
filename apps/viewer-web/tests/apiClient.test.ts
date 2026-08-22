@@ -124,7 +124,9 @@ describe("api client stream readers", () => {
     await expect(fetchRuntimeStatus()).rejects.toBeInstanceOf(ApiResponseError);
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect((listener.mock.calls[0]?.[0] as CustomEvent).detail).toMatchObject({
+    const [event] = listener.mock.calls[0] ?? [];
+    expect(event).toBeInstanceOf(CustomEvent);
+    expect((event as CustomEvent).detail).toMatchObject({
       code: "CLIENT_UPDATE_REQUIRED",
       minApiContractVersion: "1",
       status: 426
