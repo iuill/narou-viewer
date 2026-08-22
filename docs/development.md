@@ -94,7 +94,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
   ```
 
   値は `http` または `https` のscheme、host、必要なportだけで構成します。末尾の `/`、path、query、fragment、userinfoを含む場合、viewer-apiは修正理由を示して起動を中止します。国際化ドメイン名はブラウザの `location.origin` と同じpunycodeで指定してください。複数指定する場合はカンマで区切ります。診断メッセージには設定値そのものを表示せず、何件目の指定に問題があるかだけを表示します。シェル、Dev Container、CIなどで明示した同名の環境変数は `.env.local` より優先されます。
-- 取得 sidecar は `novel-fetcher` です。作品一覧・目次・本文は sidecar の内部 API 経由で読み、保存済み asset 配信時だけ `VIEWER_DATA_DIR/novel-fetcher` 配下の共有ファイルを検証して返します。`novel-fetcher` は小説家になろうとカクヨムの基本取得に対応します。
+- 取得 sidecar は `novel-fetcher` です。作品一覧・目次・本文は sidecar の内部 API 経由で読み、保存済み asset 配信時だけ `VIEWER_API_DATA_DIR/novel-fetcher` 配下の共有ファイルを検証して返します。`novel-fetcher` は小説家になろうとカクヨムの基本取得に対応します。
 - `novel-fetcher` への操作は `viewer-web` -> `viewer-api` -> `/api/fetcher/*` を正規経路とし、sidecar API には compose 外部から直接アクセスしません。旧 `/api/narou/*` 互換 API は廃止済みです。
 - `.agents/skills` は Dev Container / Codespaces のコンテナ起動時に `.github/skills` として symlink 連携されるため、`GitHub Copilot CLI` など `.github/skills` を参照する環境から同じ skill 群を project skills として再利用できます。
 - 共有データは同じホストディレクトリ `data/` を見ますが、コンテナ内パスは異なります。
@@ -122,13 +122,13 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - Go は `apps/viewer-api-go` と `services/novel-fetcher` で使います。どちらも Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。
-- `bun run verify:fast` は従来どおり Bun / TypeScript workspace の高速確認です。`novel-fetcher` を変更した場合は、別途 `bun run verify:novel-fetcher` も実行してください。
+- `bun run verify:fast` は workspace の高速テストに続けて `viewer-api` と `viewer-web` を build します。`novel-fetcher` を変更した場合は、別途 `bun run verify:novel-fetcher` も実行してください。
 - 小説家になろう / カクヨムの実 URL を投入して動作検証する場合は、アクセス過多によるアクセス制限を避けるため、短編または話数の少ない作品を少数だけ使い、同じ URL の連続再試行を避けてください。失敗原因の調査は、まず sidecar ログ、保存済み raw HTML、fixture ベースの parser unit test で行います。
 
 ## 高速テスト
 
 Playwright E2E の前段として、Vitest による高速なコードレベルテストを追加しています。日常的な変更確認では、まずこちらを回してください。
-速度を優先するため、`viewer-web` のコードレベルテストは純粋ロジック中心に留め、DOM 依存の挙動やブラウザ実動作は Playwright E2E で担保します。
+`viewer-web` のコードレベルテストは既定の Node.js environment を維持し、必要なテストだけ JSDOM を明示的に生成します。実ブラウザのレイアウト、Service Worker、ブラウザ固有挙動は Playwright E2E で担保します。
 
 ```bash
 bun run test:unit

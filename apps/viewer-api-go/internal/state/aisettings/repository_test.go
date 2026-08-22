@@ -571,20 +571,6 @@ func TestAIGenerationSettingsCryptoHelpersAndEnvFlags(t *testing.T) {
 	if decrypted, err := decryptAIAPIKey(aiAPIKeyDocument{APIKey: strPtr(" sk-raw-key ")}); err != nil || decrypted != "sk-raw-key" {
 		t.Fatalf("raw API key should be trimmed and returned: decrypted=%q err=%v", decrypted, err)
 	}
-	t.Setenv("AI_GENERATION_SERVICE_API_BASE_URL", "")
-	t.Setenv("NODE_ENV", "development")
-	if !aiGenerationServiceConfigured() {
-		t.Fatal("legacy AI generation service helper should default to configured outside test env")
-	}
-	t.Setenv("NODE_ENV", "test")
-	if aiGenerationServiceConfigured() {
-		t.Fatal("legacy AI generation service helper should be disabled by default in test env")
-	}
-	t.Setenv("AI_GENERATION_SERVICE_API_BASE_URL", "disabled")
-	t.Setenv("NODE_ENV", "development")
-	if aiGenerationServiceConfigured() {
-		t.Fatal("AI generation service should respect explicit disabled setting")
-	}
 	readyDoc := emptyAiGenerationSettingsDocument()
 	readyDoc.PreferredMode = "llm"
 	modelID := "openrouter/auto"

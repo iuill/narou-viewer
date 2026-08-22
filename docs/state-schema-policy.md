@@ -2,7 +2,7 @@
 
 この文書は、`data/` 配下の server state、`novel-fetcher` の保存データ、library export schema について、所有者、version、互換性、migration、復旧、backup / restore を横断管理する単一正本である。service とデータフローの責務分離は [`architecture.md`](architecture.md)、機能上の意味は各機能仕様を参照する。
 
-registry の「現行」は 2026-07-18 時点の実装事実、「目標」はこの文書で採用する方針を表す。目標を未実装の安全性として扱わず、差分は follow-up Issue で追跡する。
+registry の「現行」は現在の実装事実、「目標」はこの文書で採用する方針を表す。目標を未実装の安全性として扱わず、差分は follow-up Issue で追跡する。
 
 ## 1. 適用範囲と判断軸
 
@@ -14,7 +14,7 @@ registry の「現行」は 2026-07-18 時点の実装事実、「目標」は�
 | --- | --- |
 | `viewer-api` | `state/` 配下の server state、AI 利用履歴、検索 cache |
 | `novel-fetcher` | `novel-fetcher/library.sqlite`、`novel-fetcher/works/**`、fetch task state |
-| `viewer-web export` | 利用者が持ち出す library export document の producer contract。将来 importer を `viewer-api` に置いても交換 format は server 内部 schema と分離する |
+| library export / import | `viewer-web` が生成し、`viewer-api` が検証・適用する交換 document の contract。交換 format は server 内部 schema と分離する |
 | browser local | `localStorage` の端末依存設定と、Service Worker / Cache Storage の app-shell cache。server backup / restore の対象外 |
 
 ### 1.2 役割と復元可能性
@@ -113,7 +113,7 @@ additive field の追加で version を維持できるのは、次をすべて�
 | 交換 schema | document 全体を拒否 | server state を変更しない | 対応 importer を使う |
 | crypto payload | decrypt error | 再暗号化・消去しない | 対応実装と同じ secret を使う |
 
-viewer-api の YAML / JSON state は共通 guard で header を typed decode より先に判定する。明示した legacy version 以外の欠落・未知 version・malformed document は read / write / prune を拒否し、派生 view / cache だけを registry に従って quarantine / rebuild できる。
+registry で version guard 実装済みとする viewer-api の YAML / JSON state は、schema ごとの guard で version を判定する。共通 guard を使う state は header を typed decode より先に確認し、明示した legacy version 以外の欠落・未知 version・malformed document に対する read / write / prune を拒否する。派生 view / cache だけは registry に従って利用を避け、quarantine / rebuild できる。
 
 ### 2.5 欠落・破損・非対応 schema
 
@@ -175,7 +175,7 @@ path は `data/` からの相対 path を表す。
 | `NF-RAW-EPISODE` | `novel-fetcher/works/**/raw/episodes/*.html` | novel-fetcher / 実装済み | raw source snapshot / cache | best-effort 再取得。履歴的同一性は保証できない | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者作品本文、元 HTML |
 | `NF-ASSETS` | `novel-fetcher/works/**/assets/**` | novel-fetcher / 実装済み | 取得 asset | best-effort 再取得。元消失・差替えの可能性あり | 作品削除の `withFiles: true` で削除。`false` では残る | 第三者画像等 |
 | `NF-TASKS` | `library.sqlite` の `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints`、migration 4 | novel-fetcher / 実装済み | `fetch_tasks` が task request・状態・進捗・制御要求、`fetch_task_queue` が queue 順序、`fetch_task_episode_checkpoints` が task 内の episode 完了を保持する。1 task は 1 target または 1 work ID だけを処理する。`queued` のみ起動時に自動実行し、旧 `running` は recovery で `interrupted` 等へ確定する | queue 順序、利用者意図、resume / cancel / idempotency を保持する。再開可能な status の未知 request version、malformed request、kind と resource 形状の不一致、queue invariant 不整合は起動時に fail-closed。`succeeded` / `canceled` の履歴 request は起動時の再実行対象外として decode しない | `fetch_tasks.request_version = 1`、status enum、requested_action、attempt fencing | 対象 URL、work ID、option、error、進捗、checkpoint |
-| `EX-LIBRARY-V1` | library export YAML | viewer-web export / producer 実装済み、import 未実装 | 交換 schema | 利用者管理の export。server 全体 backup ではない | server prune 対象外 | 読書行動、栞、作品一覧 |
+| `EX-LIBRARY-V1` | library export YAML | viewer-web export / viewer-api import 実装済み | 交換 schema | 利用者管理の export。server 全体 backup ではない | server prune 対象外 | 読書行動、栞、作品一覧 |
 | `BROWSER-PREFERENCES` | `localStorage` の `narou-viewer.reader-local-preferences.v1` | browser / server registry 対象外 | 端末設定の正本 | 消失時は既定値へ戻り、元設定は再構築不能 | 利用者による browser storage 消去 | 端末設定 |
 | `BROWSER-APP-SHELL` | SW / Cache Storage の `narou-viewer-shell-*` | browser / server registry 対象外 | app-shell cache | `/` と manifest を再取得して再構築可能 | SW activate / browser eviction | 第三者本文を含まない app shell |
 
@@ -196,13 +196,14 @@ path は `data/` からの相対 path を表す。
 | `VA-EXTRACTION-INDEX` | `schema_version: 2`、derived | mismatch / malformed / 未知 version を quarantine し、current job file から rebuild | job file から rebuild |
 | `VA-EXTRACTION-CHECKPOINT` | `schemaVersion: 5` + generation fingerprint、supported legacy なし | 順次抽出の集約済み状態に加え、`parallel_identity` は成功した runtime batch の正規化済み delta を保存する。schema、typed payload、novel、boundary、strategy、fingerprint mismatch では、running jobの自動再開停止を先に保存してからquarantineする。provider 呼出し前に停止し、空 checkpoint として自動再実行しない | 重複 request / cost を確認し、対応 build または明示再実行を使う |
 | `VA-AI-USAGE` | `schema_migrations`、既知 latest `1` | migration 1 が既存3テーブルを検証・採用し、旧 request metadata 列を補完する。viewer-api startup と write / prune の RW open で supported migration を適用し、read は read-only open で検証だけを行う。future version は全経路で拒否し、自動 drop しない。transaction、process 内 write mutex、`journal_mode=DELETE` | 対応する新しい build または supported backup を使う。writer 停止・connection close 後に main DB を cold backup する |
+| `VA-READER-AI-PROOFREAD` | JSON `formatVersion: 1` + `promptVersion: 5` | writer は current version を保存する。reader は JSON decode 後に format version と novel / episode ID を検証し、原文 ETag または prompt version が一致しない結果も表示しない。未知 format version は未生成として扱い、利用者が再生成すると current version で上書きする | 再生成する |
 | `VA-READER-SEARCH` | `PRAGMA user_version = 1`（table schema + `BodyText` normalization contract） | open 時に version、required columns、`PRAGMA quick_check` を検査。不一致・破損は connection close 後に `.unsupported-*` / `.corrupt-*` へ quarantine し、current DB を新規作成。canonical reader document から lazy rebuild | cache のため履歴 migration は行わない。normalization 変更時は cache version と golden test を同時更新 |
 | `NF-LIBRARY` | `schema_migrations`、既知 latest `4` | read-only connection で ledger の最大 version を preflight し、RW connection でも PRAGMA・migration 直前に再検査する。supported latest 超過時は application-issued write / migration を行わず、論理 DB 内容を変更しない。番号付き migration、transaction、WAL、foreign key、incremental auto-vacuum。migration 4 の task table は queue invariant と request version を startup recovery 前に検証する | 対応する新しい build または supported backup を使う。DB 単独で normalize / restore しない |
 | `NF-CANONICAL-EPISODE` | JSON `schema_version: 1`。supported legacy version なし | work mutation の preflight で既存 `body_path` と新 target path を検査し、typed decode・API 応答・TOC metadata/status 更新・skip・prune・再保存より前に拒否する。field 欠落、`1` 以外、parse error では元 file と DB metadata を変更しない | 対応 build または supported backup を使う。`library.sqlite` と `works/**` を同じ consistency group で復旧する |
 | `NF-RAW-EPISODE` | version なし | opaque HTML | schema migration 対象外。DB metadata、source URL、hash で管理 |
 | `NF-ASSETS` | file format 固有、索引は DB | opaque binary | schema migration 対象外。DB metadata と hash の整合を検査 |
 | `NF-TASKS` | migration 4 | `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints` | task request・状態遷移・idempotency・queue order・起動 recovery を管理する。`queued` のみ自動実行し、`paused` / `interrupted` / `failed` は明示 resume まで保持する |
-| `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import なし | unknown version / field / malformed data を mutation 前に strict reject。dry-run と apply は同一 validator（[#17](https://github.com/iuill/narou-viewer/issues/17)） |
+| `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import は unknown version / field / malformed data を mutation 前に strict reject し、dry-run と apply で同じ validator を使う | 未取得作品と存在しない話は warning 付きで skip し、既存優先で読書位置と栞を適用する |
 
 `VA-NOVEL-SETTINGS`をschema v4対応前のbuildへロールバックする場合、旧buildはv4を読み込めないため、そのまま再保存して移行することはできない。サービスを停止してからv3のbackupを復元する。作品別読書設定を失ってよい場合は`state/novel_reader_settings.yaml`を退避または削除し、旧buildにv3として再作成させてもよい。手動で戻す場合は`schema_version`を3へ変更し、v4で追加した`tilde_normalization`と`consecutive_period_normalization`を全作品から削除する。いずれも取得済み原文には影響しない。
 
@@ -256,7 +257,7 @@ novels:
 - profiles-only restore は禁止する。現行 legacy migration が profile を events の seed として扱う可能性があるため、対応 events を restore するか profile を削除する。
 - job file は cache ではなく、利用者に見せる状態と重複実行防止の運用正本である。unreadable / unknown job を黙って一覧から消さない。
 - checkpoint mismatch は correctness 上再計算できても、既に発生した provider request と cost を戻せない。単に「破棄・再実行が安全」としない。
-- #16 では `queued`、`running`、`pausing`、`paused`、`interrupted`、`canceled`、`succeeded`、`failed` の状態遷移と version を同時に定義する。
+- extraction job は `queued`、`running`、`pausing`、`paused`、`interrupted`、`canceled`、`completed`、`failed`、`incompatible` の状態を区別し、schema version と状態遷移を一体で検証する。
 
 抽出固有の保存順、公開境界、retry は [`extraction.md`](extraction.md) を参照する。
 
@@ -353,8 +354,8 @@ backup の暗号化、保存先、copy 完了性、retention、復号情報の�
 | Issue | gap |
 | --- | --- |
 | [#15](https://github.com/iuill/narou-viewer/issues/15) | 完了: novel-fetcher task state の path、version、状態遷移、idempotency、recovery |
-| [#16](https://github.com/iuill/narou-viewer/issues/16) | extraction job / checkpoint の状態機械、incompatible state、再実行 cost 保護 |
-| [#17](https://github.com/iuill/narou-viewer/issues/17) | `EX-LIBRARY-V1` strict importer、dry-run、atomic apply、conflict policy |
+| [#16](https://github.com/iuill/narou-viewer/issues/16) | 完了: extraction job / checkpoint の状態機械、incompatible state、再実行 cost 保護 |
+| [#17](https://github.com/iuill/narou-viewer/issues/17) | 完了: `EX-LIBRARY-V1` strict importer、dry-run、atomic apply、conflict policy |
 | [#20](https://github.com/iuill/narou-viewer/issues/20) | 完了: viewer-api file state の version guard、write / prune fence、fixture / migration test、character profile schema |
 | [#21](https://github.com/iuill/narou-viewer/issues/21) | 完了: `ai_usage.sqlite` の番号付き migration、future-version guard、snapshot の credential・ユーザー文言・作品本文保持契約 |
 | [#22](https://github.com/iuill/narou-viewer/issues/22) | 完了: `reader_search.sqlite` の cache version と安全な quarantine / rebuild |

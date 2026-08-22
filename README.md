@@ -1,6 +1,6 @@
 # narou-viewer
 
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=ffffff)
+![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8?logo=go&logoColor=ffffff)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=ffffff)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)
 ![Vite](https://img.shields.io/badge/Vite-7-646CFF?logo=vite&logoColor=ffffff)
@@ -26,9 +26,10 @@ narou-viewer は、Web 小説を自分の環境に保存し、ライブラリ管
 - 通信が切れたときに、開いていた画面へ戻りやすくする最低限のオフライン補助
 - 作品ごとのストレージ使用量表示
 - AI 生成のキャラクター・用語一覧と、AI チャットによる小説内容の確認・整理
+- 原文を保持したまま話単位で生成・切り替えできる AI 本文校正
 - 書籍化情報やカバー候補を扱う publication 情報表示
 
-本文内容を校閲したり別の文章へ改変したりするものではなく、保存済み HTML を読書画面で扱いやすい形に整えます。
+取得済みの原文や保存済み HTML は変更しません。通常の本文整形は表示時の正規化として行い、任意の AI 本文校正も原文とは別の派生データとして保存して切り替え表示します。
 
 ## スクリーンショット
 

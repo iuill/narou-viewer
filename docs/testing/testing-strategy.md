@@ -33,9 +33,9 @@
 
 ### 3.2 フロントエンド補助
 
-- 速度を優先するため、`viewer-web` のコードレベルテストは原則として Node.js 環境で完結する純粋関数を対象にする。
-- DOM 依存の挙動、ブラウザ API、実レンダリングを伴う確認は、既定では Playwright E2E に寄せる。
-- React コンポーネントや DOM を直接検証するコードレベルテストを追加する場合は、速度への影響が小さいことと、E2E では代替しにくい価値があることを前提条件とする。
+- `viewer-web` のコードレベルテストは既定の Node.js environment を維持し、純粋関数、state hook、局所的な React コンポーネントを対象にする。
+- DOM が必要なテストは対象ファイル内で JSDOM を明示的に生成し、suite 全体を DOM environment へ切り替えない。
+- 実ブラウザのレイアウト、Service Worker、ブラウザ固有挙動は Playwright E2E に寄せる。
 
 ### 3.3 Go backend 補助
 
@@ -172,10 +172,10 @@
 
 #### 5.3.1 ユーティリティ分離とテスト
 
-- `App.tsx` には表示用・整形用・DOM 依存ロジックが集まっている。
+- `App.tsx` は画面 composition に留め、状態と操作は `app/`、`screens/`、`routes/` 配下の model / hookへ分離する。
 - 純粋関数は `src/` 配下の小さな util module に切り出し、その module をユニットテストする。
-- 「巨大コンポーネントを丸ごとテストする」より「表示ロジックを切り出して軽く検証する」を優先する。
-- DOM を直接扱う処理は、コードレベルテストに無理に持ち込まず、Playwright E2E で担保する。
+- 画面全体を一つのテスト対象にせず、model / hook / component の責務単位で軽く検証する。
+- DOM を使う局所テストと、実レイアウトやブラウザ API を確認する Playwright E2E を使い分ける。
 
 #### 5.3.2 優先観点
 
@@ -208,15 +208,9 @@
 
 #### 5.3.3 React コンポーネントテストの扱い
 
-- コンポーネントテストは、`App.tsx` を分割して責務が明確になってから追加する。
-- ただし高速コードレベルテストの目的は短いフィードバックループなので、既定の `test:unit` に重い DOM 環境を持ち込まない。
-- 追加する場合も、対象は限定し、プロジェクト全体の既定環境を DOM 前提にしない。
-- 対象候補:
-  - 作品一覧
-  - 栞一覧
-  - novel-fetcher 状態パネル
-  - reader settings panel
-- ユニットテストとコードレベル統合テストで大半のバグを先に拾う。
+- model / hook だけでは確認しにくい表示分岐、入力、focus、イベント処理は、責務を限定したコンポーネントテストで確認する。
+- 短いフィードバックループを維持するため、既定の `test:unit` は Node.js environment とし、必要なテストだけ JSDOM を生成する。
+- CSS layout、viewport 差、ブラウザ実装差はコンポーネントテストで代用せず、Playwright E2E と UI 画面確認で確認する。
 
 ## 6. 実行ルール
 
@@ -273,18 +267,14 @@ bun run e2e:test:container
   - `bun run verify:fast`
   - `bun run verify`
 
-## 8. 導入優先順位
+## 8. 追加テストの優先順位
 
-1. `viewer-api-go` の `internal/store` ユニット/統合テスト
-2. `viewer-api-go` の `internal/library` ユニット/統合テスト
-3. `viewer-api-go` の `internal/fetcher` ユニットテスト
-4. `viewer-api-go` の `internal/httpapi` `httptest` テスト
-5. `viewer-web` の util 切り出しとユニットテスト
-6. 必要になった範囲の React コンポーネントテスト
+1. 変更箇所に最も近い unit / integration test で再現条件を固定する。
+2. schema、path、永続化、外部 request、API contract の境界を優先する。
+3. web は純粋関数、model / hook、局所コンポーネントの順に責務へ合う層を選ぶ。
+4. 実ブラウザでのみ成立する回帰を Playwright E2E に追加する。
 
-- 先に backend 側を厚くする理由:
-  - 現在の責務上、YAML 読取、永続化、novel-fetcher API 境界、ETag などの不具合は backend 側に集まりやすい。
-  - これらは Playwright で再現すると遅いが、コードレベルテストでは高速に検証できる。
+既存テストの配置と品質投資の優先境界は [`../quality-goals.md`](../quality-goals.md#coverage-と重点テスト) を基準とする。
 
 ## 9. Playwright に残すべき確認
 

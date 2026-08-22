@@ -22,7 +22,10 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/store"
 )
 
-const promptVersion = 5
+const (
+	formatVersion = 1
+	promptVersion = 5
+)
 
 var ErrUnavailable = errors.New("AI校正はLLM連携が未設定のため利用できません。AI機能の設定でOpenRouter APIキーとモデルを設定してください。")
 var ErrUnsupportedDocument = errors.New("この話にはAI校正できる本文がありません。")
@@ -240,7 +243,7 @@ func (s *Service) generateOnce(ctx context.Context, novelID string, episodeIndex
 	}
 	generatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	stored := storedResult{
-		FormatVersion: 1, PromptVersion: promptVersion, NovelID: novelID, EpisodeIndex: episodeIndex,
+		FormatVersion: formatVersion, PromptVersion: promptVersion, NovelID: novelID, EpisodeIndex: episodeIndex,
 		SourceETag: episode.ContentEtag, GeneratedAt: generatedAt, ModelID: config.ModelID, ReaderDocument: corrected,
 	}
 	if err := s.write(stored); err != nil {
@@ -653,6 +656,9 @@ func (s *Service) read(novelID string, episodeIndex string) (storedResult, bool,
 	var result storedResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return storedResult{}, false, err
+	}
+	if result.FormatVersion != formatVersion {
+		return storedResult{}, false, nil
 	}
 	if result.NovelID != novelID || result.EpisodeIndex != episodeIndex {
 		return storedResult{}, false, errors.New("AI校正結果の識別子が一致しません。")

@@ -187,17 +187,6 @@ func resolveAIProfileForOverride(doc aiGenerationSettingsDocument, profileID *st
 	return aiGenerationProfileRecord{}, false
 }
 
-func aiGenerationServiceConfigured() bool {
-	value := strings.TrimSpace(os.Getenv("AI_GENERATION_SERVICE_API_BASE_URL"))
-	if value == "disabled" {
-		return false
-	}
-	if value != "" {
-		return true
-	}
-	return strings.TrimSpace(os.Getenv("NODE_ENV")) != "test"
-}
-
 func internalAIGenerationConfigured(doc aiGenerationSettingsDocument) bool {
 	return activeOpenRouterProfileReady(doc)
 }

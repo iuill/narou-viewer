@@ -25,7 +25,7 @@ services:
     working_dir: /workspace
     command: sleep infinity
     environment:
-      VIEWER_DATA_DIR: /workspace/data
+      VIEWER_API_DATA_DIR: /workspace/data
       NOVEL_FETCHER_API_BASE_URL: http://novel-fetcher:33006
       GOCACHE: /go/.cache/go-build-shared
       GOMODCACHE: /go/pkg/mod-shared

@@ -16,7 +16,7 @@
   - 自動確定の主 evidence は NDL 由来に寄せる。
 - Secondary: Google Books API
   - ISBN lookup から表紙画像と補助書誌を補完する。
-  - Google Books API key は `GOOGLE_BOOKS_API_KEY` を必須とする。
+  - Google Books API key は Web UI の AI 設定に保存した shared provider key を優先し、`GOOGLE_BOOKS_API_KEY` を環境変数 fallback として使う。
   - NDL 候補が出ない場合だけ title search fallback を検討する。
   - Google Books 由来の情報を UI に出す場合は、source 表示、Google Books へのリンク、attribution を表示する。
 - Avoid: 楽天ブックス API / openBD
@@ -33,8 +33,8 @@
 - NDL の ISBN lookup では、返却 item の ISBN identifier が入力 ISBN と一致する場合だけ NDL 書誌として採用する。
 - カバー画像は URL のみ保存し、画像バイナリは保存・再配信しない。
 - `PUBLICATION_PROVIDER_NDL_ENABLED=0` の場合は NDL lookup を行わない。
-- `GOOGLE_BOOKS_API_KEY` 未設定時は Google Books へ通信せず、Google Books 補完は warning として扱う。
-- `GOOGLE_BOOKS_API_KEY` 未設定かつ Google Books provider 有効時は `/api/system/status` でも warning を返し、トップ画面の動作状況 warning として表示する。
+- Web UI 保存値と `GOOGLE_BOOKS_API_KEY` の両方が未設定の場合は Google Books へ通信せず、Google Books 補完は warning として扱う。
+- Google Books API key 未設定かつ Google Books provider 有効時は `/api/system/status` でも warning を返し、トップ画面の動作状況 warning として表示する。
 - `PUBLICATION_PROVIDER_GOOGLE_BOOKS_ENABLED=0` の場合は Google Books lookup を行わず、ISBN だけを手動情報として保存する。
 - `NDL_SEARCH_API_BASE_URL` と `GOOGLE_BOOKS_API_BASE_URL` はテストや検証で endpoint を差し替える場合だけ使う。
 - UI では、NDLサーチ API を用いた metadata であることを明記し、Google Books 由来の表紙・書誌情報には Google Books へのリンク付き attribution を表示する。
