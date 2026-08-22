@@ -63,7 +63,7 @@ flowchart LR
 
 `viewer-api` は人物・用語抽出と読書AI応答を process 内で扱う。HTTP 層は request / response / streaming event の変換に留め、読書AIの agent loop・tool 実行・usage 記録と抽出 job の状態遷移は application service が担う。
 
-`data_e2e` は E2E 専用の作業コピーとして扱い、通常のテスト実行では `data/` から再生成しない。git 管理する fixture 正本は `tests/fixtures/e2e/` に置き、初期化時に `data_e2e` へ展開する。fixture の初期化や明示的な再生成手順は `README.md` に記載する。
+`data_e2e` は E2E 専用の作業コピーとして扱い、通常のテスト実行では `data/` から再生成しない。git 管理する fixture 正本は `tests/fixtures/e2e/` に置き、初期化時に `data_e2e` へ展開する。fixture の初期化や明示的な再生成手順は [`testing/e2e-setup.md`](testing/e2e-setup.md) に記載する。
 
 ### 3.2 self-host サービス
 
@@ -82,7 +82,7 @@ flowchart LR
   - `viewer-api`: `VIEWER_API_DATA_DIR`。開発時既定値は `/workspace/data`
   - `novel-fetcher`: `/data/novel-fetcher`
 - `viewer-api` は `novel-fetcher` コンテナ側の内部パスを参照しない。
-- `viewer-api` は作品一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。保存済み asset 配信だけは、ブラウザへ同一 origin の cacheable URL を返すため、`VIEWER_DATA_DIR/novel-fetcher` 配下の共有ファイルを path traversal / symlink escape 検証後に返す。
+- `viewer-api` は作品一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。保存済み asset 配信だけは、ブラウザへ同一 origin の cacheable URL を返すため、`VIEWER_API_DATA_DIR/novel-fetcher` 配下の共有ファイルを path traversal / symlink escape 検証後に返す。
 - 共有データルート直下の論理構造は次の通りとする。
 
 ```text
@@ -193,9 +193,9 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 
 ### 6.1 取得 sidecar API 連携
 
-- 現行既定の sidecar は `novel-fetcher` であり、`viewer-api` からの内部 API 呼び出しと `VIEWER_DATA_DIR/novel-fetcher` 配下のデータ更新を担う。
+- 現行既定の sidecar は `novel-fetcher` であり、`viewer-api` は内部 API を呼び出し、sidecar が共有データルートの `novel-fetcher/` 配下を更新する。
 - ブラウザ操作は原則 `viewer-web` -> `viewer-api` -> 取得 sidecar で扱う。
-- 一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。asset 配信だけは `viewer-api` が `VIEWER_DATA_DIR/novel-fetcher` 配下の保存済みファイルを検証して返す。
+- 一覧・目次・本文を `novel-fetcher` の内部 API 経由で参照する。asset 配信だけは `viewer-api` が `VIEWER_API_DATA_DIR/novel-fetcher` 配下の保存済みファイルを検証して返す。
 - `viewer-api` の取得 sidecar 操作用 API は `/api/fetcher/*` とする。旧 `/api/narou/*` 互換 API は廃止済みで、現行 frontend / contract test / 正本 docs は `/api/fetcher/*` だけを公開 BFF として扱う。実体は `novel-fetcher` sidecar への中継で構成し、取得 backend 側 work 削除が成功した後は、`viewer-api` が reader state / bookmarks / character state / AI usage の孤立 state を novel 単位で pruning する。
 - `novel-fetcher` の内部 API は、保存済み work の読み取りに `/api/v1/works...`、取得・更新・削除・task 操作に `/api/v2/...` を使う。これは sidecar 内部 API の分割であり、ブラウザへ直接公開する API バージョンではない。
 - task の運用正本は `library.sqlite` 内の task table とする。`taskqueue.Queue` は永続 repository と wake 通知をまとめるだけの adapter とし、runner は実行中 task の cancellation signal だけを memory に保持する。同一 task の episode 保存と checkpoint 更新は SQLite transaction で確定する。
@@ -359,11 +359,3 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `viewer-web` 前段に認証プロキシ（`oauth2-proxy` 等）を追加する余地も残す。
 - `viewer-api` の read-only API に CDN キャッシュを適用する。
 - `viewer-api` を多重化する場合は、YAML ベース state を外部ストアに移行する。
-
-## 11. 実装着手順（推奨）
-
-1. `viewer-api` の最小API実装（一覧・toc・episode・state更新）。
-2. `viewer-api` に `FileStateStore` を実装し、`reading_state.yaml` / `bookmarks.yaml` の直列更新を行う。
-3. `viewer-web` で一覧と本文表示を接続する。
-4. `viewer-web` の app-shell Service Worker を基礎に、話本文のブラウザローカルなオフライン管理を追加する。
-5. `novel-fetcher` の download/update 操作UIを接続する。
