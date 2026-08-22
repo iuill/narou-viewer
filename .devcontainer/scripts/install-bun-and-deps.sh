@@ -41,6 +41,7 @@ export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="${BUN_INSTALL}/bin:${PATH}"
 # 以下の CLI バージョンは viewer-dev/Dockerfile の ARG と一致させること。
 # Dockerfile 側で焼き込み済みならこのスクリプトはインストールをスキップする。
+BUN_VERSION="${BUN_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/.bun-version")}"
 OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-latest}"
 GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-latest}"
 PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.18}"
@@ -277,9 +278,14 @@ if ! command -v rg >/dev/null 2>&1 || ! command -v bwrap >/dev/null 2>&1; then
     ripgrep
 fi
 
-if ! command -v bun >/dev/null 2>&1; then
-  curl -fsSL https://bun.sh/install | bash
+if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != "${BUN_VERSION}" ]; then
+  curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
   export PATH="${BUN_INSTALL}/bin:${PATH}"
+fi
+
+if [ "$(bun --version)" != "${BUN_VERSION}" ]; then
+  printf '%s\n' "Bun ${BUN_VERSION} was installed but is not selected from PATH." >&2
+  exit 1
 fi
 
 remove_line_from_file "${HOME}/.bashrc" 'export PATH="$(go env GOPATH 2>/dev/null)/bin:$PATH"'

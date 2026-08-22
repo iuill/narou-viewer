@@ -50,6 +50,7 @@ ENV PATH=/usr/local/go/bin:${PATH}
 # (不一致の場合は postCreate 側が検出して入れ直すため壊れはしないが、焼き込みが無駄になる)。
 ARG OPENAI_CODEX_VERSION=latest
 ARG GITHUB_COPILOT_VERSION=latest
+ARG BUN_VERSION=1.3.14
 # Coding-agent screenshot/browser-control CLI. This is intentionally separate
 # from E2E Playwright, which is pinned by @playwright/test and the
 # playwright-e2e image tag.
@@ -94,7 +95,8 @@ RUN su node -c "umask 0002 && npm install -g '@playwright/cli@${PLAYWRIGHT_CLI_V
 # remoteUser (node) のホームに置くことで postCreate のインストール済み判定を通す
 USER node
 
-RUN curl -fsSL https://bun.sh/install | bash \
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
+ && test "$(/home/node/.bun/bin/bun --version)" = "${BUN_VERSION}" \
  && /home/node/.bun/bin/bun add -g "@openai/codex@${OPENAI_CODEX_VERSION}" "@github/copilot@${GITHUB_COPILOT_VERSION}" \
  && mkdir -p /home/node/.bun/install/cache /home/node/.codex
 

@@ -110,6 +110,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - 一方で、`tsc` / `vite` / `vitest` / `playwright` は引き続き Node エコシステムのツールとして扱います。Bun 管理の workspace から呼び出しますが、「Node 完全排除」は現時点の目標にしません。
 - そのため、日常運用では「Bun を標準導線にする」「Node 依存ツールは Bun から起動する」を両立させます。
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
+- Bun の patch version の正本は root の [`.bun-version`](../.bun-version) とし、`package.json` の `packageManager`、CI、Dev Containerで同じ版を使用します。Dev Container imageの既定版がずれていても、post-create時に`.bun-version`へ揃えます。
 - Node の patch version の正本は root の [`.node-version`](../.node-version) とし、Node を直接使う CI job も同じ版を使用します。Dev Container は同じ major の `mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.0 (`GOTOOLCHAIN=local`) を有効化しています。
 - CI では `bun run audit:bun:vulnerabilities` と `bun run audit:go:vulnerabilities` で Bun / Go それぞれの依存脆弱性を常時監査します。Go toolchain の整合性と module の公開後経過日数は、別の `bun run audit:go:toolchain` / `bun run audit:go:module-age` で検査します。
 - 依存差分のレビューは GitHub Actions の `Dependency Review` workflow を使い、`pull_request` のみで実行します。これは push ごとの再検査ではなく、「その PR が新たに持ち込む依存変更」を確認するためです。
