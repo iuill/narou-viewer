@@ -1,5 +1,7 @@
 FROM mcr.microsoft.com/devcontainers/typescript-node:5-24-bookworm
 
+# Dev ContainerのNodeは.node-versionと同じmajorを使う。patchの再固定は行わず、
+# base imageの更新に追随する。
 ENV TZ=Asia/Tokyo
 ARG GO_VERSION=1.27.0
 
@@ -46,8 +48,8 @@ RUN set -eux; \
 ENV PATH=/usr/local/go/bin:${PATH}
 
 # コンテナ再作成のたびに install-bun-and-deps.sh がツール群を再ダウンロードしないよう
-# イメージに焼き込む。バージョンは install-bun-and-deps.sh のデフォルトと一致させること
-# (不一致の場合は postCreate 側が検出して入れ直すため壊れはしないが、焼き込みが無駄になる)。
+# イメージに焼き込む。BUN_VERSIONはrootの.bun-version、その他は同スクリプトの
+# デフォルトと一致させる。不一致でもpostCreate側がBunを入れ直すため動作は維持される。
 ARG OPENAI_CODEX_VERSION=latest
 ARG GITHUB_COPILOT_VERSION=latest
 ARG BUN_VERSION=1.3.14
