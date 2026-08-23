@@ -65,8 +65,11 @@ func applyReaderInlineReplacements(tokens []ReaderInline, rules []ReaderReplacem
 	next := make([]ReaderInline, len(tokens))
 	for index, token := range tokens {
 		switch token.Type {
-		case "text", "ruby", "tcy":
+		case "text", "tcy":
 			token.Text = applyReaderReplacementRules(token.Text, rules)
+		case "ruby":
+			token.Text = applyReaderReplacementRules(token.Text, rules)
+			token.Ruby = applyReaderReplacementRules(token.Ruby, rules)
 		case "link":
 			token.Children = applyReaderInlineReplacements(token.Children, rules)
 		}

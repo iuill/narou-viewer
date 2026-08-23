@@ -390,6 +390,7 @@ func TestApplyReaderCorrectionsAppliesOrderedCustomReplacementsAfterNormalizatio
 		CustomReplacements: []ReaderReplacementRule{
 			{From: "ココ最近", To: "ここ最近"},
 			{From: "ここ最近", To: "近ごろ"},
+			{From: "ここさいきん", To: "きんごろ"},
 			{From: "Ａｌｐｈａ", To: "英字"},
 		},
 	})
@@ -400,7 +401,7 @@ func TestApplyReaderCorrectionsAppliesOrderedCustomReplacementsAfterNormalizatio
 	if got := corrected.Blocks[1].Inlines[0].Text; got != "近ごろ 英字" {
 		t.Fatalf("custom replacements should run in registration order after normalizations: %q", got)
 	}
-	if corrected.Blocks[1].Inlines[1].Text != "近ごろ" || corrected.Blocks[1].Inlines[1].Ruby != "ここさいきん" || corrected.Blocks[1].Inlines[2].Children[0].Text != "近ごろ" {
+	if corrected.Blocks[1].Inlines[1].Text != "近ごろ" || corrected.Blocks[1].Inlines[1].Ruby != "きんごろ" || corrected.Blocks[1].Inlines[2].Children[0].Text != "近ごろ" {
 		t.Fatalf("unexpected structured inline replacements: %+v", corrected.Blocks[1].Inlines)
 	}
 	if corrected.Blocks[2].HTML != `<p title="ココ最近">近ごろ 英字</p>` || corrected.Blocks[2].PlainText != "近ごろ 英字" {
