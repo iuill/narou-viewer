@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { NovelReaderReplacementRule } from "./features/reader/types";
 import type { ReaderFontFamily, ReaderTheme, ReadingMode } from "./readerPreferences";
 import { ReaderFloatingPanel } from "./ReaderFloatingPanel";
@@ -65,6 +65,13 @@ let nextCustomReplacementDraftId = 0;
 
 function createCustomReplacementDraft(rules: NovelReaderReplacementRule[]): CustomReplacementDraft[] {
   return rules.map((rule) => ({ ...rule, id: ++nextCustomReplacementDraftId }));
+}
+
+function customReplacementRulesEqual(
+  left: NovelReaderReplacementRule[],
+  right: NovelReaderReplacementRule[]
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -161,9 +168,20 @@ export function ReaderSettingsPanel({
   const [customReplacementDraft, setCustomReplacementDraft] = useState<CustomReplacementDraft[]>(() =>
     createCustomReplacementDraft(customReplacements)
   );
+  const previousCustomReplacements = useRef(customReplacements);
 
   useEffect(() => {
-    setCustomReplacementDraft(createCustomReplacementDraft(customReplacements));
+    const previous = previousCustomReplacements.current;
+    previousCustomReplacements.current = customReplacements;
+    setCustomReplacementDraft((current) => {
+      const currentRules = current.map(({ from, to }) => ({ from, to }));
+      if (!customReplacementRulesEqual(currentRules, previous)) {
+        return current;
+      }
+      return customReplacementRulesEqual(currentRules, customReplacements)
+        ? current
+        : createCustomReplacementDraft(customReplacements);
+    });
   }, [customReplacements]);
 
   const duplicateFromValues = new Set<string>();
@@ -183,7 +201,7 @@ export function ReaderSettingsPanel({
       duplicateFromValues.has(rule.from)
   );
   const draftReplacementRules = customReplacementDraft.map(({ from, to }) => ({ from, to }));
-  const isCustomReplacementDirty = JSON.stringify(draftReplacementRules) !== JSON.stringify(customReplacements);
+  const isCustomReplacementDirty = !customReplacementRulesEqual(draftReplacementRules, customReplacements);
 
   function handleAdjustFontSize(delta: number) {
     onReaderFontSizeChange(clamp(readerFontSizePx + delta, READER_FONT_SIZE_MIN, READER_FONT_SIZE_MAX));
@@ -371,7 +389,7 @@ export function ReaderSettingsPanel({
             <div>
               <span className="reader-panel-section-label">単語の置換</span>
               <p className="reader-panel-section-description">
-                完全一致する文字列を登録順に置換します。この作品だけに適用され、原文は変更しません。
+                指定した文字列と一致する箇所を登録順に置換します。この作品だけに適用され、原文は変更しません。
               </p>
               <div className="reader-panel-chip-row reader-settings-replacement-example">
                 <span className="reader-panel-chip">例：表記ゆれ → 統一表記</span>

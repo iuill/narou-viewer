@@ -331,4 +331,28 @@ describe("ReaderSettingsPanel", () => {
       root.unmount();
     });
   });
+
+  it("別の校正設定が保存されても未保存の置換下書きを保持する", async () => {
+    const customReplacements = [{ from: "表記ゆれ", to: "統一表記" }];
+    const props = createProps({ customReplacements });
+    const { container, root, dom } = await renderPanel(props);
+
+    await changeInput(container.querySelector('input[aria-label="置換後 1"]') as HTMLInputElement, "統一後", dom);
+    await act(async () => {
+      root.render(
+        createElement(ReaderSettingsPanel, {
+          ...props,
+          halfwidthAlnumPunctuationNormalizationEnabled: true,
+          customReplacements: [...customReplacements]
+        })
+      );
+    });
+
+    expect((container.querySelector('input[aria-label="置換後 1"]') as HTMLInputElement).value).toBe("統一後");
+    expect(getButtonByText(container, "置換ルールを保存").disabled).toBe(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

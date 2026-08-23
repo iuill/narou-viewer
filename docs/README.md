@@ -35,7 +35,7 @@
 - [`extraction.md`](extraction.md): 人物・用語抽出機能の仕様
 - [`publication-info.md`](publication-info.md): 書籍情報とカバー画像表示の仕様
 - [`reader-ai-assistant.md`](reader-ai-assistant.md): 本文表示画面の読書AI機能仕様
-- [`reader-ai-proofread.md`](reader-ai-proofread.md): 本文のAI校正と原文保持・派生データ境界
+- [`reader-ai-proofread.md`](reader-ai-proofread.md): 通常校正、作品別文字列置換、AI校正と原文保持・派生データ境界
 - [`state-schema-policy.md`](state-schema-policy.md): 永続 state schema の横断 registry、互換、migration、復旧、backup / restore 方針
 
 ## エージェント向け Skills
