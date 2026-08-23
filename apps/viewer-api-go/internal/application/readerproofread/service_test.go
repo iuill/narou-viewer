@@ -296,6 +296,7 @@ func TestGetAppliesCurrentDeterministicCorrectionsToStoredProofread(t *testing.T
 	dir := t.TempDir()
 	readerSettings := store.NovelReaderSettings{}
 	readerSettings.Correction.HyphenDashNormalization = true
+	readerSettings.Correction.CustomReplacements = []store.NovelReaderReplacementRule{{From: "本文", To: "テキスト"}}
 	episode := testEpisode()
 	episode.ReaderDocument = library.ReaderDocument{Version: 1, Blocks: []library.ReaderBlock{{
 		Type: "paragraph", Section: "body", Inlines: []library.ReaderInline{{Type: "text", Text: "校正版--本文"}},
@@ -313,8 +314,8 @@ func TestGetAppliesCurrentDeterministicCorrectionsToStoredProofread(t *testing.T
 	if err != nil || response.ReaderDocument == nil {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
-	if got := response.ReaderDocument.Blocks[0].Inlines[0].Text; got == "校正版--本文" {
-		t.Fatalf("normal correction was not applied: %q", got)
+	if got := response.ReaderDocument.Blocks[0].Inlines[0].Text; got != "校正版――テキスト" {
+		t.Fatalf("deterministic corrections were not applied: %q", got)
 	}
 }
 

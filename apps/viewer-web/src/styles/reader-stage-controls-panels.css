@@ -811,6 +811,82 @@
   padding-top: 12px;
 }
 
+.reader-settings-custom-replacements {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  border-top: 1px solid var(--reader-surface-border);
+  padding-top: 12px;
+}
+
+.reader-settings-replacement-list {
+  display: grid;
+  gap: 8px;
+}
+
+.reader-settings-replacement-example {
+  margin-top: 8px;
+}
+
+.reader-settings-replacement-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.reader-settings-replacement-row label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.reader-settings-replacement-row label span {
+  color: var(--text-soft);
+  font-size: 0.72rem;
+}
+
+.reader-settings-replacement-row input {
+  min-width: 0;
+  width: 100%;
+}
+
+.reader-settings-replacement-arrow {
+  align-self: center;
+  padding-top: 1rem;
+  color: var(--text-soft);
+}
+
+.reader-settings-replacement-remove {
+  min-height: 2.25rem;
+  padding-inline: 10px;
+}
+
+.reader-settings-replacement-empty,
+.reader-settings-replacement-error {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.reader-settings-replacement-empty {
+  color: var(--text-soft);
+}
+
+.reader-settings-replacement-error {
+  color: var(--danger, #b42318);
+}
+
+.reader-settings-replacement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reader-settings-replacement-actions button {
+  flex: 1 1 9rem;
+}
+
 .reader-settings-ai-proofread-actions {
   display: flex;
   flex-wrap: wrap;

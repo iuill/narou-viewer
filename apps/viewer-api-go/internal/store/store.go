@@ -56,6 +56,7 @@ type ReaderPreferences = preferences.Preferences
 type NovelReaderSettings = novelsettings.Settings
 type NovelReaderCorrection = novelsettings.Correction
 type NovelReaderCorrectionPatch = novelsettings.Patch
+type NovelReaderReplacementRule = novelsettings.ReplacementRule
 
 type ReadingStatePutInput struct {
 	ReadingState
@@ -158,7 +159,13 @@ func (s *Store) PutNovelReaderSettings(input NovelReaderSettings) (NovelReaderSe
 		HalfwidthAlnumPunctuationNormalization: boolPtr(input.Correction.HalfwidthAlnumPunctuationNormalization),
 		TildeNormalization:                     boolPtr(input.Correction.TildeNormalization),
 		ConsecutivePeriodNormalization:         boolPtr(input.Correction.ConsecutivePeriodNormalization),
+		CustomReplacements:                     novelReaderReplacementRulesPtr(input.Correction.CustomReplacements),
 	})
+}
+
+func novelReaderReplacementRulesPtr(value []NovelReaderReplacementRule) *[]NovelReaderReplacementRule {
+	cloned := append([]NovelReaderReplacementRule(nil), value...)
+	return &cloned
 }
 
 func (s *Store) PatchNovelReaderSettings(novelID string, patch NovelReaderCorrectionPatch) (NovelReaderSettings, error) {

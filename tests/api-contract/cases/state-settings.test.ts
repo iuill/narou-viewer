@@ -30,6 +30,7 @@ type NovelReaderSettingsContract = {
     halfwidthAlnumPunctuationNormalization: boolean;
     tildeNormalization: boolean;
     consecutivePeriodNormalization: boolean;
+    customReplacements: Array<{ from: string; to: string }>;
   };
   updatedAt: string | null;
 };
@@ -353,6 +354,10 @@ describe("reader state and settings contract", () => {
 
       const nextHalfwidth =
         !original.json.correction.halfwidthAlnumPunctuationNormalization;
+      const nextCustomReplacements = [
+        { from: "表記ゆれ", to: "統一表記" },
+        { from: "削除対象", to: "" },
+      ];
 
       try {
         const updated = await requestJson<NovelReaderSettingsContract>(
@@ -362,6 +367,7 @@ describe("reader state and settings contract", () => {
             body: {
               correction: {
                 halfwidthAlnumPunctuationNormalization: nextHalfwidth,
+                customReplacements: nextCustomReplacements,
               },
             },
           },
@@ -378,6 +384,7 @@ describe("reader state and settings contract", () => {
           tildeNormalization: original.json.correction.tildeNormalization,
           consecutivePeriodNormalization:
             original.json.correction.consecutivePeriodNormalization,
+          customReplacements: nextCustomReplacements,
         });
 
         const reloaded = await requestJson<NovelReaderSettingsContract>(
@@ -388,6 +395,9 @@ describe("reader state and settings contract", () => {
         expect(
           reloaded.json.correction.halfwidthAlnumPunctuationNormalization,
         ).toBe(nextHalfwidth);
+        expect(reloaded.json.correction.customReplacements).toEqual(
+          nextCustomReplacements,
+        );
       } finally {
         const restored = await requestJson(settingsUrl, {
           method: "PUT",

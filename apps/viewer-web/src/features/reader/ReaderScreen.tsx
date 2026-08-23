@@ -606,6 +606,9 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   consecutivePeriodNormalization: enabled
                 })
               }
+              onCustomReplacementsChange={(customReplacements) =>
+                readerSessionCommands.changeNovelReaderCorrection({ customReplacements })
+              }
               onGenerateAIProofread={() => {
                 void handleGenerateReaderAIProofread();
               }}
@@ -644,7 +647,8 @@ export function ReaderScreen(props: ReaderScreenProps) {
                   parenthesisNormalization: true,
                   halfwidthAlnumPunctuationNormalization: true,
                   tildeNormalization: false,
-                  consecutivePeriodNormalization: false
+                  consecutivePeriodNormalization: false,
+                  customReplacements: []
                 });
               }}
               onReverseTapPageNavigationChange={setReverseTapPageNavigation}
@@ -656,6 +660,7 @@ export function ReaderScreen(props: ReaderScreenProps) {
               consecutivePeriodNormalizationEnabled={
                 activeReaderSettings?.correction.consecutivePeriodNormalization ?? false
               }
+              customReplacements={activeReaderSettings?.correction.customReplacements ?? []}
               hyphenDashNormalizationEnabled={activeReaderSettings?.correction.hyphenDashNormalization ?? true}
               isReaderCorrectionSaving={isReaderCorrectionUnavailable}
               readerAIProofreadState={readerAIProofreadState}

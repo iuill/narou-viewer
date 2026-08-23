@@ -186,7 +186,7 @@ path は `data/` からの相対 path を表す。
 | `VA-READING` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。欠落・malformed・未知 version は mutation 前に拒否し、元 bytes を維持 | 対応 build または supported backup を使う。tombstone の `state_version` は schema version と別軸 |
 | `VA-BOOKMARKS` | `schema_version: 3`、supported legacy なし | current のみ typed read / write / prune。未知 version は作品単位 prune でも拒否 | 対応 build または supported backup を使う |
 | `VA-PREFERENCES` | `schema_version: 3`、supported legacy なし | current のみ typed read / write。未知 version を既定値へ暗黙変換しない | 対応 build または supported backup を使う |
-| `VA-NOVEL-SETTINGS` | `schema_version: 4`、legacy v3 | v3をreadし、次回writeでv4化する。v4では作品単位のチルダ・連続ピリオド校正設定を追加する。その他の未知versionを作品単位pruneで上書きしない | v3は対応buildでmigration。その他は対応buildまたはsupported backupを使う |
+| `VA-NOVEL-SETTINGS` | `schema_version: 5`、legacy v3 / v4 | v3 / v4をreadし、次回writeでv5化する。v5では作品単位の任意文字列置換ルールを追加する。その他の未知versionを作品単位pruneで上書きしない | v3 / v4は対応buildでmigration。その他は対応buildまたはsupported backupを使う |
 | `VA-AI-SETTINGS` | document `schema_version: 2`、credential `api_key_version: 1` | document / crypto を独立判定。document は current のみ。平文 key は passphrase があれば encrypted v1 へ lazy migrationし、未知 crypto payload は decrypt・消去・再保存しない | document または crypto に対応する build と同じ master passphrase を使う |
 | `VA-PUBLICATIONS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を read し、次回 materialize / write で v1 化。その他の未知 version は write / prune を拒否 | v0 は対応 build で migration。未知 version は対応 build / backup を使う |
 | `VA-CHAR-EVENTS` | `schema_version: 1`、legacy v0（field 欠落 / `0`） | v0 を legacy profile migration として read。未知 version は生成、materialize、prune を拒否 | events を生成正本として復旧。fence 前 build への rollback は新 field 消失の危険がある |
@@ -205,7 +205,7 @@ path は `data/` からの相対 path を表す。
 | `NF-TASKS` | migration 4 | `fetch_tasks` / `fetch_task_queue` / `fetch_task_episode_checkpoints` | task request・状態遷移・idempotency・queue order・起動 recovery を管理する。`queued` のみ自動実行し、`paused` / `interrupted` / `failed` は明示 resume まで保持する |
 | `EX-LIBRARY-V1` | `formatVersion: 1` | producer が YAML を生成。reader state 取得失敗は warning とし部分 export を作れる。import は unknown version / field / malformed data を mutation 前に strict reject し、dry-run と apply で同じ validator を使う | 未取得作品と存在しない話は warning 付きで skip し、既存優先で読書位置と栞を適用する |
 
-`VA-NOVEL-SETTINGS`をschema v4対応前のbuildへロールバックする場合、旧buildはv4を読み込めないため、そのまま再保存して移行することはできない。サービスを停止してからv3のbackupを復元する。作品別読書設定を失ってよい場合は`state/novel_reader_settings.yaml`を退避または削除し、旧buildにv3として再作成させてもよい。手動で戻す場合は`schema_version`を3へ変更し、v4で追加した`tilde_normalization`と`consecutive_period_normalization`を全作品から削除する。いずれも取得済み原文には影響しない。
+`VA-NOVEL-SETTINGS`をschema v5対応前のbuildへロールバックする場合、旧buildはv5を読み込めないため、そのまま再保存して移行することはできない。サービスを停止してから対象buildが対応するv3またはv4のbackupを復元する。作品別読書設定を失ってよい場合は`state/novel_reader_settings.yaml`を退避または削除し、旧buildに対応schemaで再作成させてもよい。v4へ手動で戻す場合は`schema_version`を4へ変更し、v5で追加した`custom_replacements`を全作品から削除する。v3へ戻す場合はさらに`tilde_normalization`と`consecutive_period_normalization`も削除する。いずれも取得済み原文には影響しない。
 
 ## 4. schema 別の重要事項
 

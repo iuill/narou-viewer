@@ -1739,6 +1739,25 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	if halfwidthDisabledEpisode["contentEtag"] != "hash-1-reader-corrections-q0h1p1a0t0d0" {
 		t.Fatalf("halfwidth disabled episode should include a0 correction etag key: %+v", halfwidthDisabledEpisode)
 	}
+	customUpdatedReaderSettings := requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
+		"correction": map[string]any{"customReplacements": []any{
+			map[string]any{"from": "Episode", "to": "第"},
+			map[string]any{"from": "本文", "to": "表示本文"},
+		}},
+	}, http.StatusOK)
+	customUpdatedCorrection := customUpdatedReaderSettings["correction"].(map[string]any)
+	customRules, ok := customUpdatedCorrection["customReplacements"].([]any)
+	if !ok || len(customRules) != 2 || customRules[0].(map[string]any)["from"] != "Episode" {
+		t.Fatalf("custom replacements should be returned in registration order: %+v", customUpdatedReaderSettings)
+	}
+	customCorrectedEpisode := requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/episodes/"+episodeIndex, nil, http.StatusOK)
+	customETag, _ := customCorrectedEpisode["contentEtag"].(string)
+	if !strings.HasPrefix(customETag, "hash-1-reader-corrections-q0h1p1a0t0d0-r") {
+		t.Fatalf("custom replacement hash should be included in episode ETag: %+v", customCorrectedEpisode)
+	}
+	requestJSON(t, handler, http.MethodPut, "/api/library/novels/"+novelID+"/reader-settings", map[string]any{
+		"correction": map[string]any{"customReplacements": []any{}},
+	}, http.StatusOK)
 	requestRaw(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/assets/assets/episodes/1/pic.jpg", nil, http.StatusOK)
 	requestJSON(t, handler, http.MethodGet, "/api/library/novels/"+novelID+"/assets/missing.png", nil, http.StatusNotFound)
 
@@ -1886,6 +1905,39 @@ func TestServerRoutesCoverContractLikePaths(t *testing.T) {
 	cancel := requestJSON(t, handler, http.MethodPost, "/api/fetcher/tasks/task-1/cancel", nil, http.StatusOK)
 	if cancel["message"] != "Task cancelled" || cancel["taskId"] != "task-1" || cancel["cancelled"] != true {
 		t.Fatalf("unexpected cancel response: %+v", cancel)
+	}
+}
+
+func TestParseReaderCustomReplacements(t *testing.T) {
+	valid, ok := parseReaderCustomReplacements([]any{
+		map[string]any{"from": "ココ最近", "to": "ここ最近"},
+		map[string]any{"from": "削除対象", "to": ""},
+	})
+	if !ok || len(valid) != 2 || valid[1].To != "" {
+		t.Fatalf("valid replacements were rejected: %+v ok=%t", valid, ok)
+	}
+
+	tooMany := make([]any, readerCustomReplacementMaxRules+1)
+	for index := range tooMany {
+		tooMany[index] = map[string]any{"from": fmt.Sprintf("語%d", index), "to": "置換"}
+	}
+	cases := []struct {
+		name string
+		raw  any
+	}{
+		{name: "not array", raw: map[string]any{}},
+		{name: "too many", raw: tooMany},
+		{name: "empty from", raw: []any{map[string]any{"from": " ", "to": "置換"}}},
+		{name: "duplicate from", raw: []any{map[string]any{"from": "同じ", "to": "一"}, map[string]any{"from": "同じ", "to": "二"}}},
+		{name: "too long", raw: []any{map[string]any{"from": strings.Repeat("あ", readerCustomReplacementMaxRunes+1), "to": "置換"}}},
+		{name: "missing to", raw: []any{map[string]any{"from": "語"}}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if parsed, ok := parseReaderCustomReplacements(test.raw); ok || parsed != nil {
+				t.Fatalf("invalid replacements accepted: %+v", parsed)
+			}
+		})
 	}
 }
 

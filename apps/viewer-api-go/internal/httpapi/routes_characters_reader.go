@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"narou-viewer/apps/viewer-api-go/internal/ai"
 	"narou-viewer/apps/viewer-api-go/internal/application/extractionjobs"
@@ -26,7 +27,11 @@ import (
 	"narou-viewer/apps/viewer-api-go/internal/terms"
 )
 
-const novelSearchMaxResults = 20
+const (
+	novelSearchMaxResults           = 20
+	readerCustomReplacementMaxRules = 50
+	readerCustomReplacementMaxRunes = 100
+)
 
 type novelSearchMatchResponse struct {
 	EpisodeIndex  string `json:"episodeIndex"`
@@ -406,6 +411,14 @@ func (s *Server) handleNovelReaderSettings(w http.ResponseWriter, r *http.Reques
 			}
 			patch.ConsecutivePeriodNormalization = &consecutivePeriodNormalization
 		}
+		if rawCustomReplacements, exists := correctionValue["customReplacements"]; exists {
+			customReplacements, ok := parseReaderCustomReplacements(rawCustomReplacements)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "correction.customReplacements must contain at most 50 rules with unique, non-empty from values and from/to values of at most 100 characters.")
+				return
+			}
+			patch.CustomReplacements = &customReplacements
+		}
 		if patch.IsEmpty() {
 			writeError(w, http.StatusBadRequest, "At least one correction field is required.")
 			return
@@ -423,6 +436,32 @@ func (s *Server) handleNovelReaderSettings(w http.ResponseWriter, r *http.Reques
 	default:
 		methodOnly(w, r, http.MethodGet, http.MethodPut)
 	}
+}
+
+func parseReaderCustomReplacements(raw any) ([]store.NovelReaderReplacementRule, bool) {
+	values, ok := raw.([]any)
+	if !ok || len(values) > readerCustomReplacementMaxRules {
+		return nil, false
+	}
+	rules := make([]store.NovelReaderReplacementRule, len(values))
+	seenFrom := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		record, ok := value.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		from, fromOK := record["from"].(string)
+		to, toOK := record["to"].(string)
+		if !fromOK || !toOK || strings.TrimSpace(from) == "" || utf8.RuneCountInString(from) > readerCustomReplacementMaxRunes || utf8.RuneCountInString(to) > readerCustomReplacementMaxRunes {
+			return nil, false
+		}
+		if _, exists := seenFrom[from]; exists {
+			return nil, false
+		}
+		seenFrom[from] = struct{}{}
+		rules[index] = store.NovelReaderReplacementRule{From: from, To: to}
+	}
+	return rules, true
 }
 
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request, novelID string, assetPath string) {
