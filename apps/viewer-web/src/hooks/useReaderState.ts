@@ -339,6 +339,7 @@ export function useReaderState({
     libraryReloadKey,
     onError,
     readerSettingsCorrection?.consecutivePeriodNormalization,
+    readerSettingsCorrection?.customReplacements,
     readerSettingsCorrection?.hyphenDashNormalization,
     readerSettingsCorrection?.halfwidthAlnumPunctuationNormalization,
     readerSettingsCorrection?.parenthesisNormalization,

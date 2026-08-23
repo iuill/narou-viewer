@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+import type { NovelReaderReplacementRule } from "./features/reader/types";
 import type { ReaderFontFamily, ReaderTheme, ReadingMode } from "./readerPreferences";
 import { ReaderFloatingPanel } from "./ReaderFloatingPanel";
 import type { ReaderAIProofreadState } from "./hooks/useReaderAIProofread";
@@ -14,6 +16,7 @@ type Props = {
   halfwidthAlnumPunctuationNormalizationEnabled: boolean;
   tildeNormalizationEnabled: boolean;
   consecutivePeriodNormalizationEnabled: boolean;
+  customReplacements: NovelReaderReplacementRule[];
   isReaderCorrectionSaving: boolean;
   readerAIProofreadState: ReaderAIProofreadState;
   isShowingAIProofread: boolean;
@@ -32,6 +35,7 @@ type Props = {
   onHalfwidthAlnumPunctuationNormalizationChange: (enabled: boolean) => void;
   onTildeNormalizationChange: (enabled: boolean) => void;
   onConsecutivePeriodNormalizationChange: (enabled: boolean) => void;
+  onCustomReplacementsChange: (rules: NovelReaderReplacementRule[]) => void;
   onGenerateAIProofread: () => void;
   onDeleteAIProofread: () => void;
   onShowingAIProofreadChange: (enabled: boolean) => void;
@@ -53,6 +57,22 @@ const READER_FONT_SIZE_STEP = 1;
 const READER_LETTER_SPACING_MIN = 0;
 const READER_LETTER_SPACING_MAX = 0.24;
 const READER_LETTER_SPACING_STEP = 0.01;
+const CUSTOM_REPLACEMENT_MAX_RULES = 50;
+const CUSTOM_REPLACEMENT_MAX_LENGTH = 100;
+
+type CustomReplacementDraft = NovelReaderReplacementRule & { id: number };
+let nextCustomReplacementDraftId = 0;
+
+function createCustomReplacementDraft(rules: NovelReaderReplacementRule[]): CustomReplacementDraft[] {
+  return rules.map((rule) => ({ ...rule, id: ++nextCustomReplacementDraftId }));
+}
+
+function customReplacementRulesEqual(
+  left: NovelReaderReplacementRule[],
+  right: NovelReaderReplacementRule[]
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -114,6 +134,7 @@ export function ReaderSettingsPanel({
   halfwidthAlnumPunctuationNormalizationEnabled,
   tildeNormalizationEnabled,
   consecutivePeriodNormalizationEnabled,
+  customReplacements,
   isReaderCorrectionSaving,
   readerAIProofreadState,
   isShowingAIProofread,
@@ -132,6 +153,7 @@ export function ReaderSettingsPanel({
   onHalfwidthAlnumPunctuationNormalizationChange,
   onTildeNormalizationChange,
   onConsecutivePeriodNormalizationChange,
+  onCustomReplacementsChange,
   onGenerateAIProofread,
   onDeleteAIProofread,
   onShowingAIProofreadChange,
@@ -143,6 +165,43 @@ export function ReaderSettingsPanel({
   const canIncreaseFontSize = readerFontSizePx < READER_FONT_SIZE_MAX;
   const canDecreaseLetterSpacing = readerLetterSpacingEm > READER_LETTER_SPACING_MIN;
   const canIncreaseLetterSpacing = readerLetterSpacingEm < READER_LETTER_SPACING_MAX;
+  const [customReplacementDraft, setCustomReplacementDraft] = useState<CustomReplacementDraft[]>(() =>
+    createCustomReplacementDraft(customReplacements)
+  );
+  const previousCustomReplacements = useRef(customReplacements);
+
+  useEffect(() => {
+    const previous = previousCustomReplacements.current;
+    previousCustomReplacements.current = customReplacements;
+    setCustomReplacementDraft((current) => {
+      const currentRules = current.map(({ from, to }) => ({ from, to }));
+      if (!customReplacementRulesEqual(currentRules, previous)) {
+        return current;
+      }
+      return customReplacementRulesEqual(currentRules, customReplacements)
+        ? current
+        : createCustomReplacementDraft(customReplacements);
+    });
+  }, [customReplacements]);
+
+  const duplicateFromValues = new Set<string>();
+  const seenFromValues = new Set<string>();
+  for (const rule of customReplacementDraft) {
+    if (seenFromValues.has(rule.from)) {
+      duplicateFromValues.add(rule.from);
+    }
+    seenFromValues.add(rule.from);
+  }
+  const hasIncompleteCustomReplacement = customReplacementDraft.some((rule) => rule.from.trim() === "");
+  const hasInvalidCustomReplacement = customReplacementDraft.some(
+    (rule) =>
+      rule.from.trim() === "" ||
+      Array.from(rule.from).length > CUSTOM_REPLACEMENT_MAX_LENGTH ||
+      Array.from(rule.to).length > CUSTOM_REPLACEMENT_MAX_LENGTH ||
+      duplicateFromValues.has(rule.from)
+  );
+  const draftReplacementRules = customReplacementDraft.map(({ from, to }) => ({ from, to }));
+  const isCustomReplacementDirty = !customReplacementRulesEqual(draftReplacementRules, customReplacements);
 
   function handleAdjustFontSize(delta: number) {
     onReaderFontSizeChange(clamp(readerFontSizePx + delta, READER_FONT_SIZE_MIN, READER_FONT_SIZE_MAX));
@@ -154,6 +213,12 @@ export function ReaderSettingsPanel({
         clamp(readerLetterSpacingEm + delta, READER_LETTER_SPACING_MIN, READER_LETTER_SPACING_MAX),
         2
       )
+    );
+  }
+
+  function updateCustomReplacement(id: number, field: keyof NovelReaderReplacementRule, value: string) {
+    setCustomReplacementDraft((current) =>
+      current.map((rule) => (rule.id === id ? { ...rule, [field]: value } : rule))
     );
   }
 
@@ -320,6 +385,96 @@ export function ReaderSettingsPanel({
           <p className="reader-panel-section-description">
             半角ピリオドが2個以上続く箇所を一律で……へ置換するため、表示上の文字数が変わります。
           </p>
+          <div className="reader-settings-custom-replacements">
+            <div>
+              <span className="reader-panel-section-label">単語の置換</span>
+              <p className="reader-panel-section-description">
+                指定した文字列と一致する箇所を登録順に置換します。この作品だけに適用され、原文は変更しません。
+              </p>
+              <div className="reader-panel-chip-row reader-settings-replacement-example">
+                <span className="reader-panel-chip">例：表記ゆれ → 統一表記</span>
+              </div>
+            </div>
+            {customReplacementDraft.length > 0 ? (
+              <div className="reader-settings-replacement-list">
+                {customReplacementDraft.map((rule, index) => (
+                  <div className="reader-settings-replacement-row" key={rule.id}>
+                    <label>
+                      <span>置換前</span>
+                      <input
+                        aria-label={`置換前 ${index + 1}`}
+                        disabled={isReaderCorrectionSaving}
+                        maxLength={CUSTOM_REPLACEMENT_MAX_LENGTH}
+                        onInput={(event) => updateCustomReplacement(rule.id, "from", event.currentTarget.value)}
+                        placeholder="置換する文字列"
+                        type="text"
+                        value={rule.from}
+                      />
+                    </label>
+                    <span aria-hidden="true" className="reader-settings-replacement-arrow">
+                      →
+                    </span>
+                    <label>
+                      <span>置換後</span>
+                      <input
+                        aria-label={`置換後 ${index + 1}`}
+                        disabled={isReaderCorrectionSaving}
+                        maxLength={CUSTOM_REPLACEMENT_MAX_LENGTH}
+                        onInput={(event) => updateCustomReplacement(rule.id, "to", event.currentTarget.value)}
+                        placeholder="置換後の文字列（空欄で削除）"
+                        type="text"
+                        value={rule.to}
+                      />
+                    </label>
+                    <button
+                      aria-label={`置換ルール ${index + 1} を削除`}
+                      className="reader-settings-replacement-remove"
+                      disabled={isReaderCorrectionSaving}
+                      onClick={() =>
+                        setCustomReplacementDraft((current) =>
+                          current.filter((candidate) => candidate.id !== rule.id)
+                        )
+                      }
+                      type="button"
+                    >
+                      削除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="reader-settings-replacement-empty">置換ルールはまだありません。</p>
+            )}
+            {duplicateFromValues.size > 0 ? (
+              <p className="reader-settings-replacement-error" role="alert">
+                同じ置換前文字列は1件だけ登録できます。
+              </p>
+            ) : hasIncompleteCustomReplacement ? (
+              <p className="reader-settings-replacement-empty">置換前を入力すると保存できます。</p>
+            ) : null}
+            <div className="reader-settings-replacement-actions">
+              <button
+                disabled={isReaderCorrectionSaving || customReplacementDraft.length >= CUSTOM_REPLACEMENT_MAX_RULES}
+                onClick={() =>
+                  setCustomReplacementDraft((current) => [
+                    ...current,
+                    { id: ++nextCustomReplacementDraftId, from: "", to: "" }
+                  ])
+                }
+                type="button"
+              >
+                置換ルールを追加
+              </button>
+              <button
+                disabled={isReaderCorrectionSaving || !isCustomReplacementDirty || hasInvalidCustomReplacement}
+                onClick={() => onCustomReplacementsChange(draftReplacementRules)}
+                type="button"
+              >
+                {isReaderCorrectionSaving ? "保存中..." : "置換ルールを保存"}
+              </button>
+            </div>
+            <p className="reader-panel-section-description">最大50件。置換後を空欄にすると該当文字列を削除します。</p>
+          </div>
           <div className="reader-settings-ai-proofread">
             <div>
               <span className="reader-panel-section-label">AIによる読みやすさ補正</span>

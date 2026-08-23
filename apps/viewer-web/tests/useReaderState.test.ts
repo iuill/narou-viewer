@@ -148,6 +148,7 @@ function createReaderSettings(
       halfwidthAlnumPunctuationNormalization: true,
       tildeNormalization: false,
       consecutivePeriodNormalization: false,
+      customReplacements: [],
       ...overrides
     },
     updatedAt: null

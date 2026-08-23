@@ -30,12 +30,19 @@ func TestRepositoryGetsPutsPatchesAndPrunes(t *testing.T) {
 		HalfwidthAlnumPunctuationNormalization: true,
 		TildeNormalization:                     true,
 		ConsecutivePeriodNormalization:         true,
+		CustomReplacements: []ReplacementRule{
+			{From: "ココ最近", To: "ここ最近"},
+			{From: "誤字", To: ""},
+		},
 	}})
 	if err != nil {
 		t.Fatalf("Put returned error: %v", err)
 	}
 	if updated.UpdatedAt == nil {
 		t.Fatalf("Put should set UpdatedAt: %+v", updated)
+	}
+	if len(updated.Correction.CustomReplacements) != 2 || updated.Correction.CustomReplacements[0].To != "ここ最近" {
+		t.Fatalf("Put should persist custom replacements: %+v", updated)
 	}
 	falseValue := false
 	patched, err := repo.Patch("novel", Patch{QuoteNormalization: &falseValue})
@@ -66,7 +73,7 @@ func TestRepositoryGetsPutsPatchesAndPrunes(t *testing.T) {
 	}
 }
 
-func TestRepositoryReadsVersion3AndMigratesOnWrite(t *testing.T) {
+func TestRepositoryReadsLegacyVersionAndMigratesOnWrite(t *testing.T) {
 	stateDir := t.TempDir()
 	path := filepath.Join(stateDir, FileName)
 	legacy := "schema_version: 3\nrevision: 1\nnovels:\n  novel:\n    correction:\n      quote_normalization: false\n"
@@ -89,8 +96,36 @@ func TestRepositoryReadsVersion3AndMigratesOnWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migrated settings: %v", err)
 	}
-	if !strings.Contains(string(data), "schema_version: 4") || !strings.Contains(string(data), "tilde_normalization: true") {
+	if !strings.Contains(string(data), "schema_version: 5") || !strings.Contains(string(data), "tilde_normalization: true") {
 		t.Fatalf("legacy settings were not migrated: %s", data)
+	}
+}
+
+func TestRepositoryReadsVersion4CustomReplacementFallback(t *testing.T) {
+	stateDir := t.TempDir()
+	path := filepath.Join(stateDir, FileName)
+	legacy := "schema_version: 4\nrevision: 1\nnovels:\n  novel:\n    correction:\n      quote_normalization: true\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write version 4 settings: %v", err)
+	}
+	repo := NewRepository(stateDir)
+	settings, err := repo.Get("novel")
+	if err != nil {
+		t.Fatalf("Get version 4 settings: %v", err)
+	}
+	if settings.Correction.CustomReplacements == nil || len(settings.Correction.CustomReplacements) != 0 {
+		t.Fatalf("version 4 settings should default to an empty custom replacement list: %+v", settings)
+	}
+	rules := []ReplacementRule{{From: "ココ最近", To: "ここ最近"}}
+	if _, err := repo.Patch("novel", Patch{CustomReplacements: &rules}); err != nil {
+		t.Fatalf("Patch version 4 settings: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated settings: %v", err)
+	}
+	if !strings.Contains(string(data), "schema_version: 5") || !strings.Contains(string(data), "custom_replacements:") {
+		t.Fatalf("version 4 settings were not migrated: %s", data)
 	}
 }
 

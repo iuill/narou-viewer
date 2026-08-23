@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	SchemaVersion = 4
+	SchemaVersion = 5
 	FileName      = "novel_reader_settings.yaml"
 )
 
@@ -21,7 +21,7 @@ var SchemaContract = schemaguard.Contract{
 	ID:             "VA-NOVEL-SETTINGS",
 	Path:           FileName,
 	Current:        SchemaVersion,
-	ReadableLegacy: []int{3},
+	ReadableLegacy: []int{3, 4},
 	MissingPolicy:  schemaguard.MissingReject,
 }
 
@@ -32,12 +32,18 @@ type Settings struct {
 }
 
 type Correction struct {
-	QuoteNormalization                     bool `json:"quoteNormalization"`
-	HyphenDashNormalization                bool `json:"hyphenDashNormalization"`
-	ParenthesisNormalization               bool `json:"parenthesisNormalization"`
-	HalfwidthAlnumPunctuationNormalization bool `json:"halfwidthAlnumPunctuationNormalization"`
-	TildeNormalization                     bool `json:"tildeNormalization"`
-	ConsecutivePeriodNormalization         bool `json:"consecutivePeriodNormalization"`
+	QuoteNormalization                     bool              `json:"quoteNormalization"`
+	HyphenDashNormalization                bool              `json:"hyphenDashNormalization"`
+	ParenthesisNormalization               bool              `json:"parenthesisNormalization"`
+	HalfwidthAlnumPunctuationNormalization bool              `json:"halfwidthAlnumPunctuationNormalization"`
+	TildeNormalization                     bool              `json:"tildeNormalization"`
+	ConsecutivePeriodNormalization         bool              `json:"consecutivePeriodNormalization"`
+	CustomReplacements                     []ReplacementRule `json:"customReplacements"`
+}
+
+type ReplacementRule struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type Patch struct {
@@ -47,6 +53,7 @@ type Patch struct {
 	HalfwidthAlnumPunctuationNormalization *bool
 	TildeNormalization                     *bool
 	ConsecutivePeriodNormalization         *bool
+	CustomReplacements                     *[]ReplacementRule
 }
 
 func (patch Patch) IsEmpty() bool {
@@ -55,7 +62,8 @@ func (patch Patch) IsEmpty() bool {
 		patch.ParenthesisNormalization == nil &&
 		patch.HalfwidthAlnumPunctuationNormalization == nil &&
 		patch.TildeNormalization == nil &&
-		patch.ConsecutivePeriodNormalization == nil
+		patch.ConsecutivePeriodNormalization == nil &&
+		patch.CustomReplacements == nil
 }
 
 type Repository struct {
@@ -75,12 +83,18 @@ type record struct {
 }
 
 type correctionRecord struct {
-	QuoteNormalization                     *bool `yaml:"quote_normalization"`
-	HyphenDashNormalization                *bool `yaml:"hyphen_dash_normalization"`
-	ParenthesisNormalization               *bool `yaml:"parenthesis_normalization"`
-	HalfwidthAlnumPunctuationNormalization *bool `yaml:"halfwidth_alnum_punctuation_normalization"`
-	TildeNormalization                     *bool `yaml:"tilde_normalization"`
-	ConsecutivePeriodNormalization         *bool `yaml:"consecutive_period_normalization"`
+	QuoteNormalization                     *bool                   `yaml:"quote_normalization"`
+	HyphenDashNormalization                *bool                   `yaml:"hyphen_dash_normalization"`
+	ParenthesisNormalization               *bool                   `yaml:"parenthesis_normalization"`
+	HalfwidthAlnumPunctuationNormalization *bool                   `yaml:"halfwidth_alnum_punctuation_normalization"`
+	TildeNormalization                     *bool                   `yaml:"tilde_normalization"`
+	ConsecutivePeriodNormalization         *bool                   `yaml:"consecutive_period_normalization"`
+	CustomReplacements                     []replacementRuleRecord `yaml:"custom_replacements,omitempty"`
+}
+
+type replacementRuleRecord struct {
+	From string `yaml:"from"`
+	To   string `yaml:"to"`
 }
 
 func NewRepository(stateDir string) *Repository {
@@ -117,6 +131,7 @@ func (r *Repository) Put(input Settings) (Settings, error) {
 		HalfwidthAlnumPunctuationNormalization: boolPtr(input.Correction.HalfwidthAlnumPunctuationNormalization),
 		TildeNormalization:                     boolPtr(input.Correction.TildeNormalization),
 		ConsecutivePeriodNormalization:         boolPtr(input.Correction.ConsecutivePeriodNormalization),
+		CustomReplacements:                     replacementRulesPtr(input.Correction.CustomReplacements),
 	})
 }
 
@@ -160,6 +175,9 @@ func (r *Repository) Patch(novelID string, patch Patch) (Settings, error) {
 	if patch.ConsecutivePeriodNormalization != nil {
 		current.ConsecutivePeriodNormalization = *patch.ConsecutivePeriodNormalization
 	}
+	if patch.CustomReplacements != nil {
+		current.CustomReplacements = cloneReplacementRules(*patch.CustomReplacements)
+	}
 	now := isoNow()
 	doc.Revision++
 	doc.Novels[novelID] = record{
@@ -170,6 +188,7 @@ func (r *Repository) Patch(novelID string, patch Patch) (Settings, error) {
 			HalfwidthAlnumPunctuationNormalization: boolPtr(current.HalfwidthAlnumPunctuationNormalization),
 			TildeNormalization:                     boolPtr(current.TildeNormalization),
 			ConsecutivePeriodNormalization:         boolPtr(current.ConsecutivePeriodNormalization),
+			CustomReplacements:                     toReplacementRuleRecords(current.CustomReplacements),
 		},
 		UpdatedAt: &now,
 	}
@@ -230,6 +249,7 @@ func normalizeDocument(raw document) document {
 				HalfwidthAlnumPunctuationNormalization: rawRecord.Correction.HalfwidthAlnumPunctuationNormalization,
 				TildeNormalization:                     rawRecord.Correction.TildeNormalization,
 				ConsecutivePeriodNormalization:         rawRecord.Correction.ConsecutivePeriodNormalization,
+				CustomReplacements:                     cloneReplacementRuleRecords(rawRecord.Correction.CustomReplacements),
 			},
 			UpdatedAt: stringPtrOrNil(rawRecord.UpdatedAt),
 		}
@@ -247,6 +267,7 @@ func DefaultSettings(novelID string) Settings {
 			HalfwidthAlnumPunctuationNormalization: true,
 			TildeNormalization:                     false,
 			ConsecutivePeriodNormalization:         false,
+			CustomReplacements:                     []ReplacementRule{},
 		},
 	}
 }
@@ -261,6 +282,7 @@ func toSettings(novelID string, record record) Settings {
 			HalfwidthAlnumPunctuationNormalization: boolValueOrDefault(record.Correction.HalfwidthAlnumPunctuationNormalization, true),
 			TildeNormalization:                     boolValueOrDefault(record.Correction.TildeNormalization, false),
 			ConsecutivePeriodNormalization:         boolValueOrDefault(record.Correction.ConsecutivePeriodNormalization, false),
+			CustomReplacements:                     fromReplacementRuleRecords(record.Correction.CustomReplacements),
 		},
 		UpdatedAt: record.UpdatedAt,
 	}
@@ -268,6 +290,41 @@ func toSettings(novelID string, record record) Settings {
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func replacementRulesPtr(value []ReplacementRule) *[]ReplacementRule {
+	cloned := cloneReplacementRules(value)
+	return &cloned
+}
+
+func cloneReplacementRules(value []ReplacementRule) []ReplacementRule {
+	if len(value) == 0 {
+		return []ReplacementRule{}
+	}
+	return append([]ReplacementRule(nil), value...)
+}
+
+func cloneReplacementRuleRecords(value []replacementRuleRecord) []replacementRuleRecord {
+	if len(value) == 0 {
+		return nil
+	}
+	return append([]replacementRuleRecord(nil), value...)
+}
+
+func toReplacementRuleRecords(value []ReplacementRule) []replacementRuleRecord {
+	result := make([]replacementRuleRecord, len(value))
+	for index, rule := range value {
+		result[index] = replacementRuleRecord{From: rule.From, To: rule.To}
+	}
+	return result
+}
+
+func fromReplacementRuleRecords(value []replacementRuleRecord) []ReplacementRule {
+	result := make([]ReplacementRule, len(value))
+	for index, rule := range value {
+		result[index] = ReplacementRule{From: rule.From, To: rule.To}
+	}
+	return result
 }
 
 func boolValueOrDefault(value *bool, defaultValue bool) bool {

@@ -59,6 +59,11 @@ export type ReaderPreferencesResponse = {
   updatedAt: string | null;
 };
 
+export type NovelReaderReplacementRule = {
+  from: string;
+  to: string;
+};
+
 export type NovelReaderSettingsResponse = {
   novelId: string;
   correction: {
@@ -68,6 +73,7 @@ export type NovelReaderSettingsResponse = {
     halfwidthAlnumPunctuationNormalization: boolean;
     tildeNormalization: boolean;
     consecutivePeriodNormalization: boolean;
+    customReplacements: NovelReaderReplacementRule[];
   };
   updatedAt: string | null;
 };

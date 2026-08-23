@@ -1,5 +1,7 @@
 package library
 
+import "strings"
+
 type ReaderCorrectionSettings struct {
 	QuoteNormalization                     bool
 	HyphenDashNormalization                bool
@@ -7,6 +9,12 @@ type ReaderCorrectionSettings struct {
 	HalfwidthAlnumPunctuationNormalization bool
 	TildeNormalization                     bool
 	ConsecutivePeriodNormalization         bool
+	CustomReplacements                     []ReaderReplacementRule
+}
+
+type ReaderReplacementRule struct {
+	From string
+	To   string
 }
 
 type readerCorrectionState struct {
@@ -14,15 +22,79 @@ type readerCorrectionState struct {
 }
 
 func ApplyReaderCorrections(document ReaderDocument, settings ReaderCorrectionSettings) ReaderDocument {
-	if !settings.QuoteNormalization && !settings.HyphenDashNormalization && !settings.ParenthesisNormalization && !settings.HalfwidthAlnumPunctuationNormalization && !settings.TildeNormalization && !settings.ConsecutivePeriodNormalization {
+	if !hasBuiltInReaderCorrections(settings) && len(settings.CustomReplacements) == 0 {
 		return document
 	}
 	next := document
 	next.Blocks = make([]ReaderBlock, len(document.Blocks))
 	for index, block := range document.Blocks {
 		next.Blocks[index] = applyReaderBlockCorrections(block, settings)
+		if len(settings.CustomReplacements) > 0 {
+			next.Blocks[index] = applyReaderBlockReplacements(next.Blocks[index], settings.CustomReplacements)
+		}
 	}
 	return next
+}
+
+func hasBuiltInReaderCorrections(settings ReaderCorrectionSettings) bool {
+	return settings.QuoteNormalization || settings.HyphenDashNormalization || settings.ParenthesisNormalization || settings.HalfwidthAlnumPunctuationNormalization || settings.TildeNormalization || settings.ConsecutivePeriodNormalization
+}
+
+func applyReaderBlockReplacements(block ReaderBlock, rules []ReaderReplacementRule) ReaderBlock {
+	switch block.Type {
+	case "meta", "title":
+		block.Text = applyReaderReplacementRules(block.Text, rules)
+	case "paragraph":
+		block.Inlines = applyReaderInlineReplacements(block.Inlines, rules)
+	case "html":
+		nodes := parseReaderHTMLFragment(block.HTML)
+		applyReaderHTMLNodeReplacements(nodes, rules)
+		block.HTML = ""
+		for _, node := range nodes {
+			block.HTML += serializeReaderHTMLNode(node)
+		}
+		block.PlainText = applyReaderReplacementRules(block.PlainText, rules)
+	}
+	return block
+}
+
+func applyReaderInlineReplacements(tokens []ReaderInline, rules []ReaderReplacementRule) []ReaderInline {
+	if len(tokens) == 0 {
+		return tokens
+	}
+	next := make([]ReaderInline, len(tokens))
+	for index, token := range tokens {
+		switch token.Type {
+		case "text", "tcy":
+			token.Text = applyReaderReplacementRules(token.Text, rules)
+		case "ruby":
+			token.Text = applyReaderReplacementRules(token.Text, rules)
+			token.Ruby = applyReaderReplacementRules(token.Ruby, rules)
+		case "link":
+			token.Children = applyReaderInlineReplacements(token.Children, rules)
+		}
+		next[index] = token
+	}
+	return next
+}
+
+func applyReaderHTMLNodeReplacements(nodes []*readerHTMLNode, rules []ReaderReplacementRule) {
+	for _, node := range nodes {
+		if node.isText {
+			node.value = applyReaderReplacementRules(node.value, rules)
+			continue
+		}
+		applyReaderHTMLNodeReplacements(node.children, rules)
+	}
+}
+
+func applyReaderReplacementRules(text string, rules []ReaderReplacementRule) string {
+	for _, rule := range rules {
+		if rule.From != "" {
+			text = strings.ReplaceAll(text, rule.From, rule.To)
+		}
+	}
+	return text
 }
 
 func applyReaderBlockCorrections(block ReaderBlock, settings ReaderCorrectionSettings) ReaderBlock {

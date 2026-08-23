@@ -36,7 +36,10 @@ vi.mock("../src/hooks/useReaderState", () => ({
         quoteNormalization: true,
         hyphenDashNormalization: true,
         parenthesisNormalization: true,
-        halfwidthAlnumPunctuationNormalization: true
+        halfwidthAlnumPunctuationNormalization: true,
+        tildeNormalization: false,
+        consecutivePeriodNormalization: false,
+        customReplacements: []
       },
       updatedAt: null
     },
@@ -83,7 +86,10 @@ function createSettings(updatedAt: string): NovelReaderSettingsResponse {
       quoteNormalization: false,
       hyphenDashNormalization: true,
       parenthesisNormalization: true,
-      halfwidthAlnumPunctuationNormalization: true
+      halfwidthAlnumPunctuationNormalization: true,
+      tildeNormalization: false,
+      consecutivePeriodNormalization: false,
+      customReplacements: []
     },
     updatedAt
   };

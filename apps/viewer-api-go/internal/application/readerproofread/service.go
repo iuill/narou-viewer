@@ -314,7 +314,16 @@ func (s *Service) applyReaderCorrections(novelID string, document library.Reader
 		HalfwidthAlnumPunctuationNormalization: settings.Correction.HalfwidthAlnumPunctuationNormalization,
 		TildeNormalization:                     settings.Correction.TildeNormalization,
 		ConsecutivePeriodNormalization:         settings.Correction.ConsecutivePeriodNormalization,
+		CustomReplacements:                     readerProofreadReplacementRules(settings.Correction.CustomReplacements),
 	}), nil
+}
+
+func readerProofreadReplacementRules(rules []store.NovelReaderReplacementRule) []library.ReaderReplacementRule {
+	result := make([]library.ReaderReplacementRule, len(rules))
+	for index, rule := range rules {
+		result[index] = library.ReaderReplacementRule{From: rule.From, To: rule.To}
+	}
+	return result
 }
 
 func editableSegments(document library.ReaderDocument) []sourceSegment {

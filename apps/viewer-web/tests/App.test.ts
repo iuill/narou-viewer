@@ -352,13 +352,19 @@ function defaultNovelReaderSettings(requestUrl: URL, init?: RequestInit): Record
           hyphenDashNormalization: true,
           parenthesisNormalization: true,
           halfwidthAlnumPunctuationNormalization: true,
+          tildeNormalization: false,
+          consecutivePeriodNormalization: false,
+          customReplacements: [],
           ...(body.correction as Record<string, unknown>)
         }
       : {
           quoteNormalization: true,
           hyphenDashNormalization: true,
           parenthesisNormalization: true,
-          halfwidthAlnumPunctuationNormalization: true
+          halfwidthAlnumPunctuationNormalization: true,
+          tildeNormalization: false,
+          consecutivePeriodNormalization: false,
+          customReplacements: []
         };
   return {
     novelId: match ? decodeURIComponent(match[1] ?? "") : "",

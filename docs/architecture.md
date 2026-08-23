@@ -241,6 +241,10 @@ narou-viewer は、UI、API、取得 sidecar、共有データ、ブラウザロ
 - `GET /api/library/novels/{novelId}/episodes/{episodeIndex}`
   - 選択中 backend の本文を HTML と reader 向け構造化 document に変換して返却
   - レスポンスに `sourceUrl`, `html`, `readerDocument`, `plainTextLength`, `updatedAt`, `contentEtag` を含める
+- `GET /api/library/novels/{novelId}/reader-settings`
+  - 作品単位の通常校正設定と、登録順を保持する任意文字列置換ルールを返す
+- `PUT /api/library/novels/{novelId}/reader-settings`
+  - `correction` の部分更新を受け付ける。任意文字列置換は `customReplacements` の配列全体を置き換える
 - `GET /api/library/novels/{novelId}/search?q=...`
   - 現在作品の本文をローカル検索し、話情報、本文位置、短いsnippetを話順・出現順で最大20件返す
   - `reader_search.sqlite` を再利用し、未index話はcanonical reader documentからlazyに補完する。検索語と本文を外部providerへ送信しない

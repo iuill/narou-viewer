@@ -27,6 +27,7 @@ narou-viewer は、Web 小説を自分の環境に保存し、ライブラリ管
 - 作品ごとのストレージ使用量表示
 - AI 生成のキャラクター・用語一覧と、AI チャットによる小説内容の確認・整理
 - 原文を保持したまま話単位で生成・切り替えできる AI 本文校正
+- 原文を保持したまま作品単位で登録できる複数の文字列置換ルール
 - 書籍化情報やカバー候補を扱う publication 情報表示
 
 取得済みの原文や保存済み HTML は変更しません。通常の本文整形は表示時の正規化として行い、任意の AI 本文校正も原文とは別の派生データとして保存して切り替え表示します。
@@ -120,7 +121,7 @@ compose の主な service:
 - 入口: [`docs/README.md`](docs/README.md)
 - アーキテクチャ: [`docs/architecture.md`](docs/architecture.md)
 - 品質目標: [`docs/quality-goals.md`](docs/quality-goals.md)
-- 機能別仕様: [`docs/extraction.md`](docs/extraction.md), [`docs/publication-info.md`](docs/publication-info.md), [`docs/reader-ai-assistant.md`](docs/reader-ai-assistant.md), [`docs/state-schema-policy.md`](docs/state-schema-policy.md)
+- 機能別仕様: [`docs/extraction.md`](docs/extraction.md), [`docs/publication-info.md`](docs/publication-info.md), [`docs/reader-ai-assistant.md`](docs/reader-ai-assistant.md), [`docs/reader-ai-proofread.md`](docs/reader-ai-proofread.md), [`docs/state-schema-policy.md`](docs/state-schema-policy.md)
 - 開発手順: [`docs/development.md`](docs/development.md)
 - テスト方針: [`docs/testing/testing-strategy.md`](docs/testing/testing-strategy.md), [`docs/testing/e2e-setup.md`](docs/testing/e2e-setup.md)
 - self-host とデプロイ方針: [`docs/deployment.md`](docs/deployment.md)

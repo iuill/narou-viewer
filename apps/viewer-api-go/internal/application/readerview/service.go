@@ -2,7 +2,10 @@ package readerview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -131,7 +134,13 @@ func EpisodeResponseETag(contentETag string, correctionSettings library.ReaderCo
 	if correctionSettings.ConsecutivePeriodNormalization {
 		periodState = "d1"
 	}
-	return contentETag + "-reader-corrections-" + quoteState + hyphenState + parenthesisState + halfwidthState + tildeState + periodState
+	etag := contentETag + "-reader-corrections-" + quoteState + hyphenState + parenthesisState + halfwidthState + tildeState + periodState
+	if len(correctionSettings.CustomReplacements) > 0 {
+		encoded, _ := json.Marshal(correctionSettings.CustomReplacements)
+		hash := sha256.Sum256(encoded)
+		etag += "-r" + fmt.Sprintf("%x", hash[:8])
+	}
+	return etag
 }
 
 func readerCorrectionSettings(settings store.NovelReaderSettings) library.ReaderCorrectionSettings {
@@ -142,5 +151,14 @@ func readerCorrectionSettings(settings store.NovelReaderSettings) library.Reader
 		HalfwidthAlnumPunctuationNormalization: settings.Correction.HalfwidthAlnumPunctuationNormalization,
 		TildeNormalization:                     settings.Correction.TildeNormalization,
 		ConsecutivePeriodNormalization:         settings.Correction.ConsecutivePeriodNormalization,
+		CustomReplacements:                     readerReplacementRules(settings.Correction.CustomReplacements),
 	}
+}
+
+func readerReplacementRules(rules []store.NovelReaderReplacementRule) []library.ReaderReplacementRule {
+	result := make([]library.ReaderReplacementRule, len(rules))
+	for index, rule := range rules {
+		result[index] = library.ReaderReplacementRule{From: rule.From, To: rule.To}
+	}
+	return result
 }

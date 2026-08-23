@@ -19,6 +19,7 @@ function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
     onHalfwidthAlnumPunctuationNormalizationChange: vi.fn(),
     onTildeNormalizationChange: vi.fn(),
     onConsecutivePeriodNormalizationChange: vi.fn(),
+    onCustomReplacementsChange: vi.fn(),
     onQuoteNormalizationChange: vi.fn(),
     onReverseTapPageNavigationChange: vi.fn(),
     onReaderThemeChange: vi.fn(),
@@ -31,6 +32,7 @@ function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
     halfwidthAlnumPunctuationNormalizationEnabled: false,
     tildeNormalizationEnabled: false,
     consecutivePeriodNormalizationEnabled: false,
+    customReplacements: [],
     quoteNormalizationEnabled: false,
     readerFontFamily: "mincho",
     readerFontSizePx: 20,
@@ -38,6 +40,12 @@ function createProps(overrides: Partial<PanelProps> = {}): PanelProps {
     reverseTapPageNavigation: false,
     readerTheme: "classic",
     readingMode: "vertical",
+    readerAIProofreadState: "idle",
+    isShowingAIProofread: false,
+    hasAIProofread: false,
+    onGenerateAIProofread: vi.fn(),
+    onDeleteAIProofread: vi.fn(),
+    onShowingAIProofreadChange: vi.fn(),
     ...overrides
   };
 }
@@ -56,6 +64,7 @@ function installDom(): JSDOM {
   vi.stubGlobal("HTMLSelectElement", dom.window.HTMLSelectElement);
   vi.stubGlobal("Node", dom.window.Node);
   vi.stubGlobal("Event", dom.window.Event);
+  vi.stubGlobal("InputEvent", dom.window.InputEvent);
   vi.stubGlobal("MouseEvent", dom.window.MouseEvent);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -100,6 +109,14 @@ async function changeSelect(select: HTMLSelectElement, value: string, dom: JSDOM
     const descriptor = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, "value");
     descriptor?.set?.call(select, value);
     select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  });
+}
+
+async function changeInput(input: HTMLInputElement, value: string, dom: JSDOM): Promise<void> {
+  await act(async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value");
+    descriptor?.set?.call(input, value);
+    input.dispatchEvent(new dom.window.InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
   });
 }
 
@@ -280,6 +297,59 @@ describe("ReaderSettingsPanel", () => {
     expect(getSwitchByLabel(container, "半角チルダを波ダッシュへ置換").disabled).toBe(true);
     expect(getSwitchByLabel(container, "連続ピリオドを……へ置換").disabled).toBe(true);
     expect(getButtonByText(container, "読書設定を初期化").disabled).toBe(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("作品単位の置換ルールを追加して保存できる", async () => {
+    const props = createProps({
+      customReplacements: [{ from: "ココ最近", to: "ここ最近" }]
+    });
+    const { container, root, dom } = await renderPanel(props);
+
+    expect((container.querySelector('input[aria-label="置換前 1"]') as HTMLInputElement).value).toBe("ココ最近");
+    await changeInput(container.querySelector('input[aria-label="置換後 1"]') as HTMLInputElement, "近ごろ", dom);
+    await click(getButtonByText(container, "置換ルールを追加"), dom);
+    expect(container.textContent).toContain("置換前を入力すると保存できます");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(getButtonByText(container, "置換ルールを保存").disabled).toBe(true);
+
+    await changeInput(container.querySelector('input[aria-label="置換前 2"]') as HTMLInputElement, "誤字", dom);
+    await changeInput(container.querySelector('input[aria-label="置換後 2"]') as HTMLInputElement, "", dom);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(getButtonByText(container, "置換ルールを保存").disabled).toBe(false);
+    await click(getButtonByText(container, "置換ルールを保存"), dom);
+
+    expect(props.onCustomReplacementsChange).toHaveBeenCalledWith([
+      { from: "ココ最近", to: "近ごろ" },
+      { from: "誤字", to: "" }
+    ]);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("別の校正設定が保存されても未保存の置換下書きを保持する", async () => {
+    const customReplacements = [{ from: "表記ゆれ", to: "統一表記" }];
+    const props = createProps({ customReplacements });
+    const { container, root, dom } = await renderPanel(props);
+
+    await changeInput(container.querySelector('input[aria-label="置換後 1"]') as HTMLInputElement, "統一後", dom);
+    await act(async () => {
+      root.render(
+        createElement(ReaderSettingsPanel, {
+          ...props,
+          halfwidthAlnumPunctuationNormalizationEnabled: true,
+          customReplacements: [...customReplacements]
+        })
+      );
+    });
+
+    expect((container.querySelector('input[aria-label="置換後 1"]') as HTMLInputElement).value).toBe("統一後");
+    expect(getButtonByText(container, "置換ルールを保存").disabled).toBe(false);
 
     await act(async () => {
       root.unmount();

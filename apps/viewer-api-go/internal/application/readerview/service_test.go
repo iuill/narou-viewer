@@ -3,6 +3,7 @@ package readerview
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"narou-viewer/apps/viewer-api-go/internal/application/readertextcache"
@@ -68,6 +69,37 @@ func TestGetEpisodeAppliesReaderCorrectionsAndResponseETag(t *testing.T) {
 	}
 	if view.ETag != "content-etag-reader-corrections-q1h1p1a1t0d0" || view.Episode.ContentEtag != view.ETag {
 		t.Fatalf("reader correction ETag should be reflected: %+v", view)
+	}
+}
+
+func TestGetEpisodeAppliesCustomReplacementsAndVariesResponseETag(t *testing.T) {
+	state := &fakeState{settings: store.NovelReaderSettings{
+		Correction: store.NovelReaderCorrection{
+			CustomReplacements: []store.NovelReaderReplacementRule{{From: "ココ最近", To: "ここ最近"}},
+		},
+	}}
+	service := NewService(fakeLibrary{episode: &library.EpisodeResponse{
+		NovelID:      "novel-1",
+		EpisodeIndex: "1",
+		ContentEtag:  "content-etag",
+		ReaderDocument: library.ReaderDocument{Blocks: []library.ReaderBlock{{
+			Type: "paragraph", Inlines: []library.ReaderInline{{Type: "text", Text: "ココ最近"}},
+		}}},
+	}}, state)
+
+	view, err := service.GetEpisode(context.Background(), "novel-1", "1")
+	if err != nil {
+		t.Fatalf("GetEpisode returned error: %v", err)
+	}
+	if got := view.Episode.ReaderDocument.Blocks[0].Inlines[0].Text; got != "ここ最近" {
+		t.Fatalf("custom replacement was not applied: %q", got)
+	}
+	if view.ETag == "content-etag-reader-corrections-q0h0p0a0t0d0" || !strings.HasPrefix(view.ETag, "content-etag-reader-corrections-q0h0p0a0t0d0-r") {
+		t.Fatalf("custom replacement hash should be reflected in ETag: %q", view.ETag)
+	}
+	other := EpisodeResponseETag("content-etag", library.ReaderCorrectionSettings{CustomReplacements: []library.ReaderReplacementRule{{From: "ココ最近", To: "近ごろ"}}})
+	if other == view.ETag {
+		t.Fatalf("different custom replacements should produce different ETags: %q", other)
 	}
 }
 
