@@ -39,10 +39,9 @@ remove_line_from_file() {
 
 export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
 export PATH="${BUN_INSTALL}/bin:${PATH}"
-# 以下の CLI バージョンは viewer-dev/Dockerfile の ARG と一致させること。
+# 以下のコンテナ導入CLIバージョンは viewer-dev/Dockerfile の ARG と一致させること。
 # Dockerfile 側で焼き込み済みならこのスクリプトはインストールをスキップする。
 BUN_VERSION="${BUN_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/.bun-version")}"
-OPENAI_CODEX_VERSION="${OPENAI_CODEX_VERSION:-latest}"
 GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-latest}"
 PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.18}"
 SERENA_AGENT_VERSION="${SERENA_AGENT_VERSION:-1.3.0}"
@@ -55,10 +54,6 @@ CODEX_HOME_DIR="${CODEX_HOME:-${HOME}/.codex}"
 CODEX_SKILLS_DIR="${CODEX_SKILLS_DIR:-${CODEX_HOME_DIR}/skills}"
 LOCAL_BIN_DIR="${HOME}/.local/bin"
 export PATH="${LOCAL_BIN_DIR}:${PATH}"
-
-get_codex_version() {
-  codex --version 2>/dev/null | awk '{print $NF}'
-}
 
 get_copilot_version() {
   copilot --version 2>/dev/null | head -n1 | grep -Eo '[0-9]+(\.[0-9]+)+'
@@ -314,11 +309,6 @@ bun run install:locked
 # It is intentionally separate from E2E Playwright, which is pinned by
 # @playwright/test, PLAYWRIGHT_TEST_VERSION, and the playwright-e2e image tag.
 packages_to_install=()
-
-if [ "${OPENAI_CODEX_VERSION}" != latest ] \
-  && [ "$(get_codex_version)" != "${OPENAI_CODEX_VERSION}" ]; then
-  packages_to_install+=("@openai/codex@${OPENAI_CODEX_VERSION}")
-fi
 
 if [ "${GITHUB_COPILOT_VERSION}" != latest ] \
   && [ "$(get_copilot_version)" != "${GITHUB_COPILOT_VERSION}" ]; then

@@ -2,7 +2,14 @@
 
 set -euo pipefail
 
-exec "${BUN_INSTALL:-$HOME/.bun}/bin/codex" \
+codex_cli="${HOST_CODEX_BIN:?HOST_CODEX_BIN is not set}"
+
+if [[ ! -x "${codex_cli}" ]]; then
+  printf 'Host Codex binary is not executable: %s\n' "${codex_cli}" >&2
+  exit 127
+fi
+
+exec "${codex_cli}" \
   -c 'sandbox_mode="danger-full-access"' \
   -c 'approval_policy="never"' \
   "$@"
