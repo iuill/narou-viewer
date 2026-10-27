@@ -43,6 +43,7 @@
 
 ### 手動検証
 
+- [ ] Dev Container の base image・distro・Feature を変更した場合、再ビルドして起動できることを確認しました
 - [ ] UI 変更を `pc-xga` / `ipad-mini` / `iphone-16e` で確認しました
 - [ ] `Repository size report`（fork PR では変更差分）を確認し、意図しない生成物や責務の膨張がないことを確認しました
 - [ ] その他の手動確認を実施しました（内容を以下に記載）
