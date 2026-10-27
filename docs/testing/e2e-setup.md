@@ -73,7 +73,7 @@ TTY なしのローカル実行環境では、`e2e:test:container` が `script` 
 
 `playwright-e2e` は `ghcr.io/iuill/narou-viewer-playwright` の軽量 image を base にする。image は別リポジトリ [`iuill/narou-viewer-playwright-images`](https://github.com/iuill/narou-viewer-playwright-images) で管理し、Debian 13、Node 24系、固定版の Bun、Chromium headless shell / WebKit、curl、Noto CJK fonts を含める。full Chromium と Firefox は含めない。Node の patch は軽量 image の日次 rebuild で最新の24系へ追従し、アプリ用 `.node-version` との patch 一致は要求しない。`@playwright/test` と browser version は同じ版に揃え、image 側の更新・smoke test・新 tag の公開を先に完了してから、このリポジトリの `PLAYWRIGHT_IMAGE_VERSION` を更新する。
 
-CI の build cache（`mode=max`）が有効な間、Dockerfile の `apt-get` layer も再利用される。キャッシュ付きの再buildだけでは OS 更新を保証しない。OS 更新時は軽量 base image を `--pull --no-cache` で再build・公開し、利用側も `docker compose -f .devcontainer/docker-compose.yml --profile e2e build --pull --no-cache playwright-e2e` で image を作り直す。同じ base image digest のままキャッシュを使う build では、`apt-get` の再実行を前提にしない。
+CI の build cache（`mode=max`）が有効な間、Dockerfile の `apt-get` layer も再利用される。キャッシュ付きの再buildだけでは OS 更新を保証しない。OS 更新時は軽量 base image を `--pull --no-cache` で再build・公開し、利用側も `bash ./scripts/e2e-compose.sh --profile e2e build --pull --no-cache playwright-e2e` で image を作り直す。同じ base image digest のままキャッシュを使う build では、`apt-get` の再実行を前提にしない。
 
 library smoke suite (`e2e/library-smoke-*.spec.ts`) では `viewer-api-e2e` の `data_e2e/state` を複数シナリオで共有するため、既定では reader の自動既読保存を無効にしている。既読位置そのものを検証するシナリオだけが明示的に自動保存を有効化し、他シナリオの遅延保存が `reading_state.yaml` を上書きして干渉するのを防ぐ。状態変更系の spec は専有 fixture 作品を使い、runner script 側は CI で workers を 2 に制限して同一 project 内の並列実行を許可する。GitHub Actions 側は `pc-xga` と `iphone-16e` の 2 job に分け、各 project の suite 全体を流す。
 
