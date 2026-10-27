@@ -9,8 +9,8 @@ if [[ "${E2E_SKIP_VIEWER_WEB:-0}" != "1" ]]; then
   services+=(viewer-web-e2e)
 fi
 playwright_service="playwright-e2e"
-playwright_image_version="${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}"
-playwright_base_image="${PLAYWRIGHT_BASE_IMAGE:-mcr.microsoft.com/playwright:${playwright_image_version}}"
+playwright_image_version="${PLAYWRIGHT_IMAGE_VERSION:-1.63.0-node24-trixie-slim-chromium-headless-shell-webkit-curl-amd64}"
+playwright_base_image="${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${playwright_image_version}}"
 playwright_image_version_label="io.narou-viewer.playwright-image-version"
 playwright_base_image_label="io.narou-viewer.playwright-base-image"
 fixture_refresh_flag="${script_dir}/../data_e2e/tmp/novel-fetcher-fixture-refreshed"

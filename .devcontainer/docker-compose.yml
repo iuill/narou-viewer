@@ -152,8 +152,8 @@ services:
     build:
       context: ./playwright-e2e
       args:
-        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}
-        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}}
+        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.63.0-node24-trixie-slim-chromium-headless-shell-webkit-curl-amd64}
+        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.63.0-node24-trixie-slim-chromium-headless-shell-webkit-curl-amd64}}
     init: true
     working_dir: /workspace
     command: bash ./scripts/run-playwright-e2e.sh
@@ -161,8 +161,8 @@ services:
     shm_size: 1gb
     environment:
       PLAYWRIGHT_BASE_URL: http://viewer-web-e2e:15173
-      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}
-      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}}
+      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.63.0-node24-trixie-slim-chromium-headless-shell-webkit-curl-amd64}
+      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.63.0-node24-trixie-slim-chromium-headless-shell-webkit-curl-amd64}}
       PLAYWRIGHT_STAGE_DIR: /playwright-runtime
       PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.63.0}
     depends_on:

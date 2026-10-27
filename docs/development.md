@@ -113,8 +113,8 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
 - Bun の patch version の正本は root の [`.bun-version`](../.bun-version) とし、`package.json` の `packageManager`、CI、Dev Containerで同じ版を使用します。Dev Container imageの既定版がずれていても、post-create時に`.bun-version`へ揃えます。
 - Node の patch version の正本は root の [`.node-version`](../.node-version) とし、Node を直接使う CI job も同じ版を使用します。Dev Container は同じ major の `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。Node binary は `.node-version` と同じ24.22.1へ固定しています。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.3 (`GOTOOLCHAIN=local`) を有効化しています。
-- 依存更新では公開後21日以上の最新安定版を採用し、メジャー更新も unit / build / E2E で互換性を確認します。Node の型定義は実行環境と同じ24系を使います。Go / Node / Bun の既知脆弱性を修正する toolchain release は優先適用します。Bun 1.4.4 は bundled Brotli・証明書・HTTP/3 の High 脆弱性（GHSA-663w-cv8g-jj2p / GHSA-26q8-h657-pf84 / GHSA-cf8x-9m69-3gg3）の修正として、公開後21日を待たずに採用しています。
-- 緊急の脆弱性修正として `markdown-it@15.0.3`（GHSA-gfr2-rv44-r23c / GHSA-r7fv-28h4-cvq7）、`undici@8.12.2`（GHSA-xjj6-f33q-929c）を `overrides` で固定し、両修正と、`markdown-it` が要求する `argparse@3.0.3` だけ公開後21日の例外にしています。`argparse` も exact version で固定します。`shell-quote@1.12.0` は依存元が旧版を exact 指定しているため固定します。lint の推移依存も `smol-toml@1.9.0`（GHSA-r4xh-jqrq-34v2）と `katex@0.19.0`（GHSA-238p-pmpm-9mq7）の修正版へ固定します。この2件は21日経過済みです。修正版が通常解決で選ばれるようになった時点で override と例外を見直します。
+- 依存更新では公開後21日以上の最新安定版を採用し、メジャー更新も unit / build / E2E で互換性を確認します。Node の型定義は実行環境と同じ major を使います。既知脆弱性を修正する toolchain release と依存、その必須依存は、理由を PR に記載して緊急の例外にできます。
+- `overrides` は、通常の依存解決で修正版を選べない場合に限って使用します。`minimumReleaseAgeExcludes` は package 名単位で全 version に効くため、必要な package に限定し、更新時に採用版を確認してください。修正版が通常の21日ルールで解決できるようになったら、override と不要な exclude を同時に削除します。前提依存であることだけを理由に global override を追加しません。
 - CI では `bun run audit:bun:vulnerabilities` と `bun run audit:go:vulnerabilities` で Bun / Go それぞれの依存脆弱性を常時監査します。Go は一方の module で失敗しても両 module を監査し、いずれかの失敗を終了 status に反映します。Go toolchain の整合性と module の公開後経過日数は、別の `bun run audit:go:toolchain` / `bun run audit:go:module-age` で検査します。
 - 依存差分のレビューは GitHub Actions の `Dependency Review` workflow を使い、`pull_request` のみで実行します。これは push ごとの再検査ではなく、「その PR が新たに持ち込む依存変更」を確認するためです。
 - 既知の悪性版や脆弱性通知は Dependabot alerts と CI の dependency audit で補完します。
@@ -124,7 +124,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 ## Go ツールチェーン方針
 
 - Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。CI でも脆弱性検査とは別 step で実行するため、どの方針に違反したかを job 上で区別できます。
-- `golang.org/x/net@v0.60.0` は HTTP/2 の既知脆弱性（GO-2026-6617 など）の修正として、公開後21日ルールの version 単位例外にしています。それ以外の Go module と監査ツールにも21日ルールを適用します。
+- Go module と監査ツールにも公開後21日ルールを適用します。緊急修正の例外は `audit:go:module-age` の allowlist で version 単位に限定し、理由は PR に記載します。通常のルールを満たした例外は更新時に削除します。
 - Go は `apps/viewer-api-go` と `services/novel-fetcher` で使います。どちらも Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。
