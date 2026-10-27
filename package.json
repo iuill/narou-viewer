@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "version": "0.1.0",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.4",
   "workspaces": [
     "apps/viewer-web"
   ],
@@ -18,7 +18,7 @@
     "audit:bun:vulnerabilities": "bun audit --audit-level=high",
     "audit:go:toolchain": "bun ./scripts/audit-go-toolchain-version.mjs",
     "audit:go:vulnerabilities": "bash ./scripts/audit-go-vulnerabilities.sh",
-    "audit:go:module-age": "GO_MODULE_AGE_ALLOWLIST='golang.org/x/net@v0.55.0 golang.org/x/sys@v0.45.0 modernc.org/sqlite@v1.52.0' bun ./scripts/audit-go-module-age.mjs",
+    "audit:go:module-age": "GO_MODULE_AGE_ALLOWLIST='golang.org/x/net@v0.60.0' bun ./scripts/audit-go-module-age.mjs",
     "dev": "concurrently -k -n api,web \"VIEWER_API_GO_ADDR=:8080 VIEWER_API_DEV_CORS=1 bun run dev:api-go\" \"bun run dev:web\"",
     "dev:web": "bun run --filter @narou-viewer/viewer-web dev",
     "experiment:extraction:run": "bun ./scripts/run-with-root-env.mjs bun ./scripts/run-extraction-experiment.mjs",
@@ -61,22 +61,22 @@
     "e2e:test:smoke:container": "E2E_RESET_STATE=0 E2E_SKIP_SERVICES_UP=1 bash ./scripts/e2e-test-container.sh e2e/prod-readonly-smoke.spec.ts --project=pc-xga"
   },
   "overrides": {
-    "@babel/core": "7.29.7",
-    "postcss": "8.5.23",
-    "nanoid": "3.3.18",
-    "shell-quote": "1.9.0",
-    "linkify-it": "5.0.2"
+    "shell-quote": "1.12.0",
+    "markdown-it": "15.0.3",
+    "undici": "8.12.2",
+    "smol-toml": "1.9.0",
+    "katex": "0.19.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.6",
-    "@playwright/test": "1.62.1",
-    "@vitest/coverage-istanbul": "^4.1.10",
-    "concurrently": "^10.0.4",
-    "jsdom": "^30.0.1",
-    "markdownlint-cli2": "^0.23.2",
-    "prettier": "^3.9.6",
+    "@biomejs/biome": "^2.5.15",
+    "@playwright/test": "1.63.0",
+    "@vitest/coverage-istanbul": "^5.0.3",
+    "concurrently": "^10.0.5",
+    "jsdom": "^30.1.2",
+    "markdownlint-cli2": "^0.23.3",
+    "prettier": "^3.9.9",
     "shellcheck-binaries": "^0.8.0",
-    "yaml": "^2.8.2",
-    "vitest": "^4.1.10"
+    "yaml": "^2.9.1",
+    "vitest": "^5.0.3"
   }
 }

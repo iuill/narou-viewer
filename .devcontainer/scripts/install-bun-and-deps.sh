@@ -42,9 +42,10 @@ export PATH="${BUN_INSTALL}/bin:${PATH}"
 # 以下のコンテナ導入CLIバージョンは viewer-dev/Dockerfile の ARG と一致させること。
 # Dockerfile 側で焼き込み済みならこのスクリプトはインストールをスキップする。
 BUN_VERSION="${BUN_VERSION:-$(tr -d '[:space:]' <"${REPO_ROOT}/.bun-version")}"
-GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-latest}"
-PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.18}"
+GITHUB_COPILOT_VERSION="${GITHUB_COPILOT_VERSION:-1.0.92}"
+PLAYWRIGHT_CLI_VERSION="${PLAYWRIGHT_CLI_VERSION:-0.1.22}"
 SERENA_AGENT_VERSION="${SERENA_AGENT_VERSION:-1.3.0}"
+UV_VERSION="${UV_VERSION:-0.12.23}"
 SCC_VERSION="${SCC_VERSION:-v3.7.0}"
 SCC_LINUX_X86_64_SHA256="${SCC_LINUX_X86_64_SHA256:-3d9d65b00ca874c2b29151abe7e1480736f5229edc3ce8e4b2791460cdfabf5a}"
 BETTERLEAKS_VERSION="1.6.1"
@@ -193,8 +194,8 @@ serena_project_config_contains_root() {
 }
 
 ensure_serena() {
-  if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+  if ! command -v uv >/dev/null 2>&1 || [[ "$(uv --version | awk '{print $2}')" != "${UV_VERSION}" ]]; then
+    bash "${SCRIPT_DIR}/../viewer-dev/install-pinned-tool.sh" uv "${UV_VERSION}" "${LOCAL_BIN_DIR}"
   fi
 
   if ! command -v uv >/dev/null 2>&1 && [ -x "${LOCAL_BIN_DIR}/uv" ]; then
@@ -274,7 +275,7 @@ if ! command -v rg >/dev/null 2>&1 || ! command -v bwrap >/dev/null 2>&1; then
 fi
 
 if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != "${BUN_VERSION}" ]; then
-  curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+  bash "${SCRIPT_DIR}/../viewer-dev/install-pinned-tool.sh" bun "${BUN_VERSION}" "${BUN_INSTALL}/bin"
   export PATH="${BUN_INSTALL}/bin:${PATH}"
 fi
 

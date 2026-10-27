@@ -1,4 +1,4 @@
-FROM golang:1.27.0-bookworm AS build
+FROM golang:1.27.3-trixie AS build
 
 WORKDIR /workspace/apps/viewer-api-go
 
@@ -8,7 +8,7 @@ RUN go mod download
 COPY apps/viewer-api-go ./
 RUN CGO_ENABLED=0 go build -o /tmp/viewer-api-go ./cmd/viewer-api
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \

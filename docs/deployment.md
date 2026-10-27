@@ -9,6 +9,17 @@
 - `data/` や named volume に入る本文、raw HTML、画像、state、AI model output は runtime data として扱い、repository へ保存しない。
 - API key や LLM provider の認証情報は `.env.local`、shell environment、hosting platform secrets などで渡し、Git 管理しない。
 
+## base image の更新
+
+Go build と viewer-api runtime は Debian 13（trixie）、novel-fetcher runtime は distroless Debian 13、viewer-web は Nginx 1.30.6 / Alpine 3.24 を使用する。初期化・backup 用の Alpine も3.24に揃える。OS / CA の修正は image の再取得・再buildで取り込む。
+
+```bash
+docker compose -p narou-viewer -f docker-compose.prod.yml build --pull --no-cache
+docker compose -p narou-viewer -f docker-compose.prod.yml up -d
+```
+
+Go の脆弱性修正は binary の再buildが必要で、runtime image の更新だけでは適用されない。upgrade 前は下記の手順で writer を停止し data root 全体を backup する。
+
 ## self-host compose
 
 repository root で次を実行する。
@@ -209,7 +220,7 @@ docker volume create \
 
 docker run --rm -i \
   -v "${restore_volume}:/data" \
-  alpine:3.22 \
+  alpine:3.24 \
   sh -ceu '
     test -z "$(find /data -mindepth 1 -print -quit)"
     tar xzf - -C /data
@@ -218,7 +229,7 @@ docker run --rm -i \
 
 docker run --rm \
   -v "${restore_volume}:/data:ro" \
-  alpine:3.22 \
+  alpine:3.24 \
   sh -ceu '
     test -d /data/state
     test -d /data/novel-fetcher
@@ -256,7 +267,7 @@ restore_volume="${restore_project}_shared-data"
 age -d -i "$AGE_BACKUP_IDENTITY_FILE" "$encrypted_archive" | \
   docker run --rm -i \
     -v "${restore_volume}:/data" \
-    alpine:3.22 \
+    alpine:3.24 \
     sh -ceu '
       test -z "$(find /data -mindepth 1 -print -quit)"
       tar xzf - -C /data

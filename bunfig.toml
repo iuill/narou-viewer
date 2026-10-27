@@ -1,7 +1,8 @@
 [install]
 linker = "hoisted"
 minimumReleaseAge = 1814400
-minimumReleaseAgeExcludes = ["nanoid", "js-yaml"]
+# Security fixes and their prerequisites; remove exclusions when normal resolution is safe.
+minimumReleaseAgeExcludes = ["markdown-it", "undici", "argparse"]
 
 [run]
 bun = true

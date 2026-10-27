@@ -5,6 +5,8 @@ on:
     paths:
       - "package.json"
       - "apps/**/package.json"
+      - "apps/**/go.mod"
+      - "apps/**/go.sum"
       - "bun.lock"
       - "services/**/go.mod"
       - "services/**/go.sum"
