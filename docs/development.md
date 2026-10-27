@@ -11,6 +11,7 @@
    - 2 つ目以降の worktree では `.devcontainer/.env.example` を `.devcontainer/.env` にコピーし、ホスト側公開ポートを重複しない値へ変更してください。通常の単一 Dev Container では `.devcontainer/.env` は不要です。
 2. `Dev Containers: Reopen in Container` を実行します。
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
+   - Docker CLI は `docker-outside-of-docker` feature の `moby: false` を指定して Docker 公式パッケージから導入します。Debian trixie では、この feature の既定値である `moby: true` は利用できません。
    - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.27.3 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@github/copilot` (`copilot`) の固定版を導入します。Codex CLI はホストのstandalone版を共有します。coding agent 向けのブラウザ操作 CLIである `@playwright/cli` (`playwright-cli`) は固定版をインストールし、Go LSP の `gopls` も導入します。
    - ホストの `${HOME}/.codex/packages/standalone` は同じ絶対パスへread-onlyでbind mountされます。`codex` はこのstandalone版を実行するため、ホスト側で更新するとコンテナ側にも反映されます。standalone版が存在しない、実行権限がない、または起動できない場合は `initializeCommand` がインストール案内を表示して起動を中止します。
