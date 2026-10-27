@@ -6,7 +6,7 @@ const minimumAgeSeconds = Number.parseInt(process.env.GO_MINIMUM_RELEASE_AGE_SEC
 const moduleRoots = (process.env.GO_MODULE_AGE_MODULE_ROOTS ?? "apps/viewer-api-go services/novel-fetcher")
   .split(/\s+/)
   .filter(Boolean);
-const extraModuleQueries = (process.env.GO_MODULE_AGE_EXTRA_QUERIES ?? "golang.org/x/vuln@v1.2.0")
+const extraModuleQueries = (process.env.GO_MODULE_AGE_EXTRA_QUERIES ?? "golang.org/x/vuln@v1.8.0")
   .split(/\s+/)
   .filter(Boolean);
 const allowedModuleKeys = new Set((process.env.GO_MODULE_AGE_ALLOWLIST ?? "").split(/\s+/).filter(Boolean));

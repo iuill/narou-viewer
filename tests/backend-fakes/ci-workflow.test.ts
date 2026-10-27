@@ -31,6 +31,7 @@ type WorkflowJob = {
 
 type BranchTrigger = {
   branches?: string[];
+  paths?: string[];
 };
 
 type Workflow = {
@@ -76,6 +77,21 @@ describe("dependency-audit.yml", () => {
     ]);
     expect(workflow.on?.pull_request?.branches).toEqual(["main"]);
     expect(workflow.on?.push?.branches).toEqual(["main"]);
+  });
+});
+
+describe("dependency-review.yml", () => {
+  it("reviews dependency changes in both Go services and the web workspace", () => {
+    const paths = readWorkflow("dependency-review.yml").on?.pull_request?.paths;
+
+    expect(paths).toEqual(expect.arrayContaining([
+      "apps/**/go.mod",
+      "apps/**/go.sum",
+      "services/**/go.mod",
+      "services/**/go.sum",
+      "apps/**/package.json",
+      "bun.lock",
+    ]));
   });
 });
 

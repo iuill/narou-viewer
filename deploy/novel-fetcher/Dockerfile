@@ -1,4 +1,4 @@
-FROM golang:1.27.0-bookworm AS build
+FROM golang:1.27.3-trixie AS build
 
 WORKDIR /workspace/services/novel-fetcher
 
@@ -8,7 +8,7 @@ RUN go mod download
 COPY services/novel-fetcher ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/novel-fetcher ./cmd/novel-fetcher
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 
 COPY --from=build /out/novel-fetcher /novel-fetcher
 

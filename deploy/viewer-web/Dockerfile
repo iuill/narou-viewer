@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.14 AS build
+FROM oven/bun:1.4.4 AS build
 
 WORKDIR /workspace
 
@@ -23,7 +23,7 @@ RUN if [ -z "${VITE_APP_GIT_SHA}" ] || [ -z "${VITE_APP_GIT_COMMIT_DATE}" ]; the
   VITE_PUBLIC_ASSET_BASE_URL="${VITE_PUBLIC_ASSET_BASE_URL}" \
   bun run build:web
 
-FROM nginx:1.27-alpine
+FROM nginx:1.30.6-alpine3.24
 
 COPY --from=build /workspace/apps/viewer-web/dist /usr/share/nginx/html
 COPY deploy/viewer-web/default.conf /etc/nginx/conf.d/default.conf

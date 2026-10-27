@@ -1,7 +1,8 @@
 [install]
 linker = "hoisted"
 minimumReleaseAge = 1814400
-minimumReleaseAgeExcludes = ["nanoid", "js-yaml"]
+# Known high-severity fixes; exact versions are pinned in package.json overrides.
+minimumReleaseAgeExcludes = ["markdown-it", "undici", "argparse"]
 
 [run]
 bun = true

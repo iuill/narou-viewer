@@ -9,7 +9,7 @@ if (!/^\d+\.\d+\.\d+$/.test(expectedGoVersion)) {
   process.exit(1);
 }
 
-const expectedGoImage = `golang:${expectedGoVersion}-bookworm`;
+const expectedGoImage = `golang:${expectedGoVersion}-trixie`;
 const checks = [
   {
     file: "apps/viewer-api-go/go.mod",
@@ -105,7 +105,7 @@ const versionReferenceChecks = [
   },
   {
     file: "docs/testing/e2e-setup.md",
-    pattern: /golang:(\d+\.\d+\.\d+)-bookworm/g,
+    pattern: /golang:(\d+\.\d+\.\d+)-trixie/g,
     description: "E2E docs Go image references",
   },
 ];

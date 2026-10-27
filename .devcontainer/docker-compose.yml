@@ -48,7 +48,7 @@ services:
       - "${VIEWER_API_HOST_PORT:-8080}:8080"
 
   novel-fetcher:
-    image: golang:1.27.0-bookworm
+    image: golang:1.27.3-trixie
     init: true
     user: "1000:1000"
     working_dir: /workspace/services/novel-fetcher
@@ -74,7 +74,7 @@ services:
       - "33006"
 
   novel-fetcher-e2e:
-    image: ${NOVEL_FETCHER_E2E_IMAGE:-golang:1.27.0-bookworm}
+    image: ${NOVEL_FETCHER_E2E_IMAGE:-golang:1.27.3-trixie}
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace/services/novel-fetcher
@@ -101,7 +101,7 @@ services:
       - "33006"
 
   viewer-api-e2e:
-    image: ${VIEWER_API_GO_E2E_IMAGE:-golang:1.27.0-bookworm}
+    image: ${VIEWER_API_GO_E2E_IMAGE:-golang:1.27.3-trixie}
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace/apps/viewer-api-go
@@ -126,7 +126,7 @@ services:
       - "${VIEWER_API_E2E_HOST_PORT:-18080}:18080"
 
   viewer-web-e2e:
-    image: oven/bun:1.3.14
+    image: oven/bun:1.4.4
     init: true
     user: "${E2E_SERVICE_USER:-1000:1000}"
     working_dir: /workspace
@@ -152,8 +152,8 @@ services:
     build:
       context: ./playwright-e2e
       args:
-        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
-        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+        PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}
+        PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}}
     init: true
     working_dir: /workspace
     command: bash ./scripts/run-playwright-e2e.sh
@@ -161,10 +161,10 @@ services:
     shm_size: 1gb
     environment:
       PLAYWRIGHT_BASE_URL: http://viewer-web-e2e:15173
-      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}
-      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-ghcr.io/iuill/narou-viewer-playwright:${PLAYWRIGHT_IMAGE_VERSION:-1.62.1-node24-bookworm-slim-chromium-headless-shell-webkit-curl-amd64}}
+      PLAYWRIGHT_IMAGE_VERSION: ${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}
+      PLAYWRIGHT_BASE_IMAGE: ${PLAYWRIGHT_BASE_IMAGE:-mcr.microsoft.com/playwright:${PLAYWRIGHT_IMAGE_VERSION:-v1.63.0-noble}}
       PLAYWRIGHT_STAGE_DIR: /playwright-runtime
-      PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.62.1}
+      PLAYWRIGHT_TEST_VERSION: ${PLAYWRIGHT_TEST_VERSION:-1.63.0}
     depends_on:
       - viewer-web-e2e
     volumes:
