@@ -11,7 +11,7 @@
 
 ## base image の更新
 
-Go build と viewer-api runtime は Debian 13（trixie）、novel-fetcher runtime は distroless Debian 13、viewer-web は Nginx 1.30.6 / Alpine 3.24 を使用する。初期化・backup 用の Alpine も3.24に揃える。OS / CA の修正は image の再取得・再buildで取り込む。
+Go build と viewer-api runtime は Debian 13（trixie）、novel-fetcher runtime は distroless Debian 13、viewer-web は Nginx 1.30.6 / Alpine 3.24 を使用する。初期化・backup 用の Alpine も3.24に揃える。OS / CA の修正は image の再取得・再buildで取り込む。viewer-web は build 時に `apk upgrade --no-cache --ignore 'nginx*'` も実行し、ベースイメージ公開後の Alpine の修正を取り込む。nginx 本体と module は公式イメージの組み合わせを維持し、Alpine 版への置換を避けるため更新対象から除外する。nginx 自体の修正はベースイメージの更新で取り込む。更新時は以下の `--no-cache` 付き build で、この処理の Docker layer cache も更新する。
 
 ```bash
 docker compose -p narou-viewer -f docker-compose.prod.yml build --pull --no-cache
