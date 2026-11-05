@@ -25,5 +25,8 @@ RUN if [ -z "${VITE_APP_GIT_SHA}" ] || [ -z "${VITE_APP_GIT_COMMIT_DATE}" ]; the
 
 FROM nginx:1.30.6-alpine3.24
 
+# ベースイメージ公開後の OS パッケージの security fix も取り込む。
+RUN apk upgrade --no-cache
+
 COPY --from=build /workspace/apps/viewer-web/dist /usr/share/nginx/html
 COPY deploy/viewer-web/default.conf /etc/nginx/conf.d/default.conf

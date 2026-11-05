@@ -126,6 +126,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 
 - Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。CI でも脆弱性検査とは別 step で実行するため、どの方針に違反したかを job 上で区別できます。
 - Go module と監査ツールにも公開後21日ルールを適用します。緊急修正の例外は `audit:go:module-age` の allowlist で version 単位に限定し、理由は PR に記載します。通常のルールを満たした例外は更新時に削除します。
+- `golang.org/x/net@v0.62.0` は、HTML の parse / render に影響する `GO-2026-6860` / `GO-2026-6866` の修正を取り込むため、公開後21日未満の緊急例外として採用しています。
 - Go は `apps/viewer-api-go` と `services/novel-fetcher` で使います。どちらも Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。

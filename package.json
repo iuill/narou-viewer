@@ -18,7 +18,7 @@
     "audit:bun:vulnerabilities": "bun audit --audit-level=high",
     "audit:go:toolchain": "bun ./scripts/audit-go-toolchain-version.mjs",
     "audit:go:vulnerabilities": "bash ./scripts/audit-go-vulnerabilities.sh",
-    "audit:go:module-age": "GO_MODULE_AGE_ALLOWLIST='golang.org/x/net@v0.60.0' bun ./scripts/audit-go-module-age.mjs",
+    "audit:go:module-age": "GO_MODULE_AGE_ALLOWLIST='golang.org/x/net@v0.62.0' bun ./scripts/audit-go-module-age.mjs",
     "dev": "concurrently -k -n api,web \"VIEWER_API_GO_ADDR=:8080 VIEWER_API_DEV_CORS=1 bun run dev:api-go\" \"bun run dev:web\"",
     "dev:web": "bun run --filter @narou-viewer/viewer-web dev",
     "experiment:extraction:run": "bun ./scripts/run-with-root-env.mjs bun ./scripts/run-extraction-experiment.mjs",
