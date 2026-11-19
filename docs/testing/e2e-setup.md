@@ -69,7 +69,7 @@ TTY なしのローカル実行環境では、`e2e:test:container` が `script` 
 
 `e2e:services:up` は `viewer-api-e2e` と `novel-fetcher-e2e` を起動する。AI 生成は `viewer-api` の internal AI module が扱う。
 
-`novel-fetcher-e2e` と `viewer-api-e2e` は既定では `golang:1.27.3-trixie` 上で dev 起動する。各 service の E2E binary path と image を指定すると、事前 build した binary を軽量 runtime image 上で起動できる。GitHub Actions の Playwright E2E job では、同じ workflow run で build した両 service の binary artifact と `busybox:1.37` を使い、Go toolchain image の pull を避ける。`Service API contract` job は web と Playwright を起動せず、既定の Go dev container で `viewer-api` と `novel-fetcher` だけを起動する。
+`novel-fetcher-e2e` と `viewer-api-e2e` は既定では `golang:1.27.4-trixie` 上で dev 起動する。各 service の E2E binary path と image を指定すると、事前 build した binary を軽量 runtime image 上で起動できる。GitHub Actions の Playwright E2E job では、同じ workflow run で build した両 service の binary artifact と `busybox:1.37` を使い、Go toolchain image の pull を避ける。`Service API contract` job は web と Playwright を起動せず、既定の Go dev container で `viewer-api` と `novel-fetcher` だけを起動する。
 
 `playwright-e2e` は `ghcr.io/iuill/narou-viewer-playwright` の軽量 image を base にする。image は別リポジトリ [`iuill/narou-viewer-playwright-images`](https://github.com/iuill/narou-viewer-playwright-images) で管理し、Debian 13、Node 24系、固定版の Bun、Chromium headless shell / WebKit、curl、Noto CJK fonts を含める。full Chromium と Firefox は含めない。Node の patch は軽量 image の日次 rebuild で最新の24系へ追従し、アプリ用 `.node-version` との patch 一致は要求しない。`@playwright/test` と browser version は同じ版に揃え、image 側の更新・smoke test・新 tag の公開を先に完了してから、このリポジトリの `PLAYWRIGHT_IMAGE_VERSION` を更新する。
 

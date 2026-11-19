@@ -2,7 +2,7 @@ FROM mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie
 
 # Node の security patch は .node-version と揃え、base image の同梱版に依存しない。
 ENV TZ=Asia/Tokyo
-ARG GO_VERSION=1.27.3
+ARG GO_VERSION=1.27.4
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \

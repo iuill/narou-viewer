@@ -1,10 +1,10 @@
 module narou-viewer/apps/viewer-api-go
 
-go 1.27.3
+go 1.27.4
 
 require (
-	golang.org/x/crypto v0.57.0
-	golang.org/x/sys v0.48.0
+	golang.org/x/crypto v0.59.0
+	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.60.1
 )
