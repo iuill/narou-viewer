@@ -23,7 +23,7 @@ RUN if [ -z "${VITE_APP_GIT_SHA}" ] || [ -z "${VITE_APP_GIT_COMMIT_DATE}" ]; the
   VITE_PUBLIC_ASSET_BASE_URL="${VITE_PUBLIC_ASSET_BASE_URL}" \
   bun run build:web
 
-FROM nginx:1.30.6-alpine3.24
+FROM nginx:1.30.7-alpine3.24
 
 # nginx 本体・module は公式イメージで管理し、OS パッケージの security fix を取り込む。
 RUN apk upgrade --no-cache --ignore 'nginx*'

@@ -12,7 +12,7 @@
 2. `Dev Containers: Reopen in Container` を実行します。
    - `viewer-dev` には Dev Containers の `github-cli` feature 経由で `GitHub CLI` (`gh`) もインストールされます。
    - Docker CLI は `docker-outside-of-docker` feature の `moby: false` を指定して Docker 公式パッケージから導入します。Debian trixie では、この feature の既定値である `moby: true` は利用できません。
-   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.27.3 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
+   - `viewer-dev` は `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` を薄く拡張したイメージを使い、`ja_JP.UTF-8` ロケールを生成して `LANG` / `LC_ALL` に設定し、タイムゾーンも `Asia/Tokyo` に揃えます。Python は `python3` に加えて `python` でも呼べるようにしてあり、Go 1.27.4 (`GOTOOLCHAIN=local`) と SQLite CLI (`sqlite3`) もインストールします。
    - `postCreateCommand` では workspace 依存の `bun install` に加えて、グローバル CLI として `@github/copilot` (`copilot`) の固定版を導入します。Codex CLI はホストのstandalone版を共有します。coding agent 向けのブラウザ操作 CLIである `@playwright/cli` (`playwright-cli`) は固定版をインストールし、Go LSP の `gopls` も導入します。
    - ホストの `${HOME}/.codex/packages/standalone` は同じ絶対パスへread-onlyでbind mountされます。`codex` はこのstandalone版を実行するため、ホスト側で更新するとコンテナ側にも反映されます。standalone版が存在しない、実行権限がない、または起動できない場合は `initializeCommand` がインストール案内を表示して起動を中止します。
    - Dev Container は `${localEnv:HOME}/.codex/auth.json` だけを `/home/node/.codex/auth.json` へ read-write で bind mount します。ローカルでは Dev Container を開く前にホスト側で `codex login` を実行しておくと、その認証を複数の repository / worktree のコンテナから共有できます。`config.toml`、session、history、database、log など `.codex` 配下の他の状態は共有しません。
@@ -113,7 +113,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 - そのため、日常運用では「Bun を標準導線にする」「Node 依存ツールは Bun から起動する」を両立させます。
 - 新しい script を追加するときは、まず `bun run ...` を入口にし、Node 専用 CLI を無理に `--bun` へ寄せないでください。
 - Bun の patch version の正本は root の [`.bun-version`](../.bun-version) とし、`package.json` の `packageManager`、CI、Dev Containerで同じ版を使用します。Dev Container imageの既定版がずれていても、post-create時に`.bun-version`へ揃えます。
-- Node の patch version の正本は root の [`.node-version`](../.node-version) とし、Node を直接使う CI job も同じ版を使用します。Dev Container は同じ major の `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。Node binary は `.node-version` と同じ24.22.1へ固定しています。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.3 (`GOTOOLCHAIN=local`) を有効化しています。
+- Node の patch version の正本は root の [`.node-version`](../.node-version) とし、Node を直接使う CI job も同じ版を使用します。Dev Container は同じ major の `mcr.microsoft.com/devcontainers/typescript-node:5-24-trixie` ベースの `viewer-dev` イメージを使っており、Bun と Node の両方が使える前提です。Node binary は `.node-version` と同じ24.22.1へ固定しています。`viewer-dev` では `ja_JP.UTF-8` ロケール、`Asia/Tokyo` タイムゾーン、Go 1.27.4 (`GOTOOLCHAIN=local`) を有効化しています。
 - 依存更新では公開後21日以上の最新安定版を採用し、メジャー更新も unit / build / E2E で互換性を確認します。Node の型定義は実行環境と同じ major を使います。既知脆弱性を修正する toolchain release と依存、その必須依存は、理由を PR に記載して緊急の例外にできます。
 - `overrides` は、通常の依存解決で修正版を選べない場合に限って使用します。`minimumReleaseAgeExcludes` は package 名単位で全 version に効くため、必要な package に限定し、更新時に採用版を確認してください。修正版が通常の21日ルールで解決できるようになったら、override と不要な exclude を同時に削除します。前提依存であることだけを理由に global override を追加しません。
 - CI では `bun run audit:bun:vulnerabilities` と `bun run audit:go:vulnerabilities` で Bun / Go それぞれの依存脆弱性を常時監査します。Go は一方の module で失敗しても両 module を監査し、いずれかの失敗を終了 status に反映します。Go toolchain の整合性と module の公開後経過日数は、別の `bun run audit:go:toolchain` / `bun run audit:go:module-age` で検査します。
@@ -126,7 +126,7 @@ Dev Container 内では、現在の worktree が `/workspaces/${localWorkspaceFo
 
 - Go patch version の正本は root の [`.go-version`](../.go-version) です。`go.mod`、Docker image tag、Dev Container / E2E compose、CI の `setup-go` がこの値からずれていないことと、Dev Container feature から Go を二重導入していないことを `bun run audit:go:toolchain` で検査します。CI でも脆弱性検査とは別 step で実行するため、どの方針に違反したかを job 上で区別できます。
 - Go module と監査ツールにも公開後21日ルールを適用します。緊急修正の例外は `audit:go:module-age` の allowlist で version 単位に限定し、理由は PR に記載します。通常のルールを満たした例外は更新時に削除します。
-- `golang.org/x/net@v0.62.0` は、HTML の parse / render に影響する `GO-2026-6860` / `GO-2026-6866` の修正を取り込むため、公開後21日未満の緊急例外として採用しています。2026-11-18（JST）以降は公開後21日を満たすため、この版の allowlist を削除できます。
+- `golang.org/x/crypto@v0.59.0` と、その必須依存 `golang.org/x/sys@v0.50.0`・`golang.org/x/term@v0.48.0`・`golang.org/x/text@v0.44.0` は、未使用の OpenPGP package に対する `GO-2026-5932` の module-level 警告を解消するため、公開後21日未満の例外として採用しています。各 module が公開後21日を満たしたら allowlist から削除します。`golang.org/x/net@v0.62.0` は公開後21日を満たしたため例外から外しています。
 - Go は `apps/viewer-api-go` と `services/novel-fetcher` で使います。どちらも Bun workspace の package としては扱わず、Go の検証は Go の標準コマンドで行います。
 - Dev Container / sidecar / E2E サービスは named volume `narou-viewer-go-cache` を共有し、`GOCACHE=/go/.cache/go-build-shared`、`GOMODCACHE=/go/pkg/mod-shared` を使います。起動時に短い init service が `/go` 配下を `E2E_SERVICE_USER`、未指定時は `1000:1000` に合わせて初期化します。
 - ただし monorepo ルートからの入口として、薄い alias `bun run verify:novel-fetcher` を用意しています。これは `services/novel-fetcher` へ移動して `gofmt -l .`、`go test ./...`、`go build -o /tmp/novel-fetcher-check ./cmd/novel-fetcher` を実行するだけです。

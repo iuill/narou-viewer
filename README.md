@@ -1,6 +1,6 @@
 # narou-viewer
 
-![Go](https://img.shields.io/badge/Go-1.27.3-00ADD8?logo=go&logoColor=ffffff)
+![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=ffffff)
 ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=ffffff)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)
 ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=ffffff)
@@ -130,7 +130,7 @@ compose の主な service:
 
 ## 開発
 
-ローカルの Go コマンドは Go 1.27.3 (`GOTOOLCHAIN=local`) を使用します。Dev Container では同じバージョンが導入されます。
+ローカルの Go コマンドは Go 1.27.4 (`GOTOOLCHAIN=local`) を使用します。Dev Container では同じバージョンが導入されます。
 
 日常的な確認では、まず lint と高速テストを実行します。
 

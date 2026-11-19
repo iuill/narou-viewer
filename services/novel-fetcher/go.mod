@@ -1,6 +1,6 @@
 module narou-viewer/services/novel-fetcher
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/PuerkitoBio/goquery v1.13.0
